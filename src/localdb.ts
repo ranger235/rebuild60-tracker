@@ -9,7 +9,9 @@ export type PendingOp = {
     | "insert_zone2"
     | "create_workout"
     | "insert_exercise"
-    | "insert_set";
+    | "insert_set"
+    | "create_template"
+    | "insert_template_exercise";
   payload: any;
   status: "queued" | "retry";
   lastError?: string;
@@ -41,30 +43,52 @@ export type LocalWorkoutSet = {
   is_warmup: boolean;
 };
 
+// Templates (local-first)
+export type LocalWorkoutTemplate = {
+  id: string;          // uuid
+  user_id: string;
+  name: string;
+  description?: string | null;
+  created_at: string;  // ISO
+};
+
+export type LocalWorkoutTemplateExercise = {
+  id: string;          // uuid
+  template_id: string;
+  name: string;
+  sort_order: number;
+};
+
 export class RebuildDB extends Dexie {
   pendingOps!: Table<PendingOp, number>;
 
-  // Local-first workout cache (for offline UI)
+  // Offline workout cache
   localSessions!: Table<LocalWorkoutSession, string>;
   localExercises!: Table<LocalWorkoutExercise, string>;
   localSets!: Table<LocalWorkoutSet, string>;
 
+  // Offline templates cache
+  localTemplates!: Table<LocalWorkoutTemplate, string>;
+  localTemplateExercises!: Table<LocalWorkoutTemplateExercise, string>;
+
   constructor() {
     super("rebuild60_local");
 
+    // v1: only pending ops
     this.version(1).stores({
       pendingOps: "++id, createdAt, op, status"
     });
 
-    // v2 adds offline workout cache
+    // v2: add offline caches
     this.version(2).stores({
       pendingOps: "++id, createdAt, op, status",
       localSessions: "id, user_id, day_date, started_at",
       localExercises: "id, session_id, sort_order",
-      localSets: "id, exercise_id, set_number"
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order"
     });
   }
 }
 
 export const localdb = new RebuildDB();
-
