@@ -54,6 +54,70 @@ function formatSet(s: SetLite) {
   return `${w}x${r}${wu}${rpe}`;
 }
 
+/**
+ * Heuristic classifier: "compound" vs "accessory"
+ * - Compounds default autofill: First Work Set
+ * - Accessories default autofill: Top Set
+ *
+ * This is intentionally conservative and keyword-based.
+ * You can expand the keyword lists anytime.
+ */
+function isCompoundExercise(name: string): boolean {
+  const n = name.toLowerCase();
+
+  // Strong compound signals
+  const compoundKeywords = [
+    "squat",
+    "bench",
+    "deadlift",
+    "press",
+    "overhead",
+    "ohp",
+    "row",
+    "pull-up",
+    "pull up",
+    "chin-up",
+    "chin up",
+    "dip",
+    "lunge",
+    "split squat",
+    "rdl",
+    "romanian",
+    "hip hinge",
+    "good morning",
+    "hack squat",
+    "leg press",
+    "incline bench"
+  ];
+
+  // Strong accessory signals (if matched, treat as accessory even if a compound word is present)
+  const accessoryKeywords = [
+    "curl",
+    "extension",
+    "fly",
+    "lateral",
+    "raise",
+    "tricep",
+    "pushdown",
+    "pulldown",
+    "face pull",
+    "rear delt",
+    "calf",
+    "hamstring curl",
+    "leg curl",
+    "pec deck",
+    "cable",
+    "machine fly",
+    "shrug",
+    "abs",
+    "crunch",
+    "plank"
+  ];
+
+  if (accessoryKeywords.some((k) => n.includes(k))) return false;
+  return compoundKeywords.some((k) => n.includes(k));
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
@@ -90,7 +154,7 @@ export default function App() {
   const [newExerciseName, setNewExerciseName] = useState("");
   const [advanced, setAdvanced] = useState(false);
 
-  // Per-exercise drafts (THIS is Upgrade 2)
+  // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
   // Templates
@@ -287,14 +351,17 @@ export default function App() {
 
     setNewExerciseName("");
 
-    // Add draft slot instantly
+    // Draft slot immediately
     setDraftByExerciseId((prev) => ({
       ...prev,
       [id]: prev[id] ?? { weight: "", reps: "", rpe: "", warmup: false }
     }));
 
     await openSession(openSessionId);
-    void ensureLastForExerciseName(name);
+
+    // Preload last and attempt default autofill for this new exercise
+    await ensureLastForExerciseName(name);
+    applyDefaultAutofill(id, name);
   }
 
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
@@ -514,7 +581,7 @@ export default function App() {
         sort_order: i
       });
 
-      // Create drafts for these exercises immediately
+      // Draft slot immediately
       setDraftByExerciseId((prev) => ({
         ...prev,
         [exerciseId]: prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }
@@ -526,7 +593,12 @@ export default function App() {
     setTab("workout");
     alert("Session created from template (instant).");
 
-    for (const te of ex) void ensureLastForExerciseName(te.name);
+    // Preload last + default autofill
+    for (const te of ex) {
+      await ensureLastForExerciseName(te.name);
+      // We need the newly created exercise IDs; easiest is to rely on openSession to hydrate exercises,
+      // then autofill runs from the openSession preload effect below.
+    }
   }
 
   // -----------------------------
@@ -642,13 +714,37 @@ export default function App() {
     for (const s of setsAll) {
       const w = s.weight_lbs ?? -1;
       const r = s.reps ?? -1;
-      if (!best) { best = s; continue; }
+      if (!best) {
+        best = s;
+        continue;
+      }
       const bw = best.weight_lbs ?? -1;
       const br = best.reps ?? -1;
       if (w > bw) best = s;
       else if (w === bw && r > br) best = s;
     }
     return best;
+  }
+
+  // Default autofill rule: compounds -> first work, accessories -> top set
+  function applyDefaultAutofill(exerciseId: string, exName: string) {
+    const summary = lastByExerciseName[exName];
+    if (!summary || summary.sets.length === 0) return;
+
+    // Do NOT overwrite manual input
+    const existing = draftByExerciseId[exerciseId];
+    if (existing && (existing.weight || existing.reps)) return;
+
+    const compound = isCompoundExercise(exName);
+    const chosen = compound ? pickFirstWorkSet(summary.sets) : pickTopSet(summary.sets);
+    if (!chosen) return;
+
+    updateDraft(exerciseId, {
+      weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
+      reps: chosen.reps != null ? String(chosen.reps) : "",
+      rpe: chosen.rpe != null ? String(chosen.rpe) : "",
+      warmup: !!chosen.is_warmup
+    });
   }
 
   function applyLastModeToDraft(exerciseId: string, exName: string, mode: "last" | "top" | "firstWork") {
@@ -679,10 +775,17 @@ export default function App() {
     loadTemplates();
   }, [userId]);
 
-  // Preload last for all exercises when opening session
+  // Preload last for all exercises when opening session, then default autofill drafts
   useEffect(() => {
     if (!openSessionId) return;
-    for (const ex of exercises) void ensureLastForExerciseName(ex.name);
+
+    (async () => {
+      for (const ex of exercises) {
+        await ensureLastForExerciseName(ex.name);
+        applyDefaultAutofill(ex.id, ex.name);
+      }
+    })();
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSessionId, exercises.length]);
 
@@ -931,10 +1034,18 @@ export default function App() {
                     const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
                     const d = draftByExerciseId[ex.id] ?? { weight: "", reps: "", rpe: "", warmup: false };
 
+                    const compound = isCompoundExercise(ex.name);
+                    const defaultLabel = compound ? "Default: 1st work" : "Default: top set";
+
                     return (
                       <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                          <div style={{ fontWeight: 800 }}>{ex.name}</div>
+                          <div style={{ fontWeight: 800 }}>
+                            {ex.name}{" "}
+                            <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 600 }}>
+                              ({defaultLabel})
+                            </span>
+                          </div>
                           <button
                             onClick={() => ensureLastForExerciseName(ex.name)}
                             style={{ padding: "6px 10px" }}
@@ -1060,3 +1171,4 @@ export default function App() {
     </div>
   );
 }
+
