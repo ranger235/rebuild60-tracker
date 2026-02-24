@@ -13,12 +13,17 @@ export async function enqueue(op: PendingOp["op"], payload: any) {
 async function runOp(item: PendingOp) {
   switch (item.op) {
     case "upsert_daily": {
-      const { error } = await supabase.from("daily_checkins").upsert(item.payload);
+      const { error } = await supabase
+  .from("daily_checkins")
+  .upsert(item.payload, { onConflict: "user_id,day_date" });
       if (error) throw error;
       return;
     }
     case "upsert_nutrition": {
-      const { error } = await supabase.from("nutrition_logs").upsert(item.payload);
+      const { error } = await supabase
+  .from("nutrition_logs")
+  .upsert(item.payload, { onConflict: "user_id,day_date" });
+
       if (error) throw error;
       return;
     }
