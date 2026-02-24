@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
 import { enqueue, startAutoSync } from "./sync";
 import {
@@ -24,6 +24,19 @@ function uuid(): string {
 
 function oneRmEpley(weight: number, reps: number): number {
   return Math.round(weight * (1 + reps / 30));
+}
+
+function isoToDay(iso: string): string {
+  // best-effort: ISO string -> YYYY-MM-DD
+  try {
+    const d = new Date(iso);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    return iso.slice(0, 10);
+  }
 }
 
 type SetLite = {
@@ -54,18 +67,9 @@ function formatSet(s: SetLite) {
   return `${w}x${r}${wu}${rpe}`;
 }
 
-/**
- * Heuristic classifier: "compound" vs "accessory"
- * - Compounds default autofill: First Work Set
- * - Accessories default autofill: Top Set
- *
- * This is intentionally conservative and keyword-based.
- * You can expand the keyword lists anytime.
- */
 function isCompoundExercise(name: string): boolean {
   const n = name.toLowerCase();
 
-  // Strong compound signals
   const compoundKeywords = [
     "squat",
     "bench",
@@ -83,14 +87,12 @@ function isCompoundExercise(name: string): boolean {
     "split squat",
     "rdl",
     "romanian",
-    "hip hinge",
     "good morning",
     "hack squat",
     "leg press",
     "incline bench"
   ];
 
-  // Strong accessory signals (if matched, treat as accessory even if a compound word is present)
   const accessoryKeywords = [
     "curl",
     "extension",
@@ -118,10 +120,89 @@ function isCompoundExercise(name: string): boolean {
   return compoundKeywords.some((k) => n.includes(k));
 }
 
+type BackupEnvelope = {
+  app: "rebuild60";
+  schema: number;
+  exported_at: string;
+  tables: Record<string, any[]>;
+};
+
+// -----------------------------
+// Simple SVG sparkline / line chart
+// -----------------------------
+function LineChart({
+  title,
+  points,
+  height = 120
+}: {
+  title: string;
+  points: { xLabel: string; y: number }[];
+  height?: number;
+}) {
+  const width = 340;
+  const pad = 18;
+
+  if (!points || points.length === 0) {
+    return (
+      <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+        <div style={{ fontWeight: 800 }}>{title}</div>
+        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>No data yet.</div>
+      </div>
+    );
+  }
+
+  const ys = points.map((p) => p.y);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const span = maxY - minY || 1;
+
+  const toX = (i: number) => {
+    if (points.length === 1) return pad;
+    return pad + (i * (width - pad * 2)) / (points.length - 1);
+  };
+  const toY = (y: number) => {
+    const t = (y - minY) / span; // 0..1
+    return pad + (1 - t) * (height - pad * 2);
+  };
+
+  const d = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(p.y).toFixed(1)}`)
+    .join(" ");
+
+  const last = points[points.length - 1]?.y ?? 0;
+
+  return (
+    <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+        <div style={{ fontWeight: 800 }}>{title}</div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>
+          Latest: <b>{Number.isFinite(last) ? Math.round(last) : last}</b>
+        </div>
+      </div>
+
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ marginTop: 8 }}>
+        <path d={d} fill="none" stroke="currentColor" strokeWidth="2" />
+        {/* min/max labels */}
+        <text x={pad} y={pad - 4} fontSize="10" opacity="0.65">
+          {Math.round(maxY)}
+        </text>
+        <text x={pad} y={height - 4} fontSize="10" opacity="0.65">
+          {Math.round(minY)}
+        </text>
+      </svg>
+
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.75 }}>
+        <span>{points[0]?.xLabel}</span>
+        <span>{points[points.length - 1]?.xLabel}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
-  const [tab, setTab] = useState<"quick" | "workout">("quick");
+  const [tab, setTab] = useState<"quick" | "workout" | "dash">("quick");
 
   // Auth
   const [email, setEmail] = useState("");
@@ -168,6 +249,18 @@ export default function App() {
 
   // Last numbers cache
   const [lastByExerciseName, setLastByExerciseName] = useState<Record<string, LastSetSummary | undefined>>({});
+
+  // Backup/Restore
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+
+  // Dashboard computed series
+  const [dashBusy, setDashBusy] = useState(false);
+  const [tonnageSeries, setTonnageSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [setsSeries, setSetsSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [benchSeries, setBenchSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
   // -----------------------------
   // Auth boot + autosync
@@ -217,6 +310,102 @@ export default function App() {
     setOpenTemplateId(null);
     setLastByExerciseName({});
     setDraftByExerciseId({});
+  }
+
+  // -----------------------------
+  // Backup / Restore
+  // -----------------------------
+  async function exportBackup() {
+    try {
+      setBackupBusy(true);
+
+      const tables: Record<string, any[]> = {};
+      const dexieAny = localdb as any;
+      const tableList: any[] = dexieAny.tables ?? [];
+
+      for (const t of tableList) {
+        const name = t.name as string;
+        tables[name] = await t.toArray();
+      }
+
+      const envelope: BackupEnvelope = {
+        app: "rebuild60",
+        schema: 1,
+        exported_at: new Date().toISOString(),
+        tables
+      };
+
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rebuild60-backup-${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      alert("Backup exported. Save that file somewhere safe.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Backup export failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function importBackupFile(file: File) {
+    try {
+      setBackupBusy(true);
+
+      const text = await file.text();
+      const parsed = JSON.parse(text) as BackupEnvelope;
+
+      if (!parsed || parsed.app !== "rebuild60" || !parsed.tables) {
+        alert("That file doesn't look like a Rebuild @ 60 backup JSON.");
+        return;
+      }
+
+      const ok = confirm(
+        "IMPORT will OVERWRITE your local data on this device.\n\nIf you're not 100% sure, hit Cancel and export a backup first.\n\nContinue?"
+      );
+      if (!ok) return;
+
+      const dexieAny = localdb as any;
+      const tableList: any[] = dexieAny.tables ?? [];
+      const byName = new Map<string, any>();
+      for (const t of tableList) byName.set(t.name, t);
+
+      await localdb.transaction("rw", (localdb as any).tables, async () => {
+        for (const t of tableList) await t.clear();
+
+        for (const [tableName, rows] of Object.entries(parsed.tables)) {
+          const t = byName.get(tableName);
+          if (!t) continue;
+          if (!Array.isArray(rows) || rows.length === 0) continue;
+          await t.bulkPut(rows);
+        }
+      });
+
+      setLastByExerciseName({});
+      setDraftByExerciseId({});
+      setOpenSessionId(null);
+      setOpenTemplateId(null);
+
+      if (userId) {
+        await loadTodaySessions();
+        await loadTemplates();
+      }
+
+      alert("Restore complete. If you have pending offline items, keep the app online to sync.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Restore failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
   }
 
   // -----------------------------
@@ -277,7 +466,6 @@ export default function App() {
     }
     setSets(allSets);
 
-    // Ensure drafts exist for each exercise (don’t wipe existing drafts)
     setDraftByExerciseId((prev) => {
       const next = { ...prev };
       for (const e of ex) {
@@ -324,6 +512,13 @@ export default function App() {
     setTab("workout");
   }
 
+  function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
+    setDraftByExerciseId((prev) => ({
+      ...prev,
+      [exerciseId]: { ...(prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }), ...patch }
+    }));
+  }
+
   async function addExercise() {
     if (!openSessionId) return;
 
@@ -351,7 +546,6 @@ export default function App() {
 
     setNewExerciseName("");
 
-    // Draft slot immediately
     setDraftByExerciseId((prev) => ({
       ...prev,
       [id]: prev[id] ?? { weight: "", reps: "", rpe: "", warmup: false }
@@ -359,16 +553,8 @@ export default function App() {
 
     await openSession(openSessionId);
 
-    // Preload last and attempt default autofill for this new exercise
     await ensureLastForExerciseName(name);
     applyDefaultAutofill(id, name);
-  }
-
-  function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
-    setDraftByExerciseId((prev) => ({
-      ...prev,
-      [exerciseId]: { ...(prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }), ...patch }
-    }));
   }
 
   async function addSet(exerciseId: string) {
@@ -408,16 +594,13 @@ export default function App() {
       is_warmup: advanced ? !!d.warmup : false
     });
 
-    // Clear only THIS exercise’s inputs
     updateDraft(exerciseId, { weight: "", reps: "", rpe: "", warmup: false });
 
-    // Auto-start rest timer
     setSecs(90);
     setTimerOn(true);
 
     if (openSessionId) await openSession(openSessionId);
 
-    // Update last cache for that exercise name (snappy)
     const ex = exercises.find((e) => e.id === exerciseId);
     if (ex) {
       setLastByExerciseName((prev) => {
@@ -437,6 +620,51 @@ export default function App() {
           }
         };
       });
+    }
+  }
+
+  // -----------------------------
+  // Delete Session (local now + cloud queued)
+  // -----------------------------
+  async function deleteSession(sessionId: string) {
+    const sess = sessions.find((s) => s.id === sessionId) ?? null;
+    const label = sess ? `${sess.title} @ ${new Date(sess.started_at).toLocaleTimeString()}` : sessionId;
+
+    const ok = confirm(
+      `Delete this entire session (and all sets/exercises)?\n\n${label}\n\nThis removes it locally immediately and queues a cloud delete.`
+    );
+    if (!ok) return;
+
+    try {
+      // local delete in one transaction
+      await localdb.transaction("rw", localdb.localSessions, localdb.localExercises, localdb.localSets, async () => {
+        const ex = await localdb.localExercises.where({ session_id: sessionId }).toArray();
+        const exIds = ex.map((e) => e.id);
+
+        for (const exId of exIds) {
+          await localdb.localSets.where({ exercise_id: exId }).delete();
+        }
+        await localdb.localExercises.where({ session_id: sessionId }).delete();
+        await localdb.localSessions.delete(sessionId);
+      });
+
+      // queue cloud delete (handled in sync.ts update below)
+      await enqueue("delete_session", { session_id: sessionId });
+
+      // refresh UI
+      setOpenSessionId((cur) => (cur === sessionId ? null : cur));
+      setExercises((cur) => (openSessionId === sessionId ? [] : cur));
+      setSets((cur) => (openSessionId === sessionId ? [] : cur));
+      setDraftByExerciseId((prev) => {
+        if (openSessionId !== sessionId) return prev;
+        return {};
+      });
+
+      await loadTodaySessions();
+      alert("Session deleted (local). Will sync delete when online.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Delete failed: ${e?.message ?? String(e)}`);
     }
   }
 
@@ -581,7 +809,6 @@ export default function App() {
         sort_order: i
       });
 
-      // Draft slot immediately
       setDraftByExerciseId((prev) => ({
         ...prev,
         [exerciseId]: prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }
@@ -592,17 +819,10 @@ export default function App() {
     await openSession(sessionId);
     setTab("workout");
     alert("Session created from template (instant).");
-
-    // Preload last + default autofill
-    for (const te of ex) {
-      await ensureLastForExerciseName(te.name);
-      // We need the newly created exercise IDs; easiest is to rely on openSession to hydrate exercises,
-      // then autofill runs from the openSession preload effect below.
-    }
   }
 
   // -----------------------------
-  // Last numbers: local first, cloud fallback
+  // Last numbers
   // -----------------------------
   async function getLocalLastForExerciseName(exName: string, excludeSessionId: string | null): Promise<LastSetSummary | null> {
     const allExercises = await localdb.localExercises.toArray();
@@ -726,12 +946,10 @@ export default function App() {
     return best;
   }
 
-  // Default autofill rule: compounds -> first work, accessories -> top set
   function applyDefaultAutofill(exerciseId: string, exName: string) {
     const summary = lastByExerciseName[exName];
     if (!summary || summary.sets.length === 0) return;
 
-    // Do NOT overwrite manual input
     const existing = draftByExerciseId[exerciseId];
     if (existing && (existing.weight || existing.reps)) return;
 
@@ -768,26 +986,133 @@ export default function App() {
     });
   }
 
-  // Load caches after login
+  // -----------------------------
+  // Dashboard computations (local, offline)
+  // -----------------------------
+  async function refreshDashboard() {
+    if (!userId) return;
+    setDashBusy(true);
+    try {
+      // last 28 days of sessions for this user
+      const allSessions = await localdb.localSessions.where({ user_id: userId }).toArray();
+
+      // Map session_id -> day
+      const sessionDay = new Map<string, string>();
+      for (const s of allSessions) {
+        const day = s.day_date || isoToDay(s.started_at);
+        sessionDay.set(s.id, day);
+      }
+
+      // Load all exercises/sets (local)
+      const allExercises = await localdb.localExercises.toArray();
+      const allSets = await localdb.localSets.toArray();
+
+      // exerciseId -> { sessionId, name }
+      const exInfo = new Map<string, { session_id: string; name: string }>();
+      for (const e of allExercises) exInfo.set(e.id, { session_id: e.session_id, name: e.name });
+
+      // Aggregate per-day tonnage and set counts
+      const tonnageByDay = new Map<string, number>();
+      const setsByDay = new Map<string, number>();
+
+      // Per-day best e1RM for selected lift buckets (by exercise name match)
+      const bestBenchE1RM = new Map<string, number>();
+      const bestSquatE1RM = new Map<string, number>();
+      const bestDlE1RM = new Map<string, number>();
+
+      function bumpMax(map: Map<string, number>, day: string, val: number) {
+        const cur = map.get(day);
+        if (cur == null || val > cur) map.set(day, val);
+      }
+
+      for (const s of allSets) {
+        const info = exInfo.get(s.exercise_id);
+        if (!info) continue;
+        const day = sessionDay.get(info.session_id);
+        if (!day) continue;
+
+        setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
+
+        const w = s.weight_lbs ?? 0;
+        const r = s.reps ?? 0;
+        if (w > 0 && r > 0) {
+          tonnageByDay.set(day, (tonnageByDay.get(day) ?? 0) + w * r);
+
+          // e1RM (best per day) for bucketed names
+          const n = info.name.toLowerCase();
+          const e1 = oneRmEpley(w, r);
+
+          if (n.includes("bench")) bumpMax(bestBenchE1RM, day, e1);
+          if (n.includes("squat")) bumpMax(bestSquatE1RM, day, e1);
+          if (n.includes("deadlift") || n === "dl") bumpMax(bestDlE1RM, day, e1);
+        }
+      }
+
+      // Build last 28 days axis
+      const end = new Date();
+      const days: string[] = [];
+      for (let i = 27; i >= 0; i--) {
+        const d = new Date(end);
+        d.setDate(end.getDate() - i);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        days.push(`${yyyy}-${mm}-${dd}`);
+      }
+
+      const tonSeries = days.map((d) => ({ xLabel: d.slice(5), y: Math.round(tonnageByDay.get(d) ?? 0) }));
+      const setSeries = days.map((d) => ({ xLabel: d.slice(5), y: setsByDay.get(d) ?? 0 }));
+
+      // e1RM series: only plot days where there is data (otherwise it looks like flatlined heart monitor)
+      const bench = days
+        .filter((d) => bestBenchE1RM.get(d) != null)
+        .map((d) => ({ xLabel: d.slice(5), y: bestBenchE1RM.get(d)! }));
+
+      const squat = days
+        .filter((d) => bestSquatE1RM.get(d) != null)
+        .map((d) => ({ xLabel: d.slice(5), y: bestSquatE1RM.get(d)! }));
+
+      const dl = days
+        .filter((d) => bestDlE1RM.get(d) != null)
+        .map((d) => ({ xLabel: d.slice(5), y: bestDlE1RM.get(d)! }));
+
+      setTonnageSeries(tonSeries);
+      setSetsSeries(setSeries);
+      setBenchSeries(bench);
+      setSquatSeries(squat);
+      setDlSeries(dl);
+    } finally {
+      setDashBusy(false);
+    }
+  }
+
+  // -----------------------------
+  // Effects
+  // -----------------------------
   useEffect(() => {
     if (!userId) return;
     loadTodaySessions();
     loadTemplates();
   }, [userId]);
 
-  // Preload last for all exercises when opening session, then default autofill drafts
   useEffect(() => {
     if (!openSessionId) return;
-
     (async () => {
       for (const ex of exercises) {
         await ensureLastForExerciseName(ex.name);
         applyDefaultAutofill(ex.id, ex.name);
       }
     })();
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSessionId, exercises.length]);
+
+  // refresh dashboard when opening the dashboard tab
+  useEffect(() => {
+    if (!userId) return;
+    if (tab !== "dash") return;
+    void refreshDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, userId]);
 
   // -----------------------------
   // Render
@@ -825,7 +1150,7 @@ export default function App() {
   const openSessionObj = sessions.find((s) => s.id === openSessionId) ?? null;
 
   return (
-    <div style={{ padding: 20, maxWidth: 900 }}>
+    <div style={{ padding: 20, maxWidth: 950 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>Rebuild @ 60 Tracker</h2>
         <button onClick={signOut}>Sign Out</button>
@@ -840,7 +1165,7 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
         <button onClick={() => setTab("quick")} disabled={tab === "quick"}>
           Quick Log
         </button>
@@ -854,9 +1179,50 @@ export default function App() {
         >
           Workout
         </button>
+        <button
+          onClick={() => setTab("dash")}
+          disabled={tab === "dash"}
+          title="Charts are computed from your local workout history"
+        >
+          Dashboard
+        </button>
       </div>
 
       <hr />
+
+      {tab === "dash" && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+            <h3 style={{ margin: 0 }}>Dashboard</h3>
+            <button onClick={refreshDashboard} disabled={dashBusy}>
+              {dashBusy ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+
+          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+            Everything here is built from your <b>local</b> workout data (sessions/exercises/sets), so it works offline.
+            Delete your test sessions and refresh to clean the charts.
+          </div>
+
+          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+            <LineChart title="Training Volume (Tonnage) — last 28 days" points={tonnageSeries} />
+            <LineChart title="Total Sets — last 28 days" points={setsSeries} />
+          </div>
+
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Strength Trend (Best e1RM per day)</h4>
+          <div style={{ display: "grid", gap: 12 }}>
+            <LineChart title="Bench (name includes 'bench')" points={benchSeries} />
+            <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
+            <LineChart title="Deadlift (name includes 'deadlift' or 'dl')" points={dlSeries} />
+          </div>
+
+          <div style={{ marginTop: 14, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
+            <b>Note:</b> These strength charts match by exercise name keywords. If you use names like “Flat BB Press”,
+            it won’t show in “bench” until we add that alias. Tell me your exact lift names and I’ll make the matcher
+            smarter (without making it slow).
+          </div>
+        </>
+      )}
 
       {tab === "quick" && (
         <>
@@ -884,6 +1250,41 @@ export default function App() {
 
           <hr />
 
+          <h3>Backup / Restore</h3>
+          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={exportBackup} disabled={backupBusy}>
+                {backupBusy ? "Working…" : "Export Backup (.json)"}
+              </button>
+
+              <button
+                onClick={() => importFileRef.current?.click()}
+                disabled={backupBusy}
+                title="Import will overwrite local data on this device"
+              >
+                {backupBusy ? "Working…" : "Import Backup (.json)"}
+              </button>
+
+              <input
+                ref={importFileRef}
+                type="file"
+                accept="application/json"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void importBackupFile(f);
+                }}
+              />
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
+              <b>Tip:</b> Export after big updates (new templates, new week block). Save it to iCloud/Drive/Dropbox.
+              Import is for “new phone” or “oh crap”.
+            </div>
+          </div>
+
+          <hr />
+
           <h3>Rest Timer</h3>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button onClick={() => { setSecs(90); setTimerOn(true); }}>Start 90s</button>
@@ -901,6 +1302,7 @@ export default function App() {
         <>
           <h3>Workout Logger</h3>
 
+          {/* Templates block */}
           <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12, marginTop: 10 }}>
             <h4 style={{ marginTop: 0 }}>Templates</h4>
 
@@ -973,7 +1375,7 @@ export default function App() {
 
           <hr />
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <h4 style={{ margin: 0 }}>Sessions Today</h4>
             <button onClick={createWorkoutSession}>+ New Session</button>
           </div>
@@ -983,21 +1385,32 @@ export default function App() {
           ) : (
             <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
               {sessions.map((s) => (
-                <button
+                <div
                   key={s.id}
-                  onClick={() => openSession(s.id)}
                   style={{
-                    textAlign: "left",
-                    padding: 12,
                     border: s.id === openSessionId ? "2px solid black" : "1px solid #ccc",
-                    borderRadius: 8
+                    borderRadius: 8,
+                    padding: 12
                   }}
                 >
-                  <div style={{ fontWeight: 700 }}>{s.title}</div>
-                  <div style={{ opacity: 0.8, fontSize: 12 }}>
-                    {new Date(s.started_at).toLocaleTimeString()}
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                    <button
+                      onClick={() => openSession(s.id)}
+                      style={{ textAlign: "left", padding: 0, border: "none", background: "transparent", flex: 1 }}
+                    >
+                      <div style={{ fontWeight: 700 }}>{s.title}</div>
+                      <div style={{ opacity: 0.8, fontSize: 12 }}>{new Date(s.started_at).toLocaleTimeString()}</div>
+                    </button>
+
+                    <button
+                      onClick={() => deleteSession(s.id)}
+                      title="Delete session (and all sets)"
+                      style={{ opacity: 0.9 }}
+                    >
+                      Delete
+                    </button>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
@@ -1046,11 +1459,7 @@ export default function App() {
                               ({defaultLabel})
                             </span>
                           </div>
-                          <button
-                            onClick={() => ensureLastForExerciseName(ex.name)}
-                            style={{ padding: "6px 10px" }}
-                            title="Refresh last numbers"
-                          >
+                          <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
                             Refresh
                           </button>
                         </div>
