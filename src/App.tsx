@@ -35,8 +35,15 @@ type SetLite = {
 
 type LastSetSummary = {
   source: "local" | "cloud";
-  started_at: string; // ISO (best effort)
-  sets: SetLite[];    // ALL sets from last workout for that exercise (ordered)
+  started_at: string;
+  sets: SetLite[];
+};
+
+type ExerciseDraft = {
+  weight: string;
+  reps: string;
+  rpe: string;
+  warmup: boolean;
 };
 
 function formatSet(s: SetLite) {
@@ -79,17 +86,14 @@ export default function App() {
   const [exercises, setExercises] = useState<LocalWorkoutExercise[]>([]);
   const [sets, setSets] = useState<LocalWorkoutSet[]>([]);
 
-  // Workout input UI
+  // Workout UI
   const [newExerciseName, setNewExerciseName] = useState("");
   const [advanced, setAdvanced] = useState(false);
 
-  // Avoid collision with daily setWeight
-  const [setWeightInput, setSetWeightInput] = useState("");
-  const [setRepsInput, setSetRepsInput] = useState("");
-  const [setRpeInput, setSetRpeInput] = useState("");
-  const [setWarmup, setSetWarmup] = useState(false);
+  // Per-exercise drafts (THIS is Upgrade 2)
+  const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
-  // Templates: local-first state
+  // Templates
   const [templates, setTemplates] = useState<LocalWorkoutTemplate[]>([]);
   const [openTemplateId, setOpenTemplateId] = useState<string | null>(null);
   const [templateExercises, setTemplateExercises] = useState<LocalWorkoutTemplateExercise[]>([]);
@@ -98,7 +102,7 @@ export default function App() {
   const [newTemplateDesc, setNewTemplateDesc] = useState("");
   const [newTemplateExerciseName, setNewTemplateExerciseName] = useState("");
 
-  // Last numbers cache (exercise name -> summary)
+  // Last numbers cache
   const [lastByExerciseName, setLastByExerciseName] = useState<Record<string, LastSetSummary | undefined>>({});
 
   // -----------------------------
@@ -148,6 +152,7 @@ export default function App() {
     setOpenSessionId(null);
     setOpenTemplateId(null);
     setLastByExerciseName({});
+    setDraftByExerciseId({});
   }
 
   // -----------------------------
@@ -207,6 +212,15 @@ export default function App() {
       allSets.push(...s);
     }
     setSets(allSets);
+
+    // Ensure drafts exist for each exercise (don’t wipe existing drafts)
+    setDraftByExerciseId((prev) => {
+      const next = { ...prev };
+      for (const e of ex) {
+        if (!next[e.id]) next[e.id] = { weight: "", reps: "", rpe: "", warmup: false };
+      }
+      return next;
+    });
   }
 
   function setsForExercise(exerciseId: string) {
@@ -272,14 +286,29 @@ export default function App() {
     });
 
     setNewExerciseName("");
-    await openSession(openSessionId);
 
+    // Add draft slot instantly
+    setDraftByExerciseId((prev) => ({
+      ...prev,
+      [id]: prev[id] ?? { weight: "", reps: "", rpe: "", warmup: false }
+    }));
+
+    await openSession(openSessionId);
     void ensureLastForExerciseName(name);
   }
 
+  function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
+    setDraftByExerciseId((prev) => ({
+      ...prev,
+      [exerciseId]: { ...(prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }), ...patch }
+    }));
+  }
+
   async function addSet(exerciseId: string) {
-    const reps = setRepsInput ? Number(setRepsInput) : null;
-    const w = setWeightInput ? Number(setWeightInput) : null;
+    const d = draftByExerciseId[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false };
+
+    const reps = d.reps ? Number(d.reps) : null;
+    const w = d.weight ? Number(d.weight) : null;
 
     if (!reps || reps <= 0) {
       alert("Reps required.");
@@ -296,8 +325,8 @@ export default function App() {
       set_number: nextSetNumber,
       weight_lbs: w,
       reps,
-      rpe: advanced && setRpeInput ? Number(setRpeInput) : null,
-      is_warmup: advanced ? !!setWarmup : false
+      rpe: advanced && d.rpe ? Number(d.rpe) : null,
+      is_warmup: advanced ? !!d.warmup : false
     };
 
     await localdb.localSets.put(local);
@@ -308,15 +337,12 @@ export default function App() {
       set_number: nextSetNumber,
       weight_lbs: w,
       reps,
-      rpe: advanced && setRpeInput ? Number(setRpeInput) : null,
-      is_warmup: advanced ? !!setWarmup : false
+      rpe: advanced && d.rpe ? Number(d.rpe) : null,
+      is_warmup: advanced ? !!d.warmup : false
     });
 
-    // Clear inputs
-    setSetWeightInput("");
-    setSetRepsInput("");
-    setSetRpeInput("");
-    setSetWarmup(false);
+    // Clear only THIS exercise’s inputs
+    updateDraft(exerciseId, { weight: "", reps: "", rpe: "", warmup: false });
 
     // Auto-start rest timer
     setSecs(90);
@@ -324,7 +350,7 @@ export default function App() {
 
     if (openSessionId) await openSession(openSessionId);
 
-    // Update last cache for that exercise name immediately (feels snappy)
+    // Update last cache for that exercise name (snappy)
     const ex = exercises.find((e) => e.id === exerciseId);
     if (ex) {
       setLastByExerciseName((prev) => {
@@ -332,8 +358,8 @@ export default function App() {
         const appended: SetLite = {
           weight_lbs: w ?? null,
           reps: reps ?? null,
-          rpe: advanced && setRpeInput ? Number(setRpeInput) : null,
-          is_warmup: advanced ? !!setWarmup : false
+          rpe: advanced && d.rpe ? Number(d.rpe) : null,
+          is_warmup: advanced ? !!d.warmup : false
         };
         return {
           ...prev,
@@ -348,7 +374,7 @@ export default function App() {
   }
 
   // -----------------------------
-  // Templates: local-first helpers
+  // Templates
   // -----------------------------
   async function loadTemplates() {
     if (!userId) return;
@@ -487,6 +513,12 @@ export default function App() {
         name: te.name,
         sort_order: i
       });
+
+      // Create drafts for these exercises immediately
+      setDraftByExerciseId((prev) => ({
+        ...prev,
+        [exerciseId]: prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }
+      }));
     }
 
     await loadTodaySessions();
@@ -595,57 +627,49 @@ export default function App() {
     }
   }
 
-  function applySetToInputs(s: SetLite) {
-    if (s.weight_lbs != null) setSetWeightInput(String(s.weight_lbs));
-    if (s.reps != null) setSetRepsInput(String(s.reps));
-    if (advanced && s.rpe != null) setSetRpeInput(String(s.rpe));
-    if (advanced) setSetWarmup(!!s.is_warmup);
-  }
-
   function pickLastSet(setsAll: SetLite[]): SetLite | null {
     if (setsAll.length === 0) return null;
     return setsAll[setsAll.length - 1];
   }
 
   function pickFirstWorkSet(setsAll: SetLite[]): SetLite | null {
-    // First non-warmup with reps present; fallback to first set
     const work = setsAll.find((s) => !s.is_warmup && (s.reps ?? 0) > 0);
     return work ?? setsAll[0] ?? null;
   }
 
   function pickTopSet(setsAll: SetLite[]): SetLite | null {
-    // Top = highest weight; tie break by reps
     let best: SetLite | null = null;
     for (const s of setsAll) {
       const w = s.weight_lbs ?? -1;
       const r = s.reps ?? -1;
-      if (!best) {
-        best = s;
-        continue;
-      }
+      if (!best) { best = s; continue; }
       const bw = best.weight_lbs ?? -1;
       const br = best.reps ?? -1;
-
       if (w > bw) best = s;
       else if (w === bw && r > br) best = s;
     }
     return best;
   }
 
-  function applyLastMode(exName: string, mode: "last" | "top" | "firstWork") {
+  function applyLastModeToDraft(exerciseId: string, exName: string, mode: "last" | "top" | "firstWork") {
     const summary = lastByExerciseName[exName];
     if (!summary || summary.sets.length === 0) return;
 
-    const setsAll = summary.sets;
     const chosen =
       mode === "last"
-        ? pickLastSet(setsAll)
+        ? pickLastSet(summary.sets)
         : mode === "top"
-          ? pickTopSet(setsAll)
-          : pickFirstWorkSet(setsAll);
+          ? pickTopSet(summary.sets)
+          : pickFirstWorkSet(summary.sets);
 
     if (!chosen) return;
-    applySetToInputs(chosen);
+
+    updateDraft(exerciseId, {
+      weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
+      reps: chosen.reps != null ? String(chosen.reps) : "",
+      rpe: chosen.rpe != null ? String(chosen.rpe) : "",
+      warmup: !!chosen.is_warmup
+    });
   }
 
   // Load caches after login
@@ -655,7 +679,7 @@ export default function App() {
     loadTemplates();
   }, [userId]);
 
-  // When you open a session, preload last for all exercises
+  // Preload last for all exercises when opening session
   useEffect(() => {
     if (!openSessionId) return;
     for (const ex of exercises) void ensureLastForExerciseName(ex.name);
@@ -774,7 +798,6 @@ export default function App() {
         <>
           <h3>Workout Logger</h3>
 
-          {/* Templates block */}
           <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12, marginTop: 10 }}>
             <h4 style={{ marginTop: 0 }}>Templates</h4>
 
@@ -906,6 +929,7 @@ export default function App() {
                     const exSets = setsForExercise(ex.id);
                     const lastSummary = lastByExerciseName[ex.name];
                     const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
+                    const d = draftByExerciseId[ex.id] ?? { weight: "", reps: "", rpe: "", warmup: false };
 
                     return (
                       <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
@@ -933,24 +957,9 @@ export default function App() {
                                 ))}
                               </div>
                               <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                                <button
-                                  onClick={() => applyLastMode(ex.name, "last")}
-                                  disabled={lastSummary.sets.length === 0}
-                                >
-                                  Use Last Set
-                                </button>
-                                <button
-                                  onClick={() => applyLastMode(ex.name, "top")}
-                                  disabled={lastSummary.sets.length === 0}
-                                >
-                                  Use Top Set
-                                </button>
-                                <button
-                                  onClick={() => applyLastMode(ex.name, "firstWork")}
-                                  disabled={lastSummary.sets.length === 0}
-                                >
-                                  Use First Work
-                                </button>
+                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "last")}>Use Last Set</button>
+                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "top")}>Use Top Set</button>
+                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "firstWork")}>Use First Work</button>
                               </div>
                             </>
                           ) : (
@@ -973,19 +982,19 @@ export default function App() {
                         >
                           <input
                             placeholder="Weight"
-                            value={setWeightInput}
-                            onChange={(e) => setSetWeightInput(e.target.value)}
+                            value={d.weight}
+                            onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
                           />
                           <input
                             placeholder="Reps"
-                            value={setRepsInput}
-                            onChange={(e) => setSetRepsInput(e.target.value)}
+                            value={d.reps}
+                            onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
                           />
                           {advanced && (
                             <input
                               placeholder="RPE"
-                              value={setRpeInput}
-                              onChange={(e) => setSetRpeInput(e.target.value)}
+                              value={d.rpe}
+                              onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
                             />
                           )}
                           <button onClick={() => addSet(ex.id)}>Save Set</button>
@@ -995,8 +1004,8 @@ export default function App() {
                           <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
                             <input
                               type="checkbox"
-                              checked={setWarmup}
-                              onChange={(e) => setSetWarmup(e.target.checked)}
+                              checked={d.warmup}
+                              onChange={(e) => updateDraft(ex.id, { warmup: e.target.checked })}
                             />
                             Warmup set
                           </label>
