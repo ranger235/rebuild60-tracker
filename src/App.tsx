@@ -26,6 +26,27 @@ function oneRmEpley(weight: number, reps: number): number {
   return Math.round(weight * (1 + reps / 30));
 }
 
+type SetLite = {
+  weight_lbs: number | null;
+  reps: number | null;
+  rpe: number | null;
+  is_warmup: boolean;
+};
+
+type LastSetSummary = {
+  source: "local" | "cloud";
+  started_at: string; // ISO (best effort)
+  sets: SetLite[];    // ALL sets from last workout for that exercise (ordered)
+};
+
+function formatSet(s: SetLite) {
+  const w = s.weight_lbs ?? "—";
+  const r = s.reps ?? "—";
+  const wu = s.is_warmup ? "WU" : "";
+  const rpe = s.rpe != null ? `@${s.rpe}` : "";
+  return `${w}x${r}${wu}${rpe}`;
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
@@ -77,6 +98,9 @@ export default function App() {
   const [newTemplateDesc, setNewTemplateDesc] = useState("");
   const [newTemplateExerciseName, setNewTemplateExerciseName] = useState("");
 
+  // Last numbers cache (exercise name -> summary)
+  const [lastByExerciseName, setLastByExerciseName] = useState<Record<string, LastSetSummary | undefined>>({});
+
   // -----------------------------
   // Auth boot + autosync
   // -----------------------------
@@ -123,6 +147,7 @@ export default function App() {
     setTab("quick");
     setOpenSessionId(null);
     setOpenTemplateId(null);
+    setLastByExerciseName({});
   }
 
   // -----------------------------
@@ -248,6 +273,8 @@ export default function App() {
 
     setNewExerciseName("");
     await openSession(openSessionId);
+
+    void ensureLastForExerciseName(name);
   }
 
   async function addSet(exerciseId: string) {
@@ -296,6 +323,28 @@ export default function App() {
     setTimerOn(true);
 
     if (openSessionId) await openSession(openSessionId);
+
+    // Update last cache for that exercise name immediately (feels snappy)
+    const ex = exercises.find((e) => e.id === exerciseId);
+    if (ex) {
+      setLastByExerciseName((prev) => {
+        const prevSummary = prev[ex.name];
+        const appended: SetLite = {
+          weight_lbs: w ?? null,
+          reps: reps ?? null,
+          rpe: advanced && setRpeInput ? Number(setRpeInput) : null,
+          is_warmup: advanced ? !!setWarmup : false
+        };
+        return {
+          ...prev,
+          [ex.name]: {
+            source: "local",
+            started_at: new Date().toISOString(),
+            sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
+          }
+        };
+      });
+    }
   }
 
   // -----------------------------
@@ -444,6 +493,159 @@ export default function App() {
     await openSession(sessionId);
     setTab("workout");
     alert("Session created from template (instant).");
+
+    for (const te of ex) void ensureLastForExerciseName(te.name);
+  }
+
+  // -----------------------------
+  // Last numbers: local first, cloud fallback
+  // -----------------------------
+  async function getLocalLastForExerciseName(exName: string, excludeSessionId: string | null): Promise<LastSetSummary | null> {
+    const allExercises = await localdb.localExercises.toArray();
+    const matches = allExercises.filter((e) => e.name === exName && e.session_id !== excludeSessionId);
+    if (matches.length === 0) return null;
+
+    let best: { ex: LocalWorkoutExercise; started_at: string } | null = null;
+    for (const e of matches) {
+      const s = await localdb.localSessions.get(e.session_id);
+      if (!s) continue;
+      if (!best || s.started_at > best.started_at) best = { ex: e, started_at: s.started_at };
+    }
+    if (!best) return null;
+
+    const ss = await localdb.localSets.where({ exercise_id: best.ex.id }).sortBy("set_number");
+    if (ss.length === 0) return null;
+
+    const all = ss.map((x) => ({
+      weight_lbs: x.weight_lbs ?? null,
+      reps: x.reps ?? null,
+      rpe: x.rpe ?? null,
+      is_warmup: !!x.is_warmup
+    }));
+
+    return { source: "local", started_at: best.started_at, sets: all };
+  }
+
+  async function getCloudLastForExerciseName(exName: string): Promise<LastSetSummary | null> {
+    if (!userId) return null;
+    if (!navigator.onLine) return null;
+
+    const { data: sess, error: sessErr } = await supabase
+      .from("workout_sessions")
+      .select("id, started_at")
+      .eq("user_id", userId)
+      .order("started_at", { ascending: false })
+      .limit(30);
+
+    if (sessErr || !sess || sess.length === 0) return null;
+
+    const sessionIds = sess.map((s) => s.id);
+
+    const { data: ex, error: exErr } = await supabase
+      .from("workout_exercises")
+      .select("id, session_id, name")
+      .eq("name", exName)
+      .in("session_id", sessionIds);
+
+    if (exErr || !ex || ex.length === 0) return null;
+
+    const sessionRank = new Map<string, number>();
+    sess.forEach((s, idx) => sessionRank.set(s.id, idx));
+
+    let best = ex[0];
+    for (const e of ex) {
+      const rBest = sessionRank.get(best.session_id) ?? 9999;
+      const rE = sessionRank.get(e.session_id) ?? 9999;
+      if (rE < rBest) best = e;
+    }
+
+    const started_at = (sess.find((s) => s.id === best.session_id)?.started_at as string) ?? new Date().toISOString();
+
+    const { data: ss, error: ssErr } = await supabase
+      .from("workout_sets")
+      .select("weight_lbs, reps, rpe, is_warmup, set_number")
+      .eq("exercise_id", best.id)
+      .order("set_number", { ascending: true });
+
+    if (ssErr || !ss || ss.length === 0) return null;
+
+    const all = ss.map((x) => ({
+      weight_lbs: x.weight_lbs ?? null,
+      reps: x.reps ?? null,
+      rpe: x.rpe ?? null,
+      is_warmup: !!x.is_warmup
+    }));
+
+    return { source: "cloud", started_at, sets: all };
+  }
+
+  async function ensureLastForExerciseName(exName: string) {
+    if (lastByExerciseName[exName]) return;
+
+    const local = await getLocalLastForExerciseName(exName, openSessionId);
+    if (local) {
+      setLastByExerciseName((prev) => ({ ...prev, [exName]: local }));
+      return;
+    }
+
+    const cloud = await getCloudLastForExerciseName(exName);
+    if (cloud) {
+      setLastByExerciseName((prev) => ({ ...prev, [exName]: cloud }));
+      return;
+    }
+  }
+
+  function applySetToInputs(s: SetLite) {
+    if (s.weight_lbs != null) setSetWeightInput(String(s.weight_lbs));
+    if (s.reps != null) setSetRepsInput(String(s.reps));
+    if (advanced && s.rpe != null) setSetRpeInput(String(s.rpe));
+    if (advanced) setSetWarmup(!!s.is_warmup);
+  }
+
+  function pickLastSet(setsAll: SetLite[]): SetLite | null {
+    if (setsAll.length === 0) return null;
+    return setsAll[setsAll.length - 1];
+  }
+
+  function pickFirstWorkSet(setsAll: SetLite[]): SetLite | null {
+    // First non-warmup with reps present; fallback to first set
+    const work = setsAll.find((s) => !s.is_warmup && (s.reps ?? 0) > 0);
+    return work ?? setsAll[0] ?? null;
+  }
+
+  function pickTopSet(setsAll: SetLite[]): SetLite | null {
+    // Top = highest weight; tie break by reps
+    let best: SetLite | null = null;
+    for (const s of setsAll) {
+      const w = s.weight_lbs ?? -1;
+      const r = s.reps ?? -1;
+      if (!best) {
+        best = s;
+        continue;
+      }
+      const bw = best.weight_lbs ?? -1;
+      const br = best.reps ?? -1;
+
+      if (w > bw) best = s;
+      else if (w === bw && r > br) best = s;
+    }
+    return best;
+  }
+
+  function applyLastMode(exName: string, mode: "last" | "top" | "firstWork") {
+    const summary = lastByExerciseName[exName];
+    if (!summary || summary.sets.length === 0) return;
+
+    const setsAll = summary.sets;
+    const chosen =
+      mode === "last"
+        ? pickLastSet(setsAll)
+        : mode === "top"
+          ? pickTopSet(setsAll)
+          : pickFirstWorkSet(setsAll);
+
+    if (!chosen) return;
+    applySetToInputs(chosen);
   }
 
   // Load caches after login
@@ -452,6 +654,13 @@ export default function App() {
     loadTodaySessions();
     loadTemplates();
   }, [userId]);
+
+  // When you open a session, preload last for all exercises
+  useEffect(() => {
+    if (!openSessionId) return;
+    for (const ex of exercises) void ensureLastForExerciseName(ex.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSessionId, exercises.length]);
 
   // -----------------------------
   // Render
@@ -695,15 +904,63 @@ export default function App() {
                 <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
                   {exercises.map((ex) => {
                     const exSets = setsForExercise(ex.id);
-                    const last = exSets[exSets.length - 1];
+                    const lastSummary = lastByExerciseName[ex.name];
+                    const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
 
                     return (
                       <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                           <div style={{ fontWeight: 800 }}>{ex.name}</div>
-                          <div style={{ fontSize: 12, opacity: 0.75 }}>
-                            {last?.weight_lbs && last?.reps ? `Last: ${last.weight_lbs} x ${last.reps}` : ""}
-                          </div>
+                          <button
+                            onClick={() => ensureLastForExerciseName(ex.name)}
+                            style={{ padding: "6px 10px" }}
+                            title="Refresh last numbers"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+
+                        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
+                          {lastSummary ? (
+                            <>
+                              <div>
+                                <b>Last ({lastSummary.source}):</b>{" "}
+                                {preview.map((s, i) => (
+                                  <span key={i}>
+                                    {formatSet(s)}
+                                    {i < preview.length - 1 ? ", " : ""}
+                                  </span>
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                                <button
+                                  onClick={() => applyLastMode(ex.name, "last")}
+                                  disabled={lastSummary.sets.length === 0}
+                                >
+                                  Use Last Set
+                                </button>
+                                <button
+                                  onClick={() => applyLastMode(ex.name, "top")}
+                                  disabled={lastSummary.sets.length === 0}
+                                >
+                                  Use Top Set
+                                </button>
+                                <button
+                                  onClick={() => applyLastMode(ex.name, "firstWork")}
+                                  disabled={lastSummary.sets.length === 0}
+                                >
+                                  Use First Work
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ opacity: 0.7 }}>
+                              <b>Last:</b> (none yet){" "}
+                              <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ marginLeft: 8 }}>
+                                check
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div
@@ -747,7 +1004,7 @@ export default function App() {
 
                         {exSets.length > 0 && (
                           <div style={{ marginTop: 10 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Sets</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Sets (today)</div>
                             <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
                               {exSets.map((s) => {
                                 const est =
@@ -794,4 +1051,3 @@ export default function App() {
     </div>
   );
 }
-
