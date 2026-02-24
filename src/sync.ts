@@ -35,7 +35,6 @@ async function runOp(item: PendingOp) {
     }
 
     case "create_workout": {
-      // payload includes client-generated id, which keeps links intact offline
       const { error } = await supabase.from("workout_sessions").insert(item.payload);
       if (error) throw error;
       return;
@@ -49,6 +48,18 @@ async function runOp(item: PendingOp) {
 
     case "insert_set": {
       const { error } = await supabase.from("workout_sets").insert(item.payload);
+      if (error) throw error;
+      return;
+    }
+
+    case "create_template": {
+      const { error } = await supabase.from("workout_templates").insert(item.payload);
+      if (error) throw error;
+      return;
+    }
+
+    case "insert_template_exercise": {
+      const { error } = await supabase.from("workout_template_exercises").insert(item.payload);
       if (error) throw error;
       return;
     }
@@ -84,3 +95,4 @@ export function startAutoSync(setStatus?: (s: string) => void) {
   window.addEventListener("online", () => syncOnce(setStatus));
   return () => window.clearInterval(t);
 }
+
