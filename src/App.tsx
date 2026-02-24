@@ -5,7 +5,9 @@ import {
   localdb,
   type LocalWorkoutExercise,
   type LocalWorkoutSession,
-  type LocalWorkoutSet
+  type LocalWorkoutSet,
+  type LocalWorkoutTemplate,
+  type LocalWorkoutTemplateExercise
 } from "./localdb";
 
 function todayISO(): string {
@@ -17,7 +19,6 @@ function todayISO(): string {
 }
 
 function uuid(): string {
-  // Modern iOS + desktop support
   return crypto.randomUUID();
 }
 
@@ -38,7 +39,7 @@ export default function App() {
   // Date
   const dayDate = useMemo(() => todayISO(), []);
 
-  // Quick Log (fast fields)
+  // Quick Log
   const [weight, setWeight] = useState("");
   const [waist, setWaist] = useState("");
   const [sleepHours, setSleepHours] = useState("");
@@ -51,7 +52,7 @@ export default function App() {
   const [timerOn, setTimerOn] = useState(false);
   const [secs, setSecs] = useState(90);
 
-  // Workout local-first state
+  // Workout: local-first state
   const [sessions, setSessions] = useState<LocalWorkoutSession[]>([]);
   const [openSessionId, setOpenSessionId] = useState<string | null>(null);
   const [exercises, setExercises] = useState<LocalWorkoutExercise[]>([]);
@@ -61,11 +62,20 @@ export default function App() {
   const [newExerciseName, setNewExerciseName] = useState("");
   const [advanced, setAdvanced] = useState(false);
 
-  // IMPORTANT: names avoid collision with daily setWeight
+  // Avoid collision with daily setWeight
   const [setWeightInput, setSetWeightInput] = useState("");
   const [setRepsInput, setSetRepsInput] = useState("");
   const [setRpeInput, setSetRpeInput] = useState("");
   const [setWarmup, setSetWarmup] = useState(false);
+
+  // Templates: local-first state
+  const [templates, setTemplates] = useState<LocalWorkoutTemplate[]>([]);
+  const [openTemplateId, setOpenTemplateId] = useState<string | null>(null);
+  const [templateExercises, setTemplateExercises] = useState<LocalWorkoutTemplateExercise[]>([]);
+
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateDesc, setNewTemplateDesc] = useState("");
+  const [newTemplateExerciseName, setNewTemplateExerciseName] = useState("");
 
   // -----------------------------
   // Auth boot + autosync
@@ -112,6 +122,7 @@ export default function App() {
     await supabase.auth.signOut();
     setTab("quick");
     setOpenSessionId(null);
+    setOpenTemplateId(null);
   }
 
   // -----------------------------
@@ -173,10 +184,11 @@ export default function App() {
     setSets(allSets);
   }
 
-  useEffect(() => {
-    if (!userId) return;
-    loadTodaySessions();
-  }, [userId]);
+  function setsForExercise(exerciseId: string) {
+    return sets
+      .filter((s) => s.exercise_id === exerciseId)
+      .sort((a, b) => a.set_number - b.set_number);
+  }
 
   async function createWorkoutSession() {
     if (!userId) return;
@@ -193,10 +205,8 @@ export default function App() {
       notes: null
     };
 
-    // Local cache first (instant)
     await localdb.localSessions.put(local);
 
-    // Queue server write (sync later if needed)
     await enqueue("create_workout", {
       id,
       user_id: userId,
@@ -238,12 +248,6 @@ export default function App() {
 
     setNewExerciseName("");
     await openSession(openSessionId);
-  }
-
-  function setsForExercise(exerciseId: string) {
-    return sets
-      .filter((s) => s.exercise_id === exerciseId)
-      .sort((a, b) => a.set_number - b.set_number);
   }
 
   async function addSet(exerciseId: string) {
@@ -295,6 +299,161 @@ export default function App() {
   }
 
   // -----------------------------
+  // Templates: local-first helpers
+  // -----------------------------
+  async function loadTemplates() {
+    if (!userId) return;
+    const rows = await localdb.localTemplates.where({ user_id: userId }).sortBy("created_at");
+    setTemplates(rows.reverse());
+  }
+
+  async function openTemplate(templateId: string) {
+    setOpenTemplateId(templateId);
+    const ex = await localdb.localTemplateExercises.where({ template_id: templateId }).sortBy("sort_order");
+    setTemplateExercises(ex);
+  }
+
+  async function createTemplate() {
+    if (!userId) return;
+    const name = newTemplateName.trim();
+    if (!name) {
+      alert("Template name required.");
+      return;
+    }
+
+    const id = uuid();
+    const created_at = new Date().toISOString();
+
+    const local: LocalWorkoutTemplate = {
+      id,
+      user_id: userId,
+      name,
+      description: newTemplateDesc.trim() || null,
+      created_at
+    };
+
+    await localdb.localTemplates.put(local);
+
+    await enqueue("create_template", {
+      id,
+      user_id: userId,
+      name: local.name,
+      description: local.description,
+      created_at
+    });
+
+    setNewTemplateName("");
+    setNewTemplateDesc("");
+
+    await loadTemplates();
+    await openTemplate(id);
+  }
+
+  async function addExerciseToTemplate() {
+    if (!openTemplateId) return;
+    const name = newTemplateExerciseName.trim();
+    if (!name) return;
+
+    const id = uuid();
+    const sort_order = templateExercises.length;
+
+    const local: LocalWorkoutTemplateExercise = {
+      id,
+      template_id: openTemplateId,
+      name,
+      sort_order
+    };
+
+    await localdb.localTemplateExercises.put(local);
+
+    await enqueue("insert_template_exercise", {
+      id,
+      template_id: openTemplateId,
+      name,
+      sort_order
+    });
+
+    setNewTemplateExerciseName("");
+    await openTemplate(openTemplateId);
+  }
+
+  async function startSessionFromTemplate() {
+    if (!userId) return;
+    if (!openTemplateId) {
+      alert("Pick a template first.");
+      return;
+    }
+
+    const t = templates.find((x) => x.id === openTemplateId) ?? null;
+    const ex = await localdb.localTemplateExercises.where({ template_id: openTemplateId }).sortBy("sort_order");
+
+    if (!t) {
+      alert("Template not found.");
+      return;
+    }
+    if (ex.length === 0) {
+      alert("Template needs at least 1 exercise.");
+      return;
+    }
+
+    const sessionId = uuid();
+    const started_at = new Date().toISOString();
+
+    const localSession: LocalWorkoutSession = {
+      id: sessionId,
+      user_id: userId,
+      day_date: dayDate,
+      started_at,
+      title: t.name,
+      notes: null
+    };
+
+    await localdb.localSessions.put(localSession);
+
+    await enqueue("create_workout", {
+      id: sessionId,
+      user_id: userId,
+      day_date: dayDate,
+      started_at,
+      title: t.name,
+      notes: null
+    });
+
+    for (let i = 0; i < ex.length; i++) {
+      const te = ex[i];
+      const exerciseId = uuid();
+
+      const localExercise: LocalWorkoutExercise = {
+        id: exerciseId,
+        session_id: sessionId,
+        name: te.name,
+        sort_order: i
+      };
+
+      await localdb.localExercises.put(localExercise);
+
+      await enqueue("insert_exercise", {
+        id: exerciseId,
+        session_id: sessionId,
+        name: te.name,
+        sort_order: i
+      });
+    }
+
+    await loadTodaySessions();
+    await openSession(sessionId);
+    setTab("workout");
+    alert("Session created from template (instant).");
+  }
+
+  // Load caches after login
+  useEffect(() => {
+    if (!userId) return;
+    loadTodaySessions();
+    loadTemplates();
+  }, [userId]);
+
+  // -----------------------------
   // Render
   // -----------------------------
   if (loading) return <div style={{ padding: 20 }}>Loading…</div>;
@@ -341,8 +500,7 @@ export default function App() {
           <b>Today:</b> {dayDate} (Week 1 Day 1)
         </div>
         <div>
-          <b>Status:</b>{" "}
-          {navigator.onLine ? status : "Offline (logging still works)"}
+          <b>Status:</b> {navigator.onLine ? status : "Offline (logging still works)"}
         </div>
       </div>
 
@@ -354,6 +512,7 @@ export default function App() {
           onClick={() => {
             setTab("workout");
             loadTodaySessions();
+            loadTemplates();
           }}
           disabled={tab === "workout"}
         >
@@ -404,15 +563,90 @@ export default function App() {
 
       {tab === "workout" && (
         <>
+          <h3>Workout Logger</h3>
+
+          {/* Templates block */}
+          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12, marginTop: 10 }}>
+            <h4 style={{ marginTop: 0 }}>Templates</h4>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                placeholder="New template name (e.g., Lower A)"
+                value={newTemplateName}
+                onChange={(e) => setNewTemplateName(e.target.value)}
+              />
+              <input
+                placeholder="Description (optional)"
+                value={newTemplateDesc}
+                onChange={(e) => setNewTemplateDesc(e.target.value)}
+              />
+              <button onClick={createTemplate}>Create Template</button>
+            </div>
+
+            {templates.length > 0 && (
+              <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                {templates.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => openTemplate(t.id)}
+                    style={{
+                      textAlign: "left",
+                      padding: 10,
+                      border: t.id === openTemplateId ? "2px solid black" : "1px solid #ccc",
+                      borderRadius: 8
+                    }}
+                  >
+                    <div style={{ fontWeight: 800 }}>{t.name}</div>
+                    <div style={{ opacity: 0.75, fontSize: 12 }}>{t.description ?? ""}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {openTemplateId && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <input
+                    placeholder="Add exercise to template"
+                    value={newTemplateExerciseName}
+                    onChange={(e) => setNewTemplateExerciseName(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={addExerciseToTemplate}>Add</button>
+                </div>
+
+                {templateExercises.length > 0 && (
+                  <div style={{ marginTop: 10, opacity: 0.9 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Template exercises</div>
+                    <ol>
+                      {templateExercises
+                        .slice()
+                        .sort((a, b) => a.sort_order - b.sort_order)
+                        .map((e) => (
+                          <li key={e.id}>{e.name}</li>
+                        ))}
+                    </ol>
+                  </div>
+                )}
+
+                <button onClick={startSessionFromTemplate} style={{ marginTop: 10 }}>
+                  Start Session from Template
+                </button>
+              </div>
+            )}
+          </div>
+
+          <hr />
+
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3>Workout Logger</h3>
+            <h4 style={{ margin: 0 }}>Sessions Today</h4>
             <button onClick={createWorkoutSession}>+ New Session</button>
           </div>
 
           {sessions.length === 0 ? (
-            <p>No sessions today yet. Hit <b>New Session</b> and start logging sets.</p>
+            <p style={{ marginTop: 10 }}>No sessions today yet. Create one or start from a template.</p>
           ) : (
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
               {sessions.map((s) => (
                 <button
                   key={s.id}
@@ -472,7 +706,14 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div style={{ display: "grid", gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
+                            gap: 8,
+                            marginTop: 10
+                          }}
+                        >
                           <input
                             placeholder="Weight"
                             value={setWeightInput}
@@ -517,14 +758,11 @@ export default function App() {
                                 return (
                                   <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                                     <div>
-                                      <b>{s.set_number}.</b>{" "}
-                                      {s.weight_lbs ?? "—"} x {s.reps ?? "—"}
+                                      <b>{s.set_number}.</b> {s.weight_lbs ?? "—"} x {s.reps ?? "—"}
                                       {s.is_warmup ? " (WU)" : ""}
                                       {s.rpe != null ? ` @RPE ${s.rpe}` : ""}
                                     </div>
-                                    <div style={{ opacity: 0.75 }}>
-                                      {est ? `~1RM ${est}` : ""}
-                                    </div>
+                                    <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
                                   </div>
                                 );
                               })}
@@ -556,3 +794,4 @@ export default function App() {
     </div>
   );
 }
+
