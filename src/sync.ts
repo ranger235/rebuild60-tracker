@@ -1,98 +1,145 @@
 import { supabase } from "./supabase";
-import { localdb, type PendingOp } from "./localdb";
+import { localdb } from "./localdb";
 
-export async function enqueue(op: PendingOp["op"], payload: any) {
-  await localdb.pendingOps.add({
-    createdAt: Date.now(),
+// Queue record shape (Dexie table usually called localQueue)
+type QueueItem = {
+  id: string;
+  op: string;
+  payload: any;
+  created_at: string;
+};
+
+export async function enqueue(op: string, payload: any) {
+  const item: QueueItem = {
+    id: crypto.randomUUID(),
     op,
     payload,
-    status: "queued"
-  });
+    created_at: new Date().toISOString()
+  };
+
+  // localQueue must exist in localdb.ts (from earlier builds)
+  // If your queue table name differs, tell me and I’ll adjust.
+  const anyDb = localdb as any;
+  if (!anyDb.localQueue) throw new Error("localQueue table not found in localdb. (Check localdb.ts)");
+  await anyDb.localQueue.add(item);
 }
 
-async function runOp(item: PendingOp) {
-  switch (item.op) {
-    case "upsert_daily": {
-      const { error } = await supabase
-        .from("daily_checkins")
-        .upsert(item.payload, { onConflict: "user_id,day_date" });
-      if (error) throw error;
+async function processItem(item: QueueItem) {
+  const { op, payload } = item;
+
+  // NOTE: we let Supabase errors throw; caller handles retry.
+  switch (op) {
+    case "upsert_daily":
+      await supabase.from("daily_logs").upsert(payload, { onConflict: "user_id,day_date" });
+      return;
+
+    case "upsert_nutrition":
+      await supabase.from("nutrition_logs").upsert(payload, { onConflict: "user_id,day_date" });
+      return;
+
+    case "insert_zone2":
+      await supabase.from("zone2_sessions").insert(payload);
+      return;
+
+    case "create_workout":
+      await supabase.from("workout_sessions").insert(payload);
+      return;
+
+    case "insert_exercise":
+      await supabase.from("workout_exercises").insert(payload);
+      return;
+
+    case "insert_set":
+      await supabase.from("workout_sets").insert(payload);
+      return;
+
+    case "create_template":
+      await supabase.from("workout_templates").insert(payload);
+      return;
+
+    case "insert_template_exercise":
+      await supabase.from("workout_template_exercises").insert(payload);
+      return;
+
+    // ✅ NEW: delete a session and all child rows
+    case "delete_session": {
+      const session_id = payload?.session_id;
+      if (!session_id) throw new Error("delete_session missing session_id");
+
+      // Delete sets -> exercises -> session.
+      // We must discover exercise ids first.
+      const { data: exRows, error: exErr } = await supabase
+        .from("workout_exercises")
+        .select("id")
+        .eq("session_id", session_id);
+
+      if (exErr) throw exErr;
+
+      const exIds = (exRows ?? []).map((r: any) => r.id);
+
+      if (exIds.length > 0) {
+        const { error: setErr } = await supabase.from("workout_sets").delete().in("exercise_id", exIds);
+        if (setErr) throw setErr;
+      }
+
+      const { error: delExErr } = await supabase.from("workout_exercises").delete().eq("session_id", session_id);
+      if (delExErr) throw delExErr;
+
+      const { error: delSessErr } = await supabase.from("workout_sessions").delete().eq("id", session_id);
+      if (delSessErr) throw delSessErr;
+
       return;
     }
 
-    case "upsert_nutrition": {
-      const { error } = await supabase
-        .from("nutrition_logs")
-        .upsert(item.payload, { onConflict: "user_id,day_date" });
-      if (error) throw error;
-      return;
-    }
-
-    case "insert_zone2": {
-      const { error } = await supabase.from("cardio_sessions").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
-
-    case "create_workout": {
-      const { error } = await supabase.from("workout_sessions").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
-
-    case "insert_exercise": {
-      const { error } = await supabase.from("workout_exercises").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
-
-    case "insert_set": {
-      const { error } = await supabase.from("workout_sets").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
-
-    case "create_template": {
-      const { error } = await supabase.from("workout_templates").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
-
-    case "insert_template_exercise": {
-      const { error } = await supabase.from("workout_template_exercises").insert(item.payload);
-      if (error) throw error;
-      return;
-    }
+    default:
+      throw new Error(`Unknown op: ${op}`);
   }
 }
 
-export async function syncOnce(setStatus?: (s: string) => void) {
-  const ops = await localdb.pendingOps.orderBy("createdAt").toArray();
-  if (ops.length === 0) {
-    setStatus?.("Synced");
-    return;
-  }
+export function startAutoSync(setStatus: (s: string) => void) {
+  let stopped = false;
 
-  for (const item of ops) {
+  async function tick() {
+    if (stopped) return;
+
+    if (!navigator.onLine) {
+      setStatus("Offline/retrying");
+      return;
+    }
+
     try {
-      setStatus?.("Syncing…");
-      await runOp(item);
-      await localdb.pendingOps.delete(item.id!);
+      setStatus("Syncing…");
+
+      const anyDb = localdb as any;
+      const q = anyDb.localQueue;
+      if (!q) throw new Error("localQueue table not found in localdb.");
+
+      const items: QueueItem[] = await q.orderBy("created_at").toArray();
+
+      if (items.length === 0) {
+        setStatus("Synced");
+        return;
+      }
+
+      // Process in order; stop on first failure
+      for (const item of items) {
+        await processItem(item);
+        await q.delete(item.id);
+      }
+
+      setStatus("Synced");
     } catch (e: any) {
-      await localdb.pendingOps.update(item.id!, {
-        status: "retry",
-        lastError: e?.message ?? String(e)
-      });
-      setStatus?.("Offline / retrying");
-      break;
+      console.error(e);
+      setStatus("Offline/retrying");
     }
   }
-}
 
-export function startAutoSync(setStatus?: (s: string) => void) {
-  syncOnce(setStatus);
-  const t = window.setInterval(() => syncOnce(setStatus), 10000);
-  window.addEventListener("online", () => syncOnce(setStatus));
-  return () => window.clearInterval(t);
-}
+  // run now and every 6 seconds
+  tick();
+  const h = window.setInterval(tick, 6000);
 
+  return () => {
+    stopped = true;
+    window.clearInterval(h);
+  };
+}
