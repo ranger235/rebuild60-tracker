@@ -422,20 +422,24 @@ export default function App() {
                 </div>
               )}
 
-              <hr />
+                <hr />
 
-              <h3>Rest Timer</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <button onClick={() => { setSecs(90); setTimerOn(true); }}>Start 90s</button>
-                <button onClick={() => { setSecs(120); setTimerOn(true); }}>Start 120s</button>
-                <button onClick={() => setTimerOn((v) => !v)}>{timerOn ? "Pause" : "Resume"}</button>
-                <button onClick={() => { setTimerOn(false); setSecs(90); }}>Reset</button>
-                <div style={{ fontSize: 24, fontWeight: 700 }}>
-                  {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")}
-                </div>
-              </div>
-            </>
-          )}
+          <h3>Rest Timer</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button onClick={() => { setSecs(90); setTimerOn(true); }}>Start 90s</button>
+            <button onClick={() => { setSecs(120); setTimerOn(true); }}>Start 120s</button>
+            <button onClick={() => setTimerOn((v) => !v)}>{timerOn ? "Pause" : "Resume"}</button>
+            <button onClick={() => { setTimerOn(false); setSecs(90); }}>Reset</button>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>
+              {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")}
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab === "workout" && (
+        <>
+          {/* workout tab content here */}
         </>
       )}
     </div>
