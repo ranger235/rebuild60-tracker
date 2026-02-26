@@ -9,6 +9,7 @@ import {
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
+import { CoachBoundary } from "./CoachPanel";
 
 function todayISO(): string {
   const d = new Date();
@@ -234,6 +235,17 @@ export default function App() {
   // Workout UI
   const [newExerciseName, setNewExerciseName] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const [coachEnabled, setCoachEnabled] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem("rebuild60:coachEnabled");
+      if (v === "0") return false;
+      if (v === "1") return true;
+      return true;
+    } catch {
+      return true;
+    }
+  });
+
 
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
@@ -1612,6 +1624,10 @@ export default function App() {
                   <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
                   Advanced (RPE + Warmup)
                 </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <input type="checkbox" checked={coachEnabled} onChange={(e) => setCoachEnabled(e.target.checked)} />
+                  Coach suggestions
+                </label>
               </div>
 
               {exercises.length === 0 ? (
@@ -1733,6 +1749,11 @@ export default function App() {
                             </div>
                           </div>
                         )}
+
+                        {coachEnabled && (
+                          <CoachBoundary exerciseName={ex.name} sets={exSets} compound={compound} />
+                        )}
+
                       </div>
                     );
                   })}
@@ -1758,6 +1779,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
