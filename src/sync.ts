@@ -1,33 +1,23 @@
 import { supabase } from "./supabase";
-import { localdb } from "./localdb";
+import { localdb, type PendingOp } from "./localdb";
 
-// Queue record shape (Dexie table usually called localQueue)
-type QueueItem = {
-  id: string;
-  op: string;
-  payload: any;
-  created_at: string;
-};
+/**
+ * Offline-first sync:
+ * - enqueue() writes to pendingOps (Dexie) immediately
+ * - autosync processes queued ops when online
+ * - poison-pill safe: one bad op won't block the whole queue
+ */
 
-export async function enqueue(op: string, payload: any) {
-  const item: QueueItem = {
-    id: crypto.randomUUID(),
+export async function enqueue(op: PendingOp["op"], payload: any) {
+  await localdb.pendingOps.add({
+    createdAt: Date.now(),
     op,
     payload,
-    created_at: new Date().toISOString()
-  };
-
-  // localQueue must exist in localdb.ts (from earlier builds)
-  // If your queue table name differs, tell me and I’ll adjust.
-  const anyDb = localdb as any;
-  if (!anyDb.localQueue) throw new Error("localQueue table not found in localdb. (Check localdb.ts)");
-  await anyDb.localQueue.add(item);
+    status: "queued"
+  });
 }
 
-async function processItem(item: QueueItem) {
-  const { op, payload } = item;
-
-  // NOTE: we let Supabase errors throw; caller handles retry.
+async function processOp(op: PendingOp["op"], payload: any) {
   switch (op) {
     case "upsert_daily":
       await supabase.from("daily_logs").upsert(payload, { onConflict: "user_id,day_date" });
@@ -61,13 +51,52 @@ async function processItem(item: QueueItem) {
       await supabase.from("workout_template_exercises").insert(payload);
       return;
 
-    // ✅ NEW: delete a session and all child rows
+    case "update_template_exercise":
+      // upsert by primary key (id)
+      await supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" });
+      return;
+
+    case "delete_set": {
+      const set_id = payload?.set_id;
+      if (!set_id) throw new Error("delete_set missing set_id");
+      await supabase.from("workout_sets").delete().eq("id", set_id);
+      return;
+    }
+
+    case "renumber_sets": {
+      const ordered_set_ids: string[] = payload?.ordered_set_ids ?? [];
+      if (!Array.isArray(ordered_set_ids)) throw new Error("renumber_sets ordered_set_ids must be array");
+      // Renumbering requires updates; do it client-side in a loop (small N)
+      for (let i = 0; i < ordered_set_ids.length; i++) {
+        const id = ordered_set_ids[i];
+        await supabase.from("workout_sets").update({ set_number: i + 1 }).eq("id", id);
+      }
+      return;
+    }
+
+    case "delete_exercise": {
+      const exercise_id = payload?.exercise_id;
+      if (!exercise_id) throw new Error("delete_exercise missing exercise_id");
+      // delete sets then exercise
+      await supabase.from("workout_sets").delete().eq("exercise_id", exercise_id);
+      await supabase.from("workout_exercises").delete().eq("id", exercise_id);
+      return;
+    }
+
+    case "reorder_exercises": {
+      const ordered_exercise_ids: string[] = payload?.ordered_exercise_ids ?? [];
+      if (!Array.isArray(ordered_exercise_ids)) throw new Error("reorder_exercises ordered_exercise_ids must be array");
+      for (let i = 0; i < ordered_exercise_ids.length; i++) {
+        const id = ordered_exercise_ids[i];
+        await supabase.from("workout_exercises").update({ sort_order: i }).eq("id", id);
+      }
+      return;
+    }
+
     case "delete_session": {
       const session_id = payload?.session_id;
       if (!session_id) throw new Error("delete_session missing session_id");
 
-      // Delete sets -> exercises -> session.
-      // We must discover exercise ids first.
       const { data: exRows, error: exErr } = await supabase
         .from("workout_exercises")
         .select("id")
@@ -92,6 +121,7 @@ async function processItem(item: QueueItem) {
     }
 
     default:
+      // Exhaustiveness
       throw new Error(`Unknown op: ${op}`);
   }
 }
@@ -110,31 +140,39 @@ export function startAutoSync(setStatus: (s: string) => void) {
     try {
       setStatus("Syncing…");
 
-      const anyDb = localdb as any;
-      const q = anyDb.localQueue;
-      if (!q) throw new Error("localQueue table not found in localdb.");
-
-      const items: QueueItem[] = await q.orderBy("created_at").toArray();
+      const items = await localdb.pendingOps.orderBy("createdAt").toArray();
 
       if (items.length === 0) {
         setStatus("Synced");
         return;
       }
 
-      // Process in order; stop on first failure
+      let failed = 0;
+
       for (const item of items) {
-        await processItem(item);
-        await q.delete(item.id);
+        try {
+          await processOp(item.op, item.payload);
+          if (item.id != null) await localdb.pendingOps.delete(item.id);
+        } catch (e: any) {
+          failed++;
+          if (item.id != null) {
+            await localdb.pendingOps.update(item.id, {
+              status: "retry",
+              lastError: e?.message ?? String(e)
+            });
+          }
+          // poison-pill safe: keep going
+          continue;
+        }
       }
 
-      setStatus("Synced");
+      setStatus(failed === 0 ? "Synced" : `Synced (with ${failed} retrying)`);
     } catch (e: any) {
       console.error(e);
       setStatus("Offline/retrying");
     }
   }
 
-  // run now and every 6 seconds
   tick();
   const h = window.setInterval(tick, 6000);
 
