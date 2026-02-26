@@ -1639,11 +1639,7 @@ export default function App() {
                           <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
                             Refresh
                           </button>
-                          <CoachPanel
-  exerciseName={ex.name}
-  sets={exSets}
-  compound={compound}
-/>
+                         
                         </div>
 
                         <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
