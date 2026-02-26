@@ -52,15 +52,6 @@ type LastSetSummary = {
   sets: SetLite[];
 };
 
-type CoachRec = {
-  label: "ADD_WEIGHT" | "ADD_REPS" | "HOLD" | "DELOAD";
-  headline: string;
-  detail: string;
-  deltaPct?: number | null;
-  lastTop?: { weight: number; reps: number; rpe: number | null; e1rm: number } | null;
-  prevTop?: { weight: number; reps: number; rpe: number | null; e1rm: number } | null;
-};
-
 type ExerciseDraft = {
   weight: string;
   reps: string;
@@ -259,10 +250,6 @@ export default function App() {
   // Last numbers cache
   const [lastByExerciseName, setLastByExerciseName] = useState<Record<string, LastSetSummary | undefined>>({});
 
-  // Coach suggestions cache (computed from local history)
-  const [coachByExerciseName, setCoachByExerciseName] = useState<Record<string, CoachRec | undefined>>({});
-  const [coachBusy, setCoachBusy] = useState(false);
-
   // Backup/Restore
   const importFileRef = useRef<HTMLInputElement | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -322,31 +309,170 @@ export default function App() {
     setOpenSessionId(null);
     setOpenTemplateId(null);
     setLastByExerciseName({});
-        setDraftByExerciseId((prev) => {
+    setDraftByExerciseId({});
+  }
+
+  // -----------------------------
+  // Backup / Restore
+  // -----------------------------
+  async function exportBackup() {
+    try {
+      setBackupBusy(true);
+
+      const tables: Record<string, any[]> = {};
+      const dexieAny = localdb as any;
+      const tableList: any[] = dexieAny.tables ?? [];
+
+      for (const t of tableList) {
+        const name = t.name as string;
+        tables[name] = await t.toArray();
+      }
+
+      const envelope: BackupEnvelope = {
+        app: "rebuild60",
+        schema: 1,
+        exported_at: new Date().toISOString(),
+        tables
+      };
+
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rebuild60-backup-${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      alert("Backup exported. Save that file somewhere safe.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Backup export failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function importBackupFile(file: File) {
+    try {
+      setBackupBusy(true);
+
+      const text = await file.text();
+      const parsed = JSON.parse(text) as BackupEnvelope;
+
+      if (!parsed || parsed.app !== "rebuild60" || !parsed.tables) {
+        alert("That file doesn't look like a Rebuild @ 60 backup JSON.");
+        return;
+      }
+
+      const ok = confirm(
+        "IMPORT will OVERWRITE your local data on this device.\n\nIf you're not 100% sure, hit Cancel and export a backup first.\n\nContinue?"
+      );
+      if (!ok) return;
+
+      const dexieAny = localdb as any;
+      const tableList: any[] = dexieAny.tables ?? [];
+      const byName = new Map<string, any>();
+      for (const t of tableList) byName.set(t.name, t);
+
+      await localdb.transaction("rw", (localdb as any).tables, async () => {
+        for (const t of tableList) await t.clear();
+
+        for (const [tableName, rows] of Object.entries(parsed.tables)) {
+          const t = byName.get(tableName);
+          if (!t) continue;
+          if (!Array.isArray(rows) || rows.length === 0) continue;
+          await t.bulkPut(rows);
+        }
+      });
+
+      setLastByExerciseName({});
+      setDraftByExerciseId({});
+      setOpenSessionId(null);
+      setOpenTemplateId(null);
+
+      if (userId) {
+        await loadTodaySessions();
+        await loadTemplates();
+      }
+
+      alert("Restore complete. If you have pending offline items, keep the app online to sync.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Restore failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
+  }
+
+  // -----------------------------
+  // Quick Log save (offline-safe)
+  // -----------------------------
+  async function saveQuickLog() {
+    if (!userId) return;
+
+    await enqueue("upsert_daily", {
+      user_id: userId,
+      day_date: dayDate,
+      weight_lbs: weight ? Number(weight) : null,
+      waist_in: waist ? Number(waist) : null,
+      sleep_hours: sleepHours ? Number(sleepHours) : null,
+      notes: notes || null
+    });
+
+    await enqueue("upsert_nutrition", {
+      user_id: userId,
+      day_date: dayDate,
+      calories: calories ? Number(calories) : null,
+      protein_g: protein ? Number(protein) : null
+    });
+
+    if (z2Minutes) {
+      await enqueue("insert_zone2", {
+        user_id: userId,
+        day_date: dayDate,
+        modality: "Walk",
+        minutes: Number(z2Minutes)
+      });
+    }
+
+    alert("Saved instantly (local). Will sync when online.");
+  }
+
+  // -----------------------------
+  // Workout: local-first helpers
+  // -----------------------------
+  async function loadTodaySessions() {
+    if (!userId) return;
+    const rows = await localdb.localSessions
+      .where({ user_id: userId, day_date: dayDate })
+      .sortBy("started_at");
+    setSessions(rows.reverse());
+  }
+
+  async function openSession(sessionId: string) {
+    setOpenSessionId(sessionId);
+
+    const ex = await localdb.localExercises.where({ session_id: sessionId }).sortBy("sort_order");
+    setExercises(ex);
+
+    const allSets: LocalWorkoutSet[] = [];
+    for (const e of ex) {
+      const s = await localdb.localSets.where({ exercise_id: e.id }).sortBy("set_number");
+      allSets.push(...s);
+    }
+    setSets(allSets);
+
+    setDraftByExerciseId((prev) => {
       const next = { ...prev };
       for (const e of ex) {
         if (!next[e.id]) next[e.id] = { weight: "", reps: "", rpe: "", warmup: false };
       }
       return next;
     });
-
-    // Coach suggestions (based on local history)
-    setCoachBusy(true);
-    try {
-      const entries = await Promise.all(
-        ex.map(async (e) => {
-          const rec = await computeCoachForExerciseName(e.name, sessionId);
-          return [e.name, rec] as const;
-        })
-      );
-      setCoachByExerciseName((prev) => {
-        const next = { ...prev };
-        for (const [name, rec] of entries) next[name] = rec;
-        return next;
-      });
-    } finally {
-      setCoachBusy(false);
-    }
   }
 
   function setsForExercise(exerciseId: string) {
@@ -790,194 +916,6 @@ export default function App() {
     if (cloud) {
       setLastByExerciseName((prev) => ({ ...prev, [exName]: cloud }));
       return;
-    }
-  }
-
-  // -----------------------------
-  // Coach suggestions (Hybrid: conservative compounds, aggressive accessories)
-  // Works even if you don't store explicit rep targets; it uses e1RM + RPE trend.
-  // -----------------------------
-  function pct(a: number, b: number): number {
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return 0;
-    return ((a - b) / b) * 100;
-  }
-
-  function computeE1RM(weight: number, reps: number): number {
-    return oneRmEpley(weight, reps);
-  }
-
-  async function computeCoachForExerciseName(exName: string, excludeSessionId?: string | null): Promise<CoachRec | undefined> {
-    // Gather last 3 sessions (local) for this exercise name, using best work set e1RM per session.
-    const allExercises = await localdb.localExercises.toArray();
-    const matches = allExercises.filter((e) => e.name === exName && (!excludeSessionId || e.session_id !== excludeSessionId));
-
-    if (matches.length === 0) return undefined;
-
-    const sessionsMap = new Map<string, LocalWorkoutSession>();
-    const allSessions = await localdb.localSessions.toArray();
-    for (const s of allSessions) sessionsMap.set(s.id, s);
-
-    const perSession: {
-      session_id: string;
-      started_at: string;
-      top: { weight: number; reps: number; rpe: number | null; e1rm: number } | null;
-    }[] = [];
-
-    for (const ex of matches) {
-      const sess = sessionsMap.get(ex.session_id);
-      const started_at = sess?.started_at ?? new Date(0).toISOString();
-
-      const rows = await localdb.localSets.where({ exercise_id: ex.id }).toArray();
-      const work = rows.filter((s) => !s.is_warmup && s.weight_lbs != null && s.reps != null);
-
-      if (work.length === 0) {
-        perSession.push({ session_id: ex.session_id, started_at, top: null });
-        continue;
-      }
-
-      const top = work
-        .map((s) => {
-          const w = Number(s.weight_lbs);
-          const r = Number(s.reps);
-          const e1rm = computeE1RM(w, r);
-          return { weight: w, reps: r, rpe: s.rpe != null ? Number(s.rpe) : null, e1rm };
-        })
-        .sort((a, b) => b.e1rm - a.e1rm)[0];
-
-      perSession.push({ session_id: ex.session_id, started_at, top });
-    }
-
-    // Deduplicate by session (if exercise name appears twice in same session, keep best top)
-    const bestBySession = new Map<string, { started_at: string; top: { weight: number; reps: number; rpe: number | null; e1rm: number } | null }>();
-    for (const row of perSession) {
-      const prev = bestBySession.get(row.session_id);
-      if (!prev) {
-        bestBySession.set(row.session_id, { started_at: row.started_at, top: row.top });
-      } else {
-        const prevTop = prev.top;
-        const curTop = row.top;
-        if (!prevTop && curTop) bestBySession.set(row.session_id, { started_at: row.started_at, top: curTop });
-        else if (prevTop && curTop && curTop.e1rm > prevTop.e1rm) bestBySession.set(row.session_id, { started_at: row.started_at, top: curTop });
-      }
-    }
-
-    const hist = Array.from(bestBySession.values())
-      .filter((x) => x.top != null)
-      .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-      .slice(0, 3);
-
-    if (hist.length === 0) return undefined;
-
-    const last = hist[0]!.top!;
-    const prev = hist.length >= 2 ? hist[1]!.top! : null;
-    const prev2 = hist.length >= 3 ? hist[2]!.top! : null;
-
-    const delta = prev ? pct(last.e1rm, prev.e1rm) : null;
-    const compound = isCompoundExercise(exName);
-
-    const lastRpe = last.rpe;
-    const strong = lastRpe == null ? true : lastRpe <= 8;
-    const grindy = lastRpe != null && lastRpe >= 9;
-
-    if (compound) {
-      const down3 =
-        prev && prev2 &&
-        last.e1rm < prev.e1rm * 0.995 &&
-        prev.e1rm < prev2.e1rm * 0.995;
-
-      if (down3) {
-        return {
-          label: "DELOAD",
-          headline: "Deload suggestion: -5% next time",
-          detail: "Your best work-set e1RM is down three sessions in a row. Back off slightly, keep the bar speed snappy, then rebuild.",
-          deltaPct: delta,
-          lastTop: last,
-          prevTop: prev
-        };
-      }
-
-      if (grindy) {
-        return {
-          label: "HOLD",
-          headline: "Hold load next time",
-          detail: "Last top set looked grindy (RPE 9+). Keep weight the same and earn cleaner reps before adding load.",
-          deltaPct: delta,
-          lastTop: last,
-          prevTop: prev
-        };
-      }
-
-      if (prev && last.e1rm >= prev.e1rm * 1.005 && strong) {
-        return {
-          label: "ADD_WEIGHT",
-          headline: "Add +5 lbs next time",
-          detail: "e1RM is up and RPE is under control. Conservative compound progression: +5 and repeat.",
-          deltaPct: delta,
-          lastTop: last,
-          prevTop: prev
-        };
-      }
-
-      return {
-        label: "HOLD",
-        headline: "Hold load next time",
-        detail: "Keep the same weight and focus on smoother reps / better speed. Add load when it’s clearly earned.",
-        deltaPct: delta,
-        lastTop: last,
-        prevTop: prev
-      };
-    }
-
-    // Accessories: reps-first, then load
-    if (grindy) {
-      return {
-        label: "HOLD",
-        headline: "Hold and clean it up",
-        detail: "Accessory was grindy (RPE 9+). Keep load and aim for better reps before progressing.",
-        deltaPct: delta,
-        lastTop: last,
-        prevTop: prev
-      };
-    }
-
-    if (last.reps >= 12) {
-      return {
-        label: "ADD_WEIGHT",
-        headline: "Small load bump next time (+2.5–5 lbs)",
-        detail: "You’re at the top end of the usual accessory rep range. Nudge weight up a hair and keep reps honest.",
-        deltaPct: delta,
-        lastTop: last,
-        prevTop: prev
-      };
-    }
-
-    return {
-      label: "ADD_REPS",
-      headline: "Add +1–2 reps next time",
-      detail: "Aggressive accessory progression: add reps until you’re living in the 10–15 zone, then add weight.",
-      deltaPct: delta,
-      lastTop: last,
-      prevTop: prev
-    };
-  }
-
-  async function refreshCoachForVisibleExercises() {
-    if (!openSessionId) return;
-    setCoachBusy(true);
-    try {
-      const entries = await Promise.all(
-        exercises.map(async (ex) => {
-          const rec = await computeCoachForExerciseName(ex.name, openSessionId);
-          return [ex.name, rec] as const;
-        })
-      );
-      setCoachByExerciseName((prev) => {
-        const next = { ...prev };
-        for (const [name, rec] of entries) next[name] = rec;
-        return next;
-      });
-    } finally {
-      setCoachBusy(false);
     }
   }
 
@@ -1512,9 +1450,6 @@ export default function App() {
                     const compound = isCompoundExercise(ex.name);
                     const defaultLabel = compound ? "Default: 1st work" : "Default: top set";
 
-                    const coach = coachByExerciseName[ex.name];
-                    const coachBadge = coach?.label === "ADD_WEIGHT" ? "➕" : coach?.label === "ADD_REPS" ? "🧱" : coach?.label === "DELOAD" ? "🧯" : "🧊";
-
                     return (
                       <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -1553,50 +1488,6 @@ export default function App() {
                               <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ marginLeft: 8 }}>
                                 check
                               </button>
-                            </div>
-                          )}
-                        </div>
-
-
-                        <div style={{ marginTop: 10, border: "1px solid #eee", borderRadius: 10, padding: 10 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-                            <div style={{ fontWeight: 800 }}>Coach {coachBadge}</div>
-                            <button onClick={refreshCoachForVisibleExercises} disabled={coachBusy} style={{ fontSize: 12 }}>
-                              {coachBusy ? "Refreshing…" : "Refresh Coach"}
-                            </button>
-                          </div>
-
-                          {coach ? (
-                            <>
-                              <div style={{ marginTop: 6, fontWeight: 800 }}>{coach.headline}</div>
-                              <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4, lineHeight: 1.35 }}>{coach.detail}</div>
-
-                              {(coach.lastTop || coach.prevTop) && (
-                                <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8, lineHeight: 1.35 }}>
-                                  {coach.lastTop ? (
-                                    <div>
-                                      <b>Last top:</b> {coach.lastTop.weight} x {coach.lastTop.reps}
-                                      {coach.lastTop.rpe != null ? ` @${coach.lastTop.rpe}` : ""}{" "}
-                                      <span style={{ opacity: 0.8 }}>(~e1RM {coach.lastTop.e1rm})</span>
-                                    </div>
-                                  ) : null}
-                                  {coach.prevTop ? (
-                                    <div>
-                                      <b>Prev top:</b> {coach.prevTop.weight} x {coach.prevTop.reps}{" "}
-                                      <span style={{ opacity: 0.8 }}>(~e1RM {coach.prevTop.e1rm})</span>
-                                    </div>
-                                  ) : null}
-                                  {coach.deltaPct != null && Number.isFinite(coach.deltaPct) ? (
-                                    <div>
-                                      <b>Trend:</b> {coach.deltaPct.toFixed(1)}%
-                                    </div>
-                                  ) : null}
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-                              No history yet for this exercise name. Once you repeat it across sessions, you’ll get a real recommendation.
                             </div>
                           )}
                         </div>
@@ -1689,6 +1580,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 
