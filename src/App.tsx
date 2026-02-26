@@ -1,8 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, u
+
+                        {coachEnabled ? (
+                          <CoachPanel
+                            userId={userId}
+                            dayDate={selectedDayDate}
+                            exerciseName={ex.name}
+                            isCompound={compound}
+                          />
+                        ) : null}
+seRef, useState } from "react";
 import { supabase } from "./supabase";
 import { enqueue, startAutoSync } from "./sync";
 import {
-import { CoachPanel } from "./CoachPanel";
   localdb,
   type LocalWorkoutExercise,
   type LocalWorkoutSession,
@@ -10,6 +19,8 @@ import { CoachPanel } from "./CoachPanel";
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
+import { CoachPanel } from "./CoachPanel";
+
 
 function todayISO(): string {
   const d = new Date();
@@ -211,7 +222,7 @@ export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
 
   // Date
-  const dayDate = useMemo(() => todayISO(), []);
+  const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
 
   // Quick Log
   const [weight, setWeight] = useState("");
@@ -235,17 +246,14 @@ export default function App() {
   // Workout UI
   const [newExerciseName, setNewExerciseName] = useState("");
   const [advanced, setAdvanced] = useState(false);
-
-  // Coach suggestions toggle (persisted)
   const [coachEnabled, setCoachEnabled] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem("rebuild60:coachEnabled");
-      return v == null ? true : v === "1";
+      return v ? v === "1" : true;
     } catch {
       return true;
     }
-  });
-
+  
   useEffect(() => {
     try {
       localStorage.setItem("rebuild60:coachEnabled", coachEnabled ? "1" : "0");
@@ -253,6 +261,8 @@ export default function App() {
       // ignore
     }
   }, [coachEnabled]);
+
+});
 
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
@@ -275,6 +285,23 @@ export default function App() {
 
   // Dashboard computed series
   const [dashBusy, setDashBusy] = useState(false);
+  type WeeklyCoach = {
+    thisWeekStart: string;
+    thisWeekEnd: string;
+    sessionsThis: number;
+    sessionsPrev: number;
+    tonnageThis: number;
+    tonnagePrev: number;
+    setsThis: number;
+    setsPrev: number;
+    benchBest?: number;
+    squatBest?: number;
+    dlBest?: number;
+    coachLine: string;
+  };
+
+  const [weeklyCoach, setWeeklyCoach] = useState<WeeklyCoach | null>(null);
+
   const [tonnageSeries, setTonnageSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [setsSeries, setSetsSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [benchSeries, setBenchSeries] = useState<{ xLabel: string; y: number }[]>([]);
@@ -413,7 +440,7 @@ export default function App() {
       setOpenTemplateId(null);
 
       if (userId) {
-        await loadTodaySessions();
+        await loadSessionsForDay(selectedDayDate);
         await loadTemplates();
       }
 
@@ -435,7 +462,7 @@ export default function App() {
 
     await enqueue("upsert_daily", {
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       weight_lbs: weight ? Number(weight) : null,
       waist_in: waist ? Number(waist) : null,
       sleep_hours: sleepHours ? Number(sleepHours) : null,
@@ -444,7 +471,7 @@ export default function App() {
 
     await enqueue("upsert_nutrition", {
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       calories: calories ? Number(calories) : null,
       protein_g: protein ? Number(protein) : null
     });
@@ -452,7 +479,7 @@ export default function App() {
     if (z2Minutes) {
       await enqueue("insert_zone2", {
         user_id: userId,
-        day_date: dayDate,
+        day_date: selectedDayDate,
         modality: "Walk",
         minutes: Number(z2Minutes)
       });
@@ -464,10 +491,10 @@ export default function App() {
   // -----------------------------
   // Workout: local-first helpers
   // -----------------------------
-  async function loadTodaySessions() {
+  async function loadSessionsForDay(day: string) {
     if (!userId) return;
     const rows = await localdb.localSessions
-      .where({ user_id: userId, day_date: dayDate })
+      .where({ user_id: userId, day_date: day })
       .sortBy("started_at");
     setSessions(rows.reverse());
   }
@@ -509,7 +536,7 @@ export default function App() {
     const local: LocalWorkoutSession = {
       id,
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       started_at,
       title: "Week 1 Day 1",
       notes: null
@@ -520,13 +547,13 @@ export default function App() {
     await enqueue("create_workout", {
       id,
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       started_at,
       title: local.title,
       notes: null
     });
 
-    await loadTodaySessions();
+    await loadSessionsForDay(selectedDayDate);
     await openSession(id);
     setTab("workout");
   }
@@ -679,7 +706,7 @@ export default function App() {
         return {};
       });
 
-      await loadTodaySessions();
+      await loadSessionsForDay(selectedDayDate);
       alert("Session deleted (local). Will sync delete when online.");
     } catch (e: any) {
       console.error(e);
@@ -791,7 +818,7 @@ export default function App() {
     const localSession: LocalWorkoutSession = {
       id: sessionId,
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       started_at,
       title: t.name,
       notes: null
@@ -802,7 +829,7 @@ export default function App() {
     await enqueue("create_workout", {
       id: sessionId,
       user_id: userId,
-      day_date: dayDate,
+      day_date: selectedDayDate,
       started_at,
       title: t.name,
       notes: null
@@ -834,7 +861,7 @@ export default function App() {
       }));
     }
 
-    await loadTodaySessions();
+    await loadSessionsForDay(selectedDayDate);
     await openSession(sessionId);
     setTab("workout");
     alert("Session created from template (instant).");
@@ -1079,6 +1106,92 @@ export default function App() {
         days.push(`${yyyy}-${mm}-${dd}`);
       }
 
+      // Weekly coach summary: compare last 7 days vs prior 7 days
+      const fmt = (d: Date) => {
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        return `${yyyy}-${mm}-${dd}`;
+      };
+
+      const endDay = new Date(end);
+      const startThis = new Date(endDay);
+      startThis.setDate(endDay.getDate() - 6);
+      const startPrev = new Date(endDay);
+      startPrev.setDate(endDay.getDate() - 13);
+      const endPrev = new Date(endDay);
+      endPrev.setDate(endDay.getDate() - 7);
+
+      const thisDays: string[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(endDay);
+        d.setDate(endDay.getDate() - i);
+        thisDays.push(fmt(d));
+      }
+      const prevDays: string[] = [];
+      for (let i = 13; i >= 7; i--) {
+        const d = new Date(endDay);
+        d.setDate(endDay.getDate() - i);
+        prevDays.push(fmt(d));
+      }
+
+      const sumMap = (map: Map<string, number>, ds: string[]) => ds.reduce((acc, k) => acc + (map.get(k) ?? 0), 0);
+      const countSessions = (ds: string[]) =>
+        allSessions.filter((s) => ds.includes(s.day_date || isoToDay(s.started_at)) && (s as any).exclude_from_analytics !== true).length;
+
+      const tonThis = Math.round(sumMap(tonnageByDay, thisDays));
+      const tonPrev = Math.round(sumMap(tonnageByDay, prevDays));
+      const setsThis = Math.round(sumMap(setsByDay, thisDays));
+      const setsPrev = Math.round(sumMap(setsByDay, prevDays));
+
+      const sessionsThis = countSessions(thisDays);
+      const sessionsPrev = countSessions(prevDays);
+
+      const bestInRange = (map: Map<string, number>, ds: string[]) => {
+        let best: number | undefined;
+        for (const d of ds) {
+          const v = map.get(d);
+          if (v == null) continue;
+          if (best == null || v > best) best = v;
+        }
+        return best;
+      };
+
+      const benchBest = bestInRange(bestBenchE1RM, thisDays);
+      const squatBest = bestInRange(bestSquatE1RM, thisDays);
+      const dlBest = bestInRange(bestDlE1RM, thisDays);
+
+      const pct = (a: number, b: number) => {
+        if (b === 0) return a === 0 ? 0 : 100;
+        return ((a - b) / b) * 100;
+      };
+
+      const tonPct = pct(tonThis, tonPrev);
+      const setsPct = pct(setsThis, setsPrev);
+
+      let coachLine = "Keep the wheels turning.";
+      if (sessionsThis === 0) coachLine = "No sessions logged in the last 7 days — get one on the board.";
+      else if (tonThis > tonPrev && tonPct >= 10) coachLine = "Volume is up — nice. Keep intensity honest and recover hard.";
+      else if (tonThis < tonPrev && tonPct <= -10) coachLine = "Volume dipped — fine if planned. If not, tighten the routine this week.";
+      else if (setsThis > setsPrev && setsPct >= 10) coachLine = "More work sets this week — solid. Watch joints and sleep.";
+      else if (setsThis < setsPrev && setsPct <= -10) coachLine = "Fewer sets this week — could be recovery or could be drift. Choose deliberately.";
+
+      setWeeklyCoach({
+        thisWeekStart: fmt(startThis),
+        thisWeekEnd: fmt(endDay),
+        sessionsThis,
+        sessionsPrev,
+        tonnageThis: tonThis,
+        tonnagePrev: tonPrev,
+        setsThis,
+        setsPrev,
+        benchBest,
+        squatBest,
+        dlBest,
+        coachLine
+      });
+
+
       const tonSeries = days.map((d) => ({ xLabel: d.slice(5), y: Math.round(tonnageByDay.get(d) ?? 0) }));
       const setSeries = days.map((d) => ({ xLabel: d.slice(5), y: setsByDay.get(d) ?? 0 }));
 
@@ -1110,9 +1223,13 @@ export default function App() {
   // -----------------------------
   useEffect(() => {
     if (!userId) return;
-    loadTodaySessions();
+    // Reload sessions whenever the selected log date changes
+    setOpenSessionId(null);
+    setExercises([]);
+    setSets([]);
+    loadSessionsForDay(selectedDayDate);
     loadTemplates();
-  }, [userId]);
+  }, [userId, selectedDayDate]);
 
   useEffect(() => {
     if (!openSessionId) return;
@@ -1175,9 +1292,30 @@ export default function App() {
         <button onClick={signOut}>Sign Out</button>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-        <div>
-          <b>Today:</b> {dayDate} (Week 1 Day 1)
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <b>Log date:</b>
+          </div>
+          <input
+            type="date"
+            value={selectedDayDate}
+            onChange={(e) => setSelectedDayDate(e.target.value)}
+            style={{ padding: "6px 8px" }}
+          />
+          <button onClick={() => setSelectedDayDate(todayISO())}>Today</button>
+          <button
+            onClick={() => {
+              const d = new Date();
+              d.setDate(d.getDate() - 1);
+              const yyyy = d.getFullYear();
+              const mm = String(d.getMonth() + 1).padStart(2, "0");
+              const dd = String(d.getDate()).padStart(2, "0");
+              setSelectedDayDate(`${yyyy}-${mm}-${dd}`);
+            }}
+          >
+            Yesterday
+          </button>
         </div>
         <div>
           <b>Status:</b> {navigator.onLine ? status : "Offline (logging still works)"}
@@ -1191,7 +1329,7 @@ export default function App() {
         <button
           onClick={() => {
             setTab("workout");
-            loadTodaySessions();
+            loadSessionsForDay(selectedDayDate);
             loadTemplates();
           }}
           disabled={tab === "workout"}
@@ -1223,7 +1361,56 @@ export default function App() {
             Delete your test sessions and refresh to clean the charts.
           </div>
 
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          
+          {weeklyCoach && (
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 800 }}>Weekly Coach Summary</div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  {weeklyCoach.thisWeekStart} → {weeklyCoach.thisWeekEnd}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginTop: 10 }}>
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Sessions</div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.sessionsThis}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.sessionsPrev}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Tonnage</div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.tonnageThis.toLocaleString()}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.tonnagePrev.toLocaleString()}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Work Sets</div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.setsThis.toLocaleString()}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.setsPrev.toLocaleString()}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Best e1RM (7d)</div>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+                    Bench: {weeklyCoach.benchBest ? Math.round(weeklyCoach.benchBest) : "—"}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>
+                    Squat: {weeklyCoach.squatBest ? Math.round(weeklyCoach.squatBest) : "—"}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>
+                    DL: {weeklyCoach.dlBest ? Math.round(weeklyCoach.dlBest) : "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                <b>Coach says:</b> {weeklyCoach.coachLine}
+              </div>
+            </div>
+          )}
+
+<div style={{ display: "grid", gap: 12, marginTop: 12 }}>
             <LineChart title="Training Volume (Tonnage) — last 28 days" points={tonnageSeries} />
             <LineChart title="Total Sets — last 28 days" points={setsSeries} />
           </div>
@@ -1454,14 +1641,6 @@ export default function App() {
                   <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
                   Advanced (RPE + Warmup)
                 </label>
-
-<label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-  <input type="checkbox" checked={coachEnabled} onChange={(e) => setCoachEnabled(e.target.checked)} />
-  Coach suggestions
-</label>
-<div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-  Hybrid mode: compounds are conservative; accessories progress faster. Suggestions never auto-edit your logs.
-</div>
               </div>
 
               {exercises.length === 0 ? (
@@ -1519,20 +1698,7 @@ export default function App() {
                           )}
                         </div>
 
-                        
-{coachEnabled && (
-  <div style={{ marginTop: 10 }}>
-    <CoachPanel
-      userId={userId}
-      dayDate={dayDate}
-      exercise={ex}
-      sets={exSets}
-      advanced={advanced}
-      bandDefaults={BAND_DEFAULT_EST}
-    />
-  </div>
-)}
-<div
+                        <div
                           style={{
                             display: "grid",
                             gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
@@ -1620,7 +1786,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 
