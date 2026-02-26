@@ -1,283 +1,166 @@
-import React from "react";
-import { localdb, type LocalWorkoutExercise, type LocalWorkoutSet, type LoadType } from "./localdb";
+import React, { useEffect, useMemo, useState } from "react";
+import { localdb, type LocalWorkoutSet } from "./localdb";
 
 type Props = {
   userId: string;
   dayDate: string;
-  exercise: LocalWorkoutExercise;
-  sets: LocalWorkoutSet[];
-  advanced: boolean;
-  bandDefaults: Record<number, number>;
-};
-
-type BestSet = {
-  load_type: LoadType;
-  weight_lbs: number | null;
-  band_level: number | null;
-  band_est_lbs: number | null;
-  reps: number;
-  rpe: number | null;
+  exerciseName: string;
+  isCompound: boolean;
 };
 
 type HistoryPoint = {
   day_date: string;
   started_at: string;
-  bestSet: BestSet;
+  bestSet: LocalWorkoutSet;
   e1rm: number;
 };
 
-function epleyE1RM(load: number, reps: number) {
-  return load * (1 + reps / 30);
+function epleyE1RM(weight: number, reps: number) {
+  return weight * (1 + reps / 30);
 }
 
-function effectiveLoadLbs(s: BestSet): number | null {
-  if (s.load_type === "weight") return s.weight_lbs ?? null;
-  if (s.load_type === "band") return s.band_est_lbs ?? null;
-  return null; // bodyweight: unknown
-}
-
-function pickBestWorkSet(sets: LocalWorkoutSet[], bandDefaults: Record<number, number>): BestSet | null {
-  const work = sets
-    .filter((s) => !s.is_warmup)
-    .filter((s) => (s.reps ?? 0) > 0);
-
+function pickBestWorkSet(sets: LocalWorkoutSet[]): { best: LocalWorkoutSet; e1rm: number } | null {
+  const work = sets.filter((s) => !s.is_warmup && s.weight_lbs != null && s.reps != null);
   if (work.length === 0) return null;
 
-  let best: BestSet | null = null;
-
-  for (const s of work) {
-    const load_type: LoadType = (s.load_type as LoadType) ?? "weight";
-    const reps = Number(s.reps ?? 0);
-    if (!reps) continue;
-
-    const band_level = s.band_level ?? null;
-    const band_est_lbs =
-      load_type === "band" ? (s.band_est_lbs ?? (band_level ? bandDefaults[band_level] ?? null : null)) : null;
-
-    const cand: BestSet = {
-      load_type,
-      weight_lbs: load_type === "weight" ? (s.weight_lbs ?? null) : null,
-      band_level,
-      band_est_lbs,
-      reps,
-      rpe: s.rpe ?? null
-    };
-
-    const load = effectiveLoadLbs(cand) ?? -1;
-    const score = load * 1000 + reps; // prefer load, then reps
-
-    if (!best) {
-      best = cand;
-    } else {
-      const bestLoad = effectiveLoadLbs(best) ?? -1;
-      const bestScore = bestLoad * 1000 + best.reps;
-      if (score > bestScore) best = cand;
+  let best = work[0];
+  let bestE = epleyE1RM(Number(best.weight_lbs), Number(best.reps));
+  for (const s of work.slice(1)) {
+    const e = epleyE1RM(Number(s.weight_lbs), Number(s.reps));
+    if (e > bestE) {
+      best = s;
+      bestE = e;
     }
   }
-
-  return best;
+  return { best, e1rm: bestE };
 }
 
-function isLikelyCompound(ex: LocalWorkoutExercise): boolean {
-  if (ex.is_compound === true) return true;
-  const n = ex.name.toLowerCase();
-  const keys = ["squat", "bench", "deadlift", "press", "row", "chin", "pull", "dip", "rdl", "lunge"];
-  return keys.some((k) => n.includes(k));
-}
-
-async function loadHistory(
-  userId: string,
-  exerciseName: string,
-  limit: number,
-  bandDefaults: Record<number, number>
-): Promise<HistoryPoint[]> {
-  const sessions = await localdb.localSessions.where({ user_id: userId }).toArray();
-  sessions.sort((a, b) =>
-    a.day_date < b.day_date ? 1 : a.day_date > b.day_date ? -1 : b.started_at.localeCompare(a.started_at)
-  );
-
-  const points: HistoryPoint[] = [];
-
-  for (const sess of sessions) {
-    if (sess.exclude_from_analytics) continue;
-
-    const exs = await localdb.localExercises.where({ session_id: sess.id }).toArray();
-    const match = exs.find((e) => e.name === exerciseName);
-    if (!match) continue;
-
-    const sets = await localdb.localSets.where({ exercise_id: match.id }).toArray();
-    const best = pickBestWorkSet(sets, bandDefaults);
-    if (!best) continue;
-
-    const load = effectiveLoadLbs(best);
-    if (load == null) continue;
-
-    points.push({
-      day_date: sess.day_date,
-      started_at: sess.started_at,
-      bestSet: best,
-      e1rm: epleyE1RM(load, best.reps)
-    });
-
-    if (points.length >= limit) break;
-  }
-
-  return points;
-}
-
-function formatBestSet(s: BestSet) {
-  if (s.load_type === "band") {
-    const lvl = s.band_level ?? "?";
-    const est = s.band_est_lbs != null ? ` (~${Math.round(s.band_est_lbs)}lb)` : "";
-    return `Band ${lvl}${est} x ${s.reps}`;
-  }
-  if (s.load_type === "bodyweight") return `BW x ${s.reps}`;
-  const w = s.weight_lbs ?? 0;
-  return `${w} x ${s.reps}`;
+function fmtSet(s: LocalWorkoutSet) {
+  const w = s.weight_lbs ?? "";
+  const r = s.reps ?? "";
+  const rpe = s.rpe != null ? ` @${s.rpe}` : "";
+  const wu = s.is_warmup ? " (WU)" : "";
+  return `${w} x ${r}${rpe}${wu}`;
 }
 
 function pct(a: number, b: number) {
-  if (!b) return 0;
+  if (!isFinite(a) || !isFinite(b) || b === 0) return 0;
   return ((a - b) / b) * 100;
 }
 
-function coachSuggestion(kind: "compound" | "accessory", hist: HistoryPoint[]) {
-  if (hist.length === 0) {
-    return { headline: "No history yet", detail: "Log a couple sessions and I’ll start making suggestions." };
+function suggestionFor(isCompound: boolean, recent: HistoryPoint[]) {
+  const newest = recent[0];
+  const prev = recent[1];
+
+  if (!newest || !prev) {
+    return { headline: "Coach", detail: "Log a couple sessions for this exercise to unlock suggestions." };
   }
 
-  const last = hist[0];
-  const prev = hist[1] ?? null;
-  const lastRpe = last.bestSet.rpe;
+  const trend = pct(newest.e1rm, prev.e1rm);
+  const rpe = newest.bestSet.rpe;
 
-  // Deload: 3-session downtrend (>1% each)
-  if (kind === "compound" && hist.length >= 3) {
-    const a = hist[0].e1rm;
-    const b = hist[1].e1rm;
-    const c = hist[2].e1rm;
-    if (a && b && c && a < b * 0.99 && b < c * 0.99) {
-      return {
-        headline: "Consider a small deload (-5%)",
-        detail: "e1RM has dropped 3 sessions in a row. That’s usually fatigue, not weakness."
-      };
+  if (isCompound) {
+    const rpeOk = rpe == null ? trend > 0.5 : rpe <= 8;
+    if (trend >= 1 && rpeOk) return { headline: "Suggestion: +5 lbs next time", detail: `e1RM up ${trend.toFixed(1)}% vs last time.` };
+    if (trend <= -1.5) {
+      if (recent.length >= 3) {
+        const older = recent[2];
+        const t1 = pct(newest.e1rm, prev.e1rm);
+        const t2 = pct(prev.e1rm, older.e1rm);
+        if (t1 < 0 && t2 < 0) return { headline: "Suggestion: consider a small deload (-5%)", detail: "Two consecutive drops. If you also feel beat up, back off and rebuild momentum." };
+      }
+      return { headline: "Suggestion: hold weight", detail: "Performance dipped. Keep it tight and earn the next jump." };
     }
+    return { headline: "Suggestion: hold weight", detail: `Trend ${trend.toFixed(1)}%. Push when it’s obvious.` };
   }
 
-  if (!prev) {
-    return kind === "accessory"
-      ? { headline: "Add reps next time", detail: "Accessories respond best to reps-first progression." }
-      : { headline: "Hold steady", detail: "Get one more session logged for this lift and I’ll start trend-based calls." };
-  }
-
-  const change = pct(last.e1rm, prev.e1rm);
-
-  if (kind === "compound") {
-    if (lastRpe != null && lastRpe >= 9) {
-      return {
-        headline: "Hold weight next time",
-        detail: `Last top work set was heavy (@${lastRpe}). Earn the reps before adding load.`
-      };
-    }
-    if (change >= 1.0 && (lastRpe == null || lastRpe <= 8)) {
-      return { headline: "Add +5 lbs next time", detail: `Trend up (+${change.toFixed(1)}%). Conservative bump.` };
-    }
-    if (change <= -1.0) {
-      return { headline: "Hold (or micro-load)", detail: `Trend down (${change.toFixed(1)}%). Sleep/food/fatigue check.` };
-    }
-    return { headline: "Hold weight", detail: `Trend flat (${change.toFixed(1)}%). Repeat and tighten execution.` };
-  }
-
-  // accessory (aggressive)
-  const reps = last.bestSet.reps;
-
-  if (lastRpe != null && lastRpe >= 9) {
-    return { headline: "Hold — clean reps", detail: `Near limit (@${lastRpe}). Keep load and make reps cleaner.` };
-  }
-  if (reps < 10) return { headline: "Add +1–2 reps next time", detail: "Reps-first, then load." };
-  if (reps < 15) return { headline: "Add reps or small load", detail: "If you’re at 12–15 clean, bump load slightly." };
-  return { headline: "Increase load slightly (+2.5–5 lbs)", detail: "You’re living in high reps—time to nudge load up." };
+  const reps = newest.bestSet.reps ?? 0;
+  if (reps >= 12) return { headline: "Suggestion: small load bump (+2.5–5 lbs)", detail: "You’re living in the high reps—nudge load up." };
+  return { headline: "Suggestion: add 1–2 reps next time", detail: "Chase reps first on accessories, then increase load." };
 }
 
-class CoachPanelBoundary extends React.Component<Props, { hasError: boolean }> {
-  state = { hasError: false };
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(err: any) {
-    // eslint-disable-next-line no-console
-    console.error("CoachPanel crashed:", err);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ border: "1px solid #f2c2c2", borderRadius: 10, padding: 10, background: "#fff5f5" }}>
-          <b>Coach</b>
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
-            Coach panel hit an error (logging still works). Toggle Coach off and send me what you were doing.
-          </div>
-        </div>
-      );
-    }
-    return <CoachPanelInner {...this.props} />;
-  }
-}
+function PanelInner({ userId, dayDate, exerciseName, isCompound }: Props) {
+  const [recent, setRecent] = useState<HistoryPoint[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
-function CoachPanelInner({ userId, exercise, bandDefaults }: Props) {
-  const [busy, setBusy] = React.useState(false);
-  const [hist, setHist] = React.useState<HistoryPoint[] | null>(null);
-
-  const kind: "compound" | "accessory" = isLikelyCompound(exercise) ? "compound" : "accessory";
-
-  React.useEffect(() => {
+  useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        setBusy(true);
-        const h = await loadHistory(userId, exercise.name, 6, bandDefaults);
-        if (!alive) return;
-        setHist(h);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("Coach history load failed:", e);
-        if (alive) setHist([]);
-      } finally {
-        if (alive) setBusy(false);
+        setErr(null);
+
+        const sessions = await localdb.localSessions.where({ user_id: userId }).toArray();
+        sessions.sort((a, b) =>
+          a.day_date < b.day_date ? 1 : a.day_date > b.day_date ? -1 : b.started_at.localeCompare(a.started_at)
+        );
+
+        const points: HistoryPoint[] = [];
+        for (const sess of sessions) {
+          const exs = await localdb.localExercises.where({ session_id: sess.id }).toArray();
+          const match = exs.find((e) => e.name === exerciseName);
+          if (!match) continue;
+
+          const sets = await localdb.localSets.where({ exercise_id: match.id }).toArray();
+          const best = pickBestWorkSet(sets);
+          if (!best) continue;
+
+          points.push({ day_date: sess.day_date, started_at: sess.started_at, bestSet: best.best, e1rm: best.e1rm });
+          if (points.length >= 3) break;
+        }
+
+        if (alive) setRecent(points.length ? points : []);
+      } catch (e: any) {
+        if (alive) setErr(e?.message ? String(e.message) : String(e));
       }
     })();
+
     return () => {
       alive = false;
     };
-  }, [userId, exercise.name, bandDefaults]);
+  }, [userId, dayDate, exerciseName]);
 
-  const suggestion = coachSuggestion(kind, hist ?? []);
-  const last = hist && hist[0] ? hist[0] : null;
-  const prev = hist && hist[1] ? hist[1] : null;
-  const change = last && prev ? pct(last.e1rm, prev.e1rm) : null;
+  const suggestion = useMemo(() => suggestionFor(isCompound, recent ?? []), [isCompound, recent]);
+
+  if (err) {
+    return (
+      <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid #f3c2c2", background: "#fff5f5" }}>
+        <div style={{ fontWeight: 800 }}>Coach panel error</div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>{err}</div>
+      </div>
+    );
+  }
+
+  if (!recent) {
+    return (
+      <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid #eee", background: "#fafafa", fontSize: 12, opacity: 0.8 }}>
+        Coach: loading…
+      </div>
+    );
+  }
+
+  const newest = recent[0];
+  const prev = recent[1];
 
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+    <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid #eee", background: "#fafafa" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
         <div style={{ fontWeight: 800 }}>Coach</div>
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-          {busy ? "Thinking…" : kind === "compound" ? "Compound (conservative)" : "Accessory (aggressive)"}
-        </div>
+        <div style={{ fontSize: 12, opacity: 0.75 }}>{isCompound ? "Compound (conservative)" : "Accessory (aggressive)"}</div>
       </div>
 
-      {last ? (
-        <div style={{ fontSize: 12, opacity: 0.9, marginTop: 6 }}>
-          <b>Last:</b> {formatBestSet(last.bestSet)} • <b>e1RM</b> {Math.round(last.e1rm)}
-          {change != null ? (
-            <>
-              {" "}
-              • <b>Trend</b> {change >= 0 ? "+" : ""}
-              {change.toFixed(1)}%
-            </>
+      {newest ? (
+        <div style={{ fontSize: 12, opacity: 0.9, marginTop: 6, lineHeight: 1.4 }}>
+          <div>
+            <b>Best recent:</b> {fmtSet(newest.bestSet)} · e1RM {Math.round(newest.e1rm)}
+          </div>
+          {prev ? (
+            <div style={{ opacity: 0.85 }}>
+              <b>Prev:</b> e1RM {Math.round(prev.e1rm)} ({pct(newest.e1rm, prev.e1rm).toFixed(1)}%)
+            </div>
           ) : null}
         </div>
       ) : (
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
-          No prior work sets found locally for this exercise yet.
-        </div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>No prior work sets found locally for this exercise yet.</div>
       )}
 
       <div style={{ marginTop: 8 }}>
@@ -289,5 +172,15 @@ function CoachPanelInner({ userId, exercise, bandDefaults }: Props) {
 }
 
 export function CoachPanel(props: Props) {
-  return <CoachPanelBoundary {...props} />;
+  try {
+    return <PanelInner {...props} />;
+  } catch (e: any) {
+    return (
+      <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid #f3c2c2", background: "#fff5f5" }}>
+        <div style={{ fontWeight: 800 }}>Coach panel error</div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>{e?.message ? String(e.message) : String(e)}</div>
+      </div>
+    );
+  }
 }
+
