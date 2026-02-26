@@ -181,3 +181,4 @@ export function startAutoSync(setStatus: (s: string) => void) {
     window.clearInterval(h);
   };
 }
+
