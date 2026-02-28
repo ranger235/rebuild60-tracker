@@ -314,6 +314,15 @@ export default function App() {
     return stop;
   }, [userId]);
 
+
+useEffect(() => {
+  if (!userId) return;
+  void (async () => {
+    const d = await getAnalyticsStartDate(userId);
+    setAnalyticsStartDate(d);
+  })();
+}, [userId]);
+
   // Timer tick
   useEffect(() => {
     if (!timerOn) return;
@@ -1024,6 +1033,7 @@ export default function App() {
     try {
       // last 28 days of sessions for this user
       const allSessions = await localdb.localSessions.where({ user_id: userId }).toArray();
+      const startDay = analyticsStartDate; // YYYY-MM-DD or null
 
       // Map session_id -> day
       const sessionDay = new Map<string, string>();
@@ -1059,6 +1069,7 @@ export default function App() {
         if (!info) continue;
         const day = sessionDay.get(info.session_id);
         if (!day) continue;
+        if (startDay && day < startDay) continue;
 
         setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
 
@@ -1120,7 +1131,11 @@ export default function App() {
 
       const sumMap = (map: Map<string, number>, ds: string[]) => ds.reduce((acc, k) => acc + (map.get(k) ?? 0), 0);
       const countSessions = (ds: string[]) =>
-        allSessions.filter((s) => ds.includes(s.day_date || isoToDay(s.started_at)) && (s as any).exclude_from_analytics !== true).length;
+        allSessions.filter((s) => {
+          const day = s.day_date || isoToDay(s.started_at);
+          if (startDay && day < startDay) return false;
+          return ds.includes(day) && (s as any).exclude_from_analytics !== true;
+        }).length;
 
       const tonThis = Math.round(sumMap(tonnageByDay, thisDays));
       const tonPrev = Math.round(sumMap(tonnageByDay, prevDays));
@@ -1231,7 +1246,7 @@ export default function App() {
     if (tab !== "dash") return;
     void refreshDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, userId]);
+  }, [tab, userId, analyticsStartDate]);
 
   // -----------------------------
   // Render
@@ -1342,7 +1357,72 @@ export default function App() {
           <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
             Everything here is built from your <b>local</b> workout data (sessions/exercises/sets), so it works offline.
             Delete your test sessions and refresh to clean the charts.
-          </div>
+          </div
+
+<div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+  <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics window</div>
+  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+    <label style={{ fontSize: 12, opacity: 0.8 }}>
+      Analytics start date{" "}
+      <input
+        type="date"
+        value={analyticsStartDate ?? ""}
+        onChange={async (e) => {
+          const v = e.target.value || null;
+          setAnalyticsStartDate(v);
+          if (userId) await setAnalyticsStartDateForUser(userId, v);
+          // refresh immediately if we're on dashboard
+          if (tab === "dash") void refreshDashboard();
+        }}
+        style={{ marginLeft: 8 }}
+      />
+    </label>
+
+    <button
+      onClick={async () => {
+        if (!userId) return;
+        const first = await getEarliestSessionDay(userId);
+        setAnalyticsStartDate(first);
+        await setAnalyticsStartDateForUser(userId, first);
+        if (tab === "dash") void refreshDashboard();
+      }}
+    >
+      Use first logged session
+    </button>
+
+    <button
+      onClick={async () => {
+        if (!userId) return;
+        const d = new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        const today = `${yyyy}-${mm}-${dd}`;
+        setAnalyticsStartDate(today);
+        await setAnalyticsStartDateForUser(userId, today);
+        if (tab === "dash") void refreshDashboard();
+      }}
+    >
+      Set to today
+    </button>
+
+    <button
+      onClick={async () => {
+        if (!userId) return;
+        setAnalyticsStartDate(null);
+        await setAnalyticsStartDateForUser(userId, null);
+        if (tab === "dash") void refreshDashboard();
+      }}
+      title="Show all history again"
+    >
+      Clear
+    </button>
+
+    <div style={{ fontSize: 12, opacity: 0.7 }}>
+      This only affects dashboard + coaching. No workouts are deleted.
+    </div>
+  </div>
+</div>>
 
           
           {weeklyCoach && (
@@ -1779,6 +1859,9 @@ export default function App() {
     </div>
   );
 }
+
+
+
 
 
 
