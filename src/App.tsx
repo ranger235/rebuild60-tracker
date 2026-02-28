@@ -675,6 +675,13 @@ useEffect(() => {
     const reps = d.reps ? Number(d.reps) : null;
     const w = d.weight ? Number(d.weight) : null;
 
+
+    const loadType = (d.loadType ?? \"weight\") as any;
+    const band_level = d.bandLevel ? Number(d.bandLevel) : null;
+    const band_mode = (d.bandMode ?? \"resist\") as any;
+    const band_config = (d.bandConfig ?? \"single\") as any;
+    const band_est_lbs = d.bandEst ? Number(d.bandEst) : null;
+
     if (!reps || reps <= 0) {
       alert("Reps required.");
       return;
@@ -2130,6 +2137,9 @@ useEffect(() => {
     </div>
   );
 }
+
+
+
 
 
 
