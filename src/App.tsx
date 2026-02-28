@@ -40,6 +40,8 @@ function isoToDay(iso: string): string {
   }
 }
 
+type LoadType = "weight" | "band" | "bodyweight";
+
 type SetLite = {
   weight_lbs: number | null;
   reps: number | null;
@@ -54,18 +56,40 @@ type LastSetSummary = {
 };
 
 type ExerciseDraft = {
+  loadType: LoadType;
   weight: string;
+  bandLevel: string;
+  bandMode: "assist" | "resist";
+  bandConfig: "single" | "doubled";
+  bandEst: string;
   reps: string;
   rpe: string;
   warmup: boolean;
 };
 
 function formatSet(s: SetLite) {
-  const w = s.weight_lbs ?? "—";
+  const lt: LoadType = (s.load_type as LoadType) ?? "weight";
   const r = s.reps ?? "—";
   const wu = s.is_warmup ? "WU" : "";
-  const rpe = s.rpe != null ? `@${s.rpe}` : "";
-  return `${w}x${r}${wu}${rpe}`;
+  const rpe = s.rpe != null ? `RPE ${s.rpe}` : "";
+
+  let load = "—";
+  if (lt === "bodyweight") {
+    load = "BW";
+  } else if (lt === "band") {
+    const lvl = s.band_level != null ? `B${s.band_level}` : "B—";
+    const mode = s.band_mode ? (s.band_mode === "assist" ? "A" : "R") : "";
+    const cfg = s.band_config ? (s.band_config === "doubled" ? "Dbl" : "Sgl") : "";
+    const est = s.band_est_lbs != null ? `(~${s.band_est_lbs}lb)` : "";
+    load = `${lvl}${mode ? mode : ""} ${cfg}`.trim() + (est ? ` ${est}` : "");
+  } else {
+    load = s.weight_lbs != null ? String(s.weight_lbs) : "—";
+  }
+
+  const parts = [`${load} x ${r}`];
+  if (wu) parts.push(wu);
+  if (rpe) parts.push(rpe);
+  return parts.join(" • ");
 }
 
 function isCompoundExercise(name: string): boolean {
@@ -590,7 +614,7 @@ useEffect(() => {
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [exerciseId]: { ...(prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }), ...patch }
+      [exerciseId]: { ...(prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }), ...patch }
     }));
   }
 
@@ -633,7 +657,9 @@ useEffect(() => {
   }
 
   async function addSet(exerciseId: string) {
-    const d = draftByExerciseId[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false };
+    const d =
+      draftByExerciseId[exerciseId] ??
+      ({ loadType: "weight", weight: "", bandLevel: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false } as ExerciseDraft);
 
     const reps = d.reps ? Number(d.reps) : null;
     const w = d.weight ? Number(d.weight) : null;
@@ -651,7 +677,12 @@ useEffect(() => {
       id,
       exercise_id: exerciseId,
       set_number: nextSetNumber,
+      load_type: loadType,
       weight_lbs: w,
+      band_level,
+      band_mode,
+      band_config,
+      band_est_lbs,
       reps,
       rpe: advanced && d.rpe ? Number(d.rpe) : null,
       is_warmup: advanced ? !!d.warmup : false
@@ -669,7 +700,7 @@ useEffect(() => {
       is_warmup: advanced ? !!d.warmup : false
     });
 
-    updateDraft(exerciseId, { weight: "", reps: "", rpe: "", warmup: false });
+    updateDraft(exerciseId, { loadType: d.loadType ?? "weight", weight: "", bandLevel: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false });
 
     setSecs(90);
     setTimerOn(true);
@@ -1803,24 +1834,128 @@ useEffect(() => {
                           )}
                         </div>
 
+                        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => updateDraft(ex.id, { loadType: "weight" })}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 8,
+                              border: "1px solid #ddd",
+                              background: (d.loadType ?? "weight") === "weight" ? "#111" : "#fff",
+                              color: (d.loadType ?? "weight") === "weight" ? "#fff" : "#111"
+                            }}
+                          >
+                            Weight
+                          </button>
+                          <button
+                            onClick={() => updateDraft(ex.id, { loadType: "band" })}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 8,
+                              border: "1px solid #ddd",
+                              background: (d.loadType ?? "weight") === "band" ? "#111" : "#fff",
+                              color: (d.loadType ?? "weight") === "band" ? "#fff" : "#111"
+                            }}
+                          >
+                            Band
+                          </button>
+                          <button
+                            onClick={() => updateDraft(ex.id, { loadType: "bodyweight", weight: "" })}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 8,
+                              border: "1px solid #ddd",
+                              background: (d.loadType ?? "weight") === "bodyweight" ? "#111" : "#fff",
+                              color: (d.loadType ?? "weight") === "bodyweight" ? "#fff" : "#111"
+                            }}
+                          >
+                            BW
+                          </button>
+                        </div>
+
                         <div
                           style={{
                             display: "grid",
-                            gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
+                            gridTemplateColumns:
+                              (d.loadType ?? "weight") === "band"
+                                ? advanced
+                                  ? "repeat(5, 1fr)"
+                                  : "repeat(4, 1fr)"
+                                : advanced
+                                  ? "repeat(4, 1fr)"
+                                  : "repeat(3, 1fr)",
                             gap: 8,
                             marginTop: 10
                           }}
                         >
-                          <input
-                            placeholder="Weight"
-                            value={d.weight}
-                            onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
-                          />
+                          {(d.loadType ?? "weight") === "weight" && (
+                            <input
+                              placeholder="Weight"
+                              value={d.weight}
+                              onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
+                            />
+                          )}
+
+                          {(d.loadType ?? "weight") === "bodyweight" && (
+                            <div
+                              style={{
+                                border: "1px solid #ddd",
+                                borderRadius: 8,
+                                padding: "10px 12px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontWeight: 700
+                              }}
+                            >
+                              BW
+                            </div>
+                          )}
+
+                          {(d.loadType ?? "weight") === "band" && (
+                            <>
+                              <select
+                                value={d.bandMode}
+                                onChange={(e) => updateDraft(ex.id, { bandMode: e.target.value as any })}
+                              >
+                                <option value="resist">Resist</option>
+                                <option value="assist">Assist</option>
+                              </select>
+
+                              <select
+                                value={d.bandLevel}
+                                onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
+                              >
+                                <option value="">Level</option>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                              </select>
+
+                              <select
+                                value={d.bandConfig}
+                                onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
+                              >
+                                <option value="single">Single</option>
+                                <option value="doubled">Doubled</option>
+                              </select>
+
+                              <input
+                                placeholder="Est lbs (opt)"
+                                value={d.bandEst}
+                                onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value })}
+                              />
+                            </>
+                          )}
+
                           <input
                             placeholder="Reps"
                             value={d.reps}
                             onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
                           />
+
                           {advanced && (
                             <input
                               placeholder="RPE"
