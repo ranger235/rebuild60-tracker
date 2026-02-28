@@ -73,6 +73,8 @@ export type LocalWorkoutSet = {
   weight_lbs?: number | null;
 
   band_level?: number | null; // 1..5
+  band_mode?: "assist" | "resist" | null;
+  band_config?: "single" | "doubled" | null;
   band_est_lbs?: number | null;
 
   reps?: number | null;
@@ -151,4 +153,5 @@ export class RebuildDB extends Dexie {
 }
 
 export const localdb = new RebuildDB();
+
 
