@@ -1357,9 +1357,9 @@ useEffect(() => {
           <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
             Everything here is built from your <b>local</b> workout data (sessions/exercises/sets), so it works offline.
             Delete your test sessions and refresh to clean the charts.
-          </div
+          </div>
 
-<div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
   <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics window</div>
   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
     <label style={{ fontSize: 12, opacity: 0.8 }}>
@@ -1422,7 +1422,7 @@ useEffect(() => {
       This only affects dashboard + coaching. No workouts are deleted.
     </div>
   </div>
-</div>>
+</div>
 
           
           {weeklyCoach && (
@@ -1859,6 +1859,9 @@ useEffect(() => {
     </div>
   );
 }
+
+
+
 
 
 
