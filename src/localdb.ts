@@ -135,10 +135,20 @@ export class RebuildDB extends Dexie {
       localTemplates: "id, user_id, created_at",
       localTemplateExercises: "id, template_id, sort_order"
     });
-;
-  }
+
+    // v4: exercise aliases (normalize names for analytics)
+    this.version(4).stores({
+      pendingOps: "++id, createdAt, op, status",
+      localSettings: "[user_id+key], user_id, key, updatedAt",
+      localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
+      localSessions: "id, user_id, day_date, started_at",
+      localExercises: "id, session_id, sort_order",
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order"
+    });
+}
 }
 
 export const localdb = new RebuildDB();
-
 
