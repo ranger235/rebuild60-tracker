@@ -268,6 +268,7 @@ export default function App() {
 
   // Dashboard computed series
   const [dashBusy, setDashBusy] = useState(false);
+  const [analyticsStartDate, setAnalyticsStartDate] = useState<string | null>(null);
   type WeeklyCoach = {
     thisWeekStart: string;
     thisWeekEnd: string;
@@ -349,6 +350,42 @@ useEffect(() => {
     setLastByExerciseName({});
     setDraftByExerciseId({});
   }
+
+  // -----------------------------
+  // Analytics reset date (local-only, offline-first)
+  // -----------------------------
+  async function getAnalyticsStartDate(uid: string): Promise<string | null> {
+    try {
+      const row = await localdb.localSettings.get([uid, "analytics_start_date"] as any);
+      return row?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function setAnalyticsStartDateForUser(uid: string, date: string | null): Promise<void> {
+    const key = "analytics_start_date";
+    if (!date) {
+      try {
+        await localdb.localSettings.delete([uid, key] as any);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    await localdb.localSettings.put({
+      user_id: uid,
+      key,
+      value: date,
+      updatedAt: Date.now()
+    } as any);
+  }
+
+  async function getEarliestSessionDay(uid: string): Promise<string> {
+    const rows = await localdb.localSessions.where("user_id").equals(uid).sortBy("day_date");
+    return rows[0]?.day_date ?? new Date().toISOString().slice(0, 10);
+  }
+
 
   // -----------------------------
   // Backup / Restore
@@ -1859,6 +1896,9 @@ useEffect(() => {
     </div>
   );
 }
+
+
+
 
 
 
