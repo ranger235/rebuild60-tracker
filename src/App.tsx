@@ -7,7 +7,8 @@ import {
   type LocalWorkoutSession,
   type LocalWorkoutSet,
   type LocalWorkoutTemplate,
-  type LocalWorkoutTemplateExercise
+  type LocalWorkoutTemplateExercise,
+  type LocalExerciseAlias
 } from "./localdb";
 import { CoachBoundary } from "./CoachPanel";
 
@@ -38,6 +39,26 @@ function isoToDay(iso: string): string {
   } catch {
     return iso.slice(0, 10);
   }
+}
+
+
+function normalizeExerciseName(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[_\-]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+async function resolveExerciseName(userId: string | null, rawName: string): Promise<string> {
+  const cleaned = rawName.trim();
+  if (!userId) return cleaned;
+  const norm = normalizeExerciseName(cleaned);
+  if (!norm) return cleaned;
+
+  const hit = await localdb.localExerciseAliases.get([userId, norm]);
+  return hit?.canonical_name ?? cleaned;
 }
 
 type LoadType = "weight" | "band" | "bodyweight";
@@ -234,6 +255,11 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
 
+  // Exercise Aliases (local, per-user)
+  const [exerciseAliases, setExerciseAliases] = useState<LocalExerciseAlias[]>([]);
+  const [aliasRaw, setAliasRaw] = useState("");
+  const [aliasCanonical, setAliasCanonical] = useState("");
+
   // Date
   const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
 
@@ -347,6 +373,53 @@ useEffect(() => {
     setAnalyticsStartDate(d);
   })();
 }, [userId]);
+
+  // Exercise aliases: load per user
+  useEffect(() => {
+    (async () => {
+      if (!userId) {
+        setExerciseAliases([]);
+        return;
+      }
+      const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
+      rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
+      setExerciseAliases(rows);
+    })();
+  }, [userId]);
+
+  async function addExerciseAlias() {
+    if (!userId) return;
+    const raw = aliasRaw.trim();
+    const canon = aliasCanonical.trim();
+    if (!raw || !canon) return;
+
+    const row: LocalExerciseAlias = {
+      user_id: userId,
+      alias_raw: raw,
+      alias_norm: normalizeExerciseName(raw),
+      canonical_name: canon,
+      canonical_norm: normalizeExerciseName(canon),
+      updatedAt: Date.now()
+    };
+
+    if (!row.alias_norm || !row.canonical_norm) return;
+
+    await localdb.localExerciseAliases.put(row);
+    setAliasRaw("");
+    setAliasCanonical("");
+
+    const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
+    rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
+    setExerciseAliases(rows);
+  }
+
+  async function deleteExerciseAlias(alias_norm: string) {
+    if (!userId) return;
+    await localdb.localExerciseAliases.delete([userId, alias_norm]);
+    const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
+    rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
+    setExerciseAliases(rows);
+  }
 
   // Timer tick
   useEffect(() => {
@@ -621,8 +694,10 @@ useEffect(() => {
   async function addExercise() {
     if (!openSessionId) return;
 
-    const name = newExerciseName.trim();
-    if (!name) return;
+    const rawName = newExerciseName.trim();
+    if (!rawName) return;
+
+    const name = await resolveExerciseName(userId, rawName);
 
     const id = uuid();
     const sort_order = exercises.length;
@@ -827,8 +902,10 @@ useEffect(() => {
 
   async function addExerciseToTemplate() {
     if (!openTemplateId) return;
-    const name = newTemplateExerciseName.trim();
-    if (!name) return;
+    const rawName = newTemplateExerciseName.trim();
+    if (!rawName) return;
+
+    const name = await resolveExerciseName(userId, rawName);
 
     const id = uuid();
     const sort_order = templateExercises.length;
@@ -899,10 +976,12 @@ useEffect(() => {
       const te = ex[i];
       const exerciseId = uuid();
 
+      const resolvedName = await resolveExerciseName(userId, te.name);
+
       const localExercise: LocalWorkoutExercise = {
         id: exerciseId,
         session_id: sessionId,
-        name: te.name,
+        name: resolvedName,
         sort_order: i
       };
 
@@ -1492,7 +1571,64 @@ useEffect(() => {
   </div>
 </div>
 
-          
+          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontWeight: 800 }}>Exercise Aliases</div>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                Map nicknames (RDL) → canonical (Romanian Deadlift)
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginTop: 10, alignItems: "center" }}>
+              <input
+                placeholder="Alias (e.g., RDL)"
+                value={aliasRaw}
+                onChange={(e) => setAliasRaw(e.target.value)}
+              />
+              <input
+                placeholder="Canonical name (e.g., Romanian Deadlift)"
+                value={aliasCanonical}
+                onChange={(e) => setAliasCanonical(e.target.value)}
+              />
+              <button onClick={addExerciseAlias} disabled={!userId || !aliasRaw.trim() || !aliasCanonical.trim()}>
+                Add
+              </button>
+            </div>
+
+            {exerciseAliases.length === 0 ? (
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 10 }}>
+                No aliases yet. Add a couple and your logs/analytics will stay clean.
+              </div>
+            ) : (
+              <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                {exerciseAliases.map((a) => (
+                  <div
+                    key={`${a.user_id}:${a.alias_norm}`}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 10,
+                      border: "1px solid #eee",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                      background: "#fff"
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700 }}>{a.alias_raw}</span>
+                      <span style={{ opacity: 0.65 }}>→</span>
+                      <span>{a.canonical_name}</span>
+                    </div>
+                    <button onClick={() => deleteExerciseAlias(a.alias_norm)} title="Delete alias">
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {weeklyCoach && (
             <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -2031,6 +2167,8 @@ useEffect(() => {
     </div>
   );
 }
+
+
 
 
 
