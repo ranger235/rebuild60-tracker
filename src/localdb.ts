@@ -39,6 +39,15 @@ export type LocalSetting = {
   updatedAt: number;
 };
 
+export type LocalExerciseAlias = {
+  user_id: string;
+  alias_raw: string;
+  alias_norm: string;
+  canonical_name: string;
+  canonical_norm: string;
+  updatedAt: number;
+};
+
 export type ExerciseTags = {
   muscle_groups?: string[]; // e.g. ["chest","triceps"]
   movement?: string | null; // e.g. "press"
@@ -102,6 +111,7 @@ export class RebuildDB extends Dexie {
   pendingOps!: Table<PendingOp, number>;
 
   localSettings!: Table<LocalSetting, [string, string]>; // [user_id, key]
+  localExerciseAliases!: Table<LocalExerciseAlias, [string, string]>; // [user_id, alias_norm]
 
   localSessions!: Table<LocalWorkoutSession, string>;
   localExercises!: Table<LocalWorkoutExercise, string>;
@@ -126,7 +136,8 @@ export class RebuildDB extends Dexie {
       localSets: "id, exercise_id, set_number",
       localTemplates: "id, user_id, created_at",
       localTemplateExercises: "id, template_id, sort_order"
-    })
+    });
+
     // v3: per-user settings
     this.version(3).stores({
       pendingOps: "++id, createdAt, op, status",
@@ -138,7 +149,7 @@ export class RebuildDB extends Dexie {
       localTemplateExercises: "id, template_id, sort_order"
     });
 
-    // v4: exercise aliases (normalize names for analytics)
+    // v4: exercise aliases (normalize names for analytics + clean entry)
     this.version(4).stores({
       pendingOps: "++id, createdAt, op, status",
       localSettings: "[user_id+key], user_id, key, updatedAt",
@@ -149,7 +160,7 @@ export class RebuildDB extends Dexie {
       localTemplates: "id, user_id, created_at",
       localTemplateExercises: "id, template_id, sort_order"
     });
-}
+  }
 }
 
 export const localdb = new RebuildDB();
