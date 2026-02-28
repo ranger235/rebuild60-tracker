@@ -7,8 +7,7 @@ import {
   type LocalWorkoutSession,
   type LocalWorkoutSet,
   type LocalWorkoutTemplate,
-  type LocalWorkoutTemplateExercise,
-  type LocalExerciseAlias
+  type LocalWorkoutTemplateExercise
 } from "./localdb";
 import { CoachBoundary } from "./CoachPanel";
 
@@ -39,26 +38,6 @@ function isoToDay(iso: string): string {
   } catch {
     return iso.slice(0, 10);
   }
-}
-
-
-function normalizeExerciseName(s: string): string {
-  return s
-    .toLowerCase()
-    .trim()
-    .replace(/[_\-]+/g, " ")
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ");
-}
-
-async function resolveExerciseName(userId: string | null, rawName: string): Promise<string> {
-  const cleaned = rawName.trim();
-  if (!userId) return cleaned;
-  const norm = normalizeExerciseName(cleaned);
-  if (!norm) return cleaned;
-
-  const hit = await localdb.localExerciseAliases.get([userId, norm]);
-  return hit?.canonical_name ?? cleaned;
 }
 
 type LoadType = "weight" | "band" | "bodyweight";
@@ -255,11 +234,6 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Exercise Aliases (local, per-user)
-  const [exerciseAliases, setExerciseAliases] = useState<LocalExerciseAlias[]>([]);
-  const [aliasRaw, setAliasRaw] = useState("");
-  const [aliasCanonical, setAliasCanonical] = useState("");
-
   // Date
   const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
 
@@ -374,53 +348,6 @@ useEffect(() => {
   })();
 }, [userId]);
 
-  // Exercise aliases: load per user
-  useEffect(() => {
-    (async () => {
-      if (!userId) {
-        setExerciseAliases([]);
-        return;
-      }
-      const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
-      rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
-      setExerciseAliases(rows);
-    })();
-  }, [userId]);
-
-  async function addExerciseAlias() {
-    if (!userId) return;
-    const raw = aliasRaw.trim();
-    const canon = aliasCanonical.trim();
-    if (!raw || !canon) return;
-
-    const row: LocalExerciseAlias = {
-      user_id: userId,
-      alias_raw: raw,
-      alias_norm: normalizeExerciseName(raw),
-      canonical_name: canon,
-      canonical_norm: normalizeExerciseName(canon),
-      updatedAt: Date.now()
-    };
-
-    if (!row.alias_norm || !row.canonical_norm) return;
-
-    await localdb.localExerciseAliases.put(row);
-    setAliasRaw("");
-    setAliasCanonical("");
-
-    const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
-    rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
-    setExerciseAliases(rows);
-  }
-
-  async function deleteExerciseAlias(alias_norm: string) {
-    if (!userId) return;
-    await localdb.localExerciseAliases.delete([userId, alias_norm]);
-    const rows = await localdb.localExerciseAliases.where("user_id").equals(userId).toArray();
-    rows.sort((a, b) => a.alias_norm.localeCompare(b.alias_norm));
-    setExerciseAliases(rows);
-  }
-
   // Timer tick
   useEffect(() => {
     if (!timerOn) return;
@@ -494,6 +421,17 @@ useEffect(() => {
       const tables: Record<string, any[]> = {};
       const dexieAny = localdb as any;
       const tableList: any[] = dexieAny.tables ?? [];
+
+  // Band analytics (offline-first)
+  type BandWeekly = {
+    bandSetsThis: number;
+    bandSetsPrev: number;
+    assistThis: number;
+    resistThis: number;
+    levelCountsThis: number[]; // idx 0..4 => level 1..5
+  };
+  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
+  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
       for (const t of tableList) {
         const name = t.name as string;
@@ -694,10 +632,8 @@ useEffect(() => {
   async function addExercise() {
     if (!openSessionId) return;
 
-    const rawName = newExerciseName.trim();
-    if (!rawName) return;
-
-    const name = await resolveExerciseName(userId, rawName);
+    const name = newExerciseName.trim();
+    if (!name) return;
 
     const id = uuid();
     const sort_order = exercises.length;
@@ -902,10 +838,8 @@ useEffect(() => {
 
   async function addExerciseToTemplate() {
     if (!openTemplateId) return;
-    const rawName = newTemplateExerciseName.trim();
-    if (!rawName) return;
-
-    const name = await resolveExerciseName(userId, rawName);
+    const name = newTemplateExerciseName.trim();
+    if (!name) return;
 
     const id = uuid();
     const sort_order = templateExercises.length;
@@ -976,12 +910,10 @@ useEffect(() => {
       const te = ex[i];
       const exerciseId = uuid();
 
-      const resolvedName = await resolveExerciseName(userId, te.name);
-
       const localExercise: LocalWorkoutExercise = {
         id: exerciseId,
         session_id: sessionId,
-        name: resolvedName,
+        name: te.name,
         sort_order: i
       };
 
@@ -1201,6 +1133,12 @@ useEffect(() => {
       const tonnageByDay = new Map<string, number>();
       const setsByDay = new Map<string, number>();
 
+      // Band analytics per-day
+      const bandSetsByDay = new Map<string, number>();
+      const bandAssistByDay = new Map<string, number>();
+      const bandResistByDay = new Map<string, number>();
+      const bandLevelsByDay = new Map<string, number[]>(); // day -> [lvl1..lvl5] counts
+
       // Per-day best e1RM for selected lift buckets (by exercise name match)
       const bestBenchE1RM = new Map<string, number>();
       const bestSquatE1RM = new Map<string, number>();
@@ -1219,6 +1157,20 @@ useEffect(() => {
         if (startDay && day < startDay) continue;
 
         setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
+
+        // Band analytics
+        if ((s as any).load_type === "band") {
+          bandSetsByDay.set(day, (bandSetsByDay.get(day) ?? 0) + 1);
+          const mode = (s as any).band_mode as ("assist" | "resist" | null | undefined);
+          if (mode === "assist") bandAssistByDay.set(day, (bandAssistByDay.get(day) ?? 0) + 1);
+          if (mode === "resist") bandResistByDay.set(day, (bandResistByDay.get(day) ?? 0) + 1);
+          const lvl = (s as any).band_level as (number | null | undefined);
+          if (lvl && lvl >= 1 && lvl <= 5) {
+            const arr = bandLevelsByDay.get(day) ?? [0, 0, 0, 0, 0];
+            arr[lvl - 1] = (arr[lvl - 1] ?? 0) + 1;
+            bandLevelsByDay.set(day, arr);
+          }
+        }
 
         const w = s.weight_lbs ?? 0;
         const r = s.reps ?? 0;
@@ -1335,6 +1287,31 @@ useEffect(() => {
         dlBest,
         coachLine
       });
+
+      // Band weekly summary (7d vs prior 7d)
+      const sumBand = (map: Map<string, number>, ds: string[]) => ds.reduce((acc, k) => acc + (map.get(k) ?? 0), 0);
+      const bandThis = sumBand(bandSetsByDay, thisDays);
+      const bandPrev = sumBand(bandSetsByDay, prevDays);
+      const assistThis = sumBand(bandAssistByDay, thisDays);
+      const resistThis = sumBand(bandResistByDay, thisDays);
+
+      const levelCountsThis = [0, 0, 0, 0, 0];
+      for (const d of thisDays) {
+        const arr = bandLevelsByDay.get(d);
+        if (!arr) continue;
+        for (let i = 0; i < 5; i++) levelCountsThis[i] += arr[i] ?? 0;
+      }
+
+      setBandWeekly({
+        bandSetsThis: bandThis,
+        bandSetsPrev: bandPrev,
+        assistThis,
+        resistThis,
+        levelCountsThis
+      });
+
+      const bandSer = days.map((d) => ({ xLabel: d.slice(5), y: bandSetsByDay.get(d) ?? 0 }));
+      setBandSeries(bandSer);
 
 
       const tonSeries = days.map((d) => ({ xLabel: d.slice(5), y: Math.round(tonnageByDay.get(d) ?? 0) }));
@@ -1571,64 +1548,7 @@ useEffect(() => {
   </div>
 </div>
 
-          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 10 }}>
-              <div style={{ fontWeight: 800 }}>Exercise Aliases</div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                Map nicknames (RDL) → canonical (Romanian Deadlift)
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginTop: 10, alignItems: "center" }}>
-              <input
-                placeholder="Alias (e.g., RDL)"
-                value={aliasRaw}
-                onChange={(e) => setAliasRaw(e.target.value)}
-              />
-              <input
-                placeholder="Canonical name (e.g., Romanian Deadlift)"
-                value={aliasCanonical}
-                onChange={(e) => setAliasCanonical(e.target.value)}
-              />
-              <button onClick={addExerciseAlias} disabled={!userId || !aliasRaw.trim() || !aliasCanonical.trim()}>
-                Add
-              </button>
-            </div>
-
-            {exerciseAliases.length === 0 ? (
-              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 10 }}>
-                No aliases yet. Add a couple and your logs/analytics will stay clean.
-              </div>
-            ) : (
-              <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-                {exerciseAliases.map((a) => (
-                  <div
-                    key={`${a.user_id}:${a.alias_norm}`}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 10,
-                      border: "1px solid #eee",
-                      borderRadius: 10,
-                      padding: "8px 10px",
-                      background: "#fff"
-                    }}
-                  >
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 700 }}>{a.alias_raw}</span>
-                      <span style={{ opacity: 0.65 }}>→</span>
-                      <span>{a.canonical_name}</span>
-                    </div>
-                    <button onClick={() => deleteExerciseAlias(a.alias_norm)} title="Delete alias">
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
+          
           {weeklyCoach && (
             <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1673,6 +1593,49 @@ useEffect(() => {
 
               <div style={{ marginTop: 10, fontSize: 13 }}>
                 <b>Coach says:</b> {weeklyCoach.coachLine}
+              </div>
+            </div>
+          )}
+
+
+          {bandWeekly && (
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 800 }}>Band Work (7d)</div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Prev 7d: {bandWeekly.bandSetsPrev}</div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginTop: 10 }}>
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Band sets</div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>{bandWeekly.bandSetsThis}</div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Assist vs Resist</div>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>
+                    Assist: {bandWeekly.assistThis} • Resist: {bandWeekly.resistThis}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Levels used</div>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4, lineHeight: 1.6 }}>
+                    {bandWeekly.levelCountsThis.map((c, i) => (
+                      <span key={i} style={{ marginRight: 10 }}>
+                        L{i + 1}: <b>{c}</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <LineChart title="Band sets — last 28 days" points={bandSeries} />
+              </div>
+
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+                Tip: “Assist” bands (pull-ups/dips) and “Resist” bands (rows/pressdowns) are tracked separately.
               </div>
             </div>
           )}
@@ -2167,6 +2130,7 @@ useEffect(() => {
     </div>
   );
 }
+
 
 
 
