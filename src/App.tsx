@@ -1531,8 +1531,7 @@ useEffect(() => {
         // Rule of the week
         lines.push("• Rule: compounds = small jumps / clean reps; accessories = reps-first to 12–15 then load; bands = resist reps→level, assist level→less assist.");
 
-        coachLine = lines.join("
-");
+        coachLine = lines.join("\n");
       }
 
       setWeeklyCoach({
