@@ -293,16 +293,6 @@ export default function App() {
   // Dashboard computed series
   const [dashBusy, setDashBusy] = useState(false);
   const [analyticsStartDate, setAnalyticsStartDate] = useState<string | null>(null);
-  const DEFAULT_BAND_PROFILE: Record<number, number> = { 1: 15, 2: 25, 3: 35, 4: 50, 5: 65 };
-  const [bandProfile, setBandProfile] = useState<Record<number, number>>({ ...DEFAULT_BAND_PROFILE });
-  const [bandProfileDraft, setBandProfileDraft] = useState<Record<number, string>>({
-    1: String(DEFAULT_BAND_PROFILE[1]),
-    2: String(DEFAULT_BAND_PROFILE[2]),
-    3: String(DEFAULT_BAND_PROFILE[3]),
-    4: String(DEFAULT_BAND_PROFILE[4]),
-    5: String(DEFAULT_BAND_PROFILE[5])
-  });
-
   type WeeklyCoach = {
     thisWeekStart: string;
     thisWeekEnd: string;
@@ -325,17 +315,6 @@ export default function App() {
   const [benchSeries, setBenchSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
-
-  // Band analytics (offline-first)
-  type BandWeekly = {
-    bandSetsThis: number;
-    bandSetsPrev: number;
-    assistThis: number;
-    resistThis: number;
-    levelCountsThis: number[]; // idx 0..4 => level 1..5
-  };
-  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
-  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
   // -----------------------------
   // Auth boot + autosync
@@ -366,33 +345,6 @@ useEffect(() => {
   void (async () => {
     const d = await getAnalyticsStartDate(userId);
     setAnalyticsStartDate(d);
-  })();
-}, [userId]);
-
-
-useEffect(() => {
-  if (!userId) return;
-  void (async () => {
-    const p = await getBandProfile(userId);
-    if (p) {
-      setBandProfile(p);
-      setBandProfileDraft({
-        1: String(p[1]),
-        2: String(p[2]),
-        3: String(p[3]),
-        4: String(p[4]),
-        5: String(p[5])
-      });
-    } else {
-      setBandProfile({ ...DEFAULT_BAND_PROFILE });
-      setBandProfileDraft({
-        1: String(DEFAULT_BAND_PROFILE[1]),
-        2: String(DEFAULT_BAND_PROFILE[2]),
-        3: String(DEFAULT_BAND_PROFILE[3]),
-        4: String(DEFAULT_BAND_PROFILE[4]),
-        5: String(DEFAULT_BAND_PROFILE[5])
-      });
-    }
   })();
 }, [userId]);
 
@@ -453,52 +405,6 @@ useEffect(() => {
     } as any);
   }
 
-
-  // -----------------------------
-  // Band profile (local-only, offline-first)
-  // -----------------------------
-  const BAND_PROFILE_KEY = "band_profile_v1";
-
-  async function getBandProfile(uid: string): Promise<Record<number, number> | null> {
-    try {
-      const row = await localdb.localSettings.get([uid, BAND_PROFILE_KEY] as any);
-      if (!row?.value) return null;
-      const obj = JSON.parse(row.value);
-      const out: Record<number, number> = {};
-      for (const k of ["1", "2", "3", "4", "5"]) {
-        const n = Number(obj[k]);
-        if (Number.isFinite(n) && n > 0) out[Number(k)] = n;
-      }
-      if (Object.keys(out).length === 5) return out;
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  async function setBandProfileForUser(uid: string, profile: Record<number, number>): Promise<void> {
-    await localdb.localSettings.put({
-      user_id: uid,
-      key: BAND_PROFILE_KEY,
-      value: JSON.stringify(profile),
-      updatedAt: Date.now()
-    } as any);
-  }
-
-  function bandEstimateFromDraft(d: any): number | null {
-    const lvl = d.bandLevel ? Number(d.bandLevel) : null;
-    if (!lvl || !Number.isFinite(lvl)) return null;
-    const base = bandProfile[lvl];
-    if (!base) return null;
-    const cfg = (d.bandConfig ?? "single") as string;
-    const mult = cfg === "doubled" ? 2 : 1;
-
-    const manual = d.bandEst != null && String(d.bandEst).trim() !== "" ? Number(d.bandEst) : null;
-    if (manual != null && Number.isFinite(manual) && manual > 0) return Math.round(manual);
-
-    return Math.round(base * mult);
-  }
-
   async function getEarliestSessionDay(uid: string): Promise<string> {
     const rows = await localdb.localSessions.where("user_id").equals(uid).sortBy("day_date");
     return rows[0]?.day_date ?? new Date().toISOString().slice(0, 10);
@@ -515,6 +421,17 @@ useEffect(() => {
       const tables: Record<string, any[]> = {};
       const dexieAny = localdb as any;
       const tableList: any[] = dexieAny.tables ?? [];
+
+  // Band analytics (offline-first)
+  type BandWeekly = {
+    bandSetsThis: number;
+    bandSetsPrev: number;
+    assistThis: number;
+    resistThis: number;
+    levelCountsThis: number[]; // idx 0..4 => level 1..5
+  };
+  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
+  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
       for (const t of tableList) {
         const name = t.name as string;
@@ -712,6 +629,48 @@ useEffect(() => {
     }));
   }
 
+
+function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweight" | "band"; weightLbs?: number | null; reps?: number | null; bandLevel?: number | null; bandMode?: "assist" | "resist" | null; bandConfig?: "single" | "doubled" | null; bandEstLbs?: number | null }) {
+  const patch: Partial<ExerciseDraft> = { warmup: false };
+
+  if (t.loadType === "bodyweight") {
+    patch.loadType = "bodyweight";
+    patch.weight = "";
+    patch.bandLevel = "";
+    patch.bandEst = "";
+    patch.bandMode = "resist";
+    patch.bandConfig = "single";
+    patch.reps = t.reps != null ? String(t.reps) : "";
+    patch.rpe = "";
+    updateDraft(exerciseId, patch);
+    return;
+  }
+
+  if (t.loadType === "band") {
+    patch.loadType = "band";
+    patch.weight = "";
+    patch.bandLevel = t.bandLevel != null ? String(t.bandLevel) : "";
+    patch.bandMode = (t.bandMode ?? "resist") as any;
+    patch.bandConfig = (t.bandConfig ?? "single") as any;
+    patch.bandEst = t.bandEstLbs != null ? String(t.bandEstLbs) : "";
+    patch.reps = t.reps != null ? String(t.reps) : "";
+    patch.rpe = "";
+    updateDraft(exerciseId, patch);
+    return;
+  }
+
+  // weight
+  patch.loadType = "weight";
+  patch.weight = t.weightLbs != null ? String(t.weightLbs) : "";
+  patch.bandLevel = "";
+  patch.bandEst = "";
+  patch.bandMode = "resist";
+  patch.bandConfig = "single";
+  patch.reps = t.reps != null ? String(t.reps) : "";
+  patch.rpe = "";
+  updateDraft(exerciseId, patch);
+}
+
   async function addExercise() {
     if (!openSessionId) return;
 
@@ -756,26 +715,14 @@ useEffect(() => {
       ({ loadType: "weight", weight: "", bandLevel: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false } as ExerciseDraft);
 
     const reps = d.reps ? Number(d.reps) : null;
+    const w = d.weight ? Number(d.weight) : null;
+
 
     const loadType = (d.loadType ?? "weight") as any;
     const band_level = d.bandLevel ? Number(d.bandLevel) : null;
     const band_mode = (d.bandMode ?? "resist") as any;
     const band_config = (d.bandConfig ?? "single") as any;
-
-    // Weight input (for weight load type)
-    let w: number | null = d.weight ? Number(d.weight) : null;
-
-    // Band estimate: manual override wins; otherwise derived from per-user band profile
-    let band_est_lbs: number | null = d.bandEst ? Number(d.bandEst) : null;
-    if (loadType === "band") {
-      const derived = bandEstimateFromDraft(d);
-      if (band_est_lbs == null || !Number.isFinite(band_est_lbs) || band_est_lbs <= 0) band_est_lbs = derived;
-      // For RESIST bands, treat estimate as "effective weight" so previews/coach/analytics behave.
-      w = band_mode === "resist" ? band_est_lbs : null;
-    } else if (loadType === "bodyweight") {
-      w = null;
-      band_est_lbs = null;
-    }
+    const band_est_lbs = d.bandEst ? Number(d.bandEst) : null;
 
     if (!reps || reps <= 0) {
       alert("Reps required.");
@@ -1368,171 +1315,12 @@ useEffect(() => {
       const tonPct = pct(tonThis, tonPrev);
       const setsPct = pct(setsThis, setsPrev);
 
-      // -----------------------------
-      // Coach v2 (Option C): conservative compounds, aggressive accessories, band-aware.
-      // -----------------------------
-      type RecentSet = {
-        day: string;
-        name: string;
-        load_type: string;
-        weight: number | null; // effective weight for coaching (barbell/db/cable OR band resist estimate)
-        reps: number | null;
-        rpe: number | null;
-        band_mode?: string;
-        band_level?: number;
-        band_config?: string;
-      };
-
-      // Build "most recent best set" per exercise in the last 7 days
-      const inThisWindow = new Set(thisDays);
-      const recentByEx = new Map<string, RecentSet>();
-      const countByEx = new Map<string, number>();
-
-      for (const s of allSets) {
-        const info = exInfo.get(s.exercise_id);
-        if (!info) continue;
-        const day = sessionDay.get(info.session_id);
-        if (!day) continue;
-        if (startDay && day < startDay) continue;
-        if (!inThisWindow.has(day)) continue;
-        if (s.is_warmup) continue;
-
-        const name = info.name || "Unnamed";
-        const loadType = (s.load_type ?? "weight") as string;
-
-        let effWeight: number | null = null;
-        if (loadType === "band") {
-          // For coaching, only "resist" bands count as load.
-          if (s.band_mode === "resist" && s.band_est_lbs != null && Number.isFinite(Number(s.band_est_lbs))) {
-            effWeight = Number(s.band_est_lbs);
-          }
-        } else if (loadType === "weight") {
-          if (s.weight_lbs != null && Number.isFinite(Number(s.weight_lbs))) effWeight = Number(s.weight_lbs);
-        }
-
-        const reps = s.reps != null && Number.isFinite(Number(s.reps)) ? Number(s.reps) : null;
-        const rpe = s.rpe != null && Number.isFinite(Number(s.rpe)) ? Number(s.rpe) : null;
-
-        countByEx.set(name, (countByEx.get(name) ?? 0) + 1);
-
-        const cur = recentByEx.get(name);
-        const candidate: RecentSet = {
-          day,
-          name,
-          load_type: loadType,
-          weight: effWeight,
-          reps,
-          rpe,
-          band_mode: s.band_mode,
-          band_level: s.band_level,
-          band_config: s.band_config
-        };
-
-        if (!cur) {
-          recentByEx.set(name, candidate);
-          continue;
-        }
-
-        // Prefer newer day; if same day, prefer heavier effective weight; otherwise prefer higher reps.
-        if (day > cur.day) recentByEx.set(name, candidate);
-        else if (day === cur.day) {
-          const cw = cur.weight ?? -1;
-          const nw = candidate.weight ?? -1;
-          if (nw > cw) recentByEx.set(name, candidate);
-          else if (nw === cw && (candidate.reps ?? -1) > (cur.reps ?? -1)) recentByEx.set(name, candidate);
-        }
-      }
-
-      const sortedExercises = Array.from(countByEx.entries())
-        .sort((a, b) => b[1] - a[1])
-        .map(([name]) => name);
-
-      const topCompound = sortedExercises.find((n) => isCompoundExercise(n));
-      const topAccessory = sortedExercises.find((n) => !isCompoundExercise(n));
-      const topBand = sortedExercises.find((n) => (recentByEx.get(n)?.load_type ?? "") === "band") ?? null;
-
-      function prescribe(rs: RecentSet): string | null {
-        const n = rs.name;
-        const reps = rs.reps;
-        const w = rs.weight;
-        const rpe = rs.rpe;
-
-        // Bands
-        if (rs.load_type === "band") {
-          const lvl = rs.band_level != null ? Number(rs.band_level) : null;
-          const cfg = (rs.band_config ?? "single") as string;
-          const mode = (rs.band_mode ?? "resist") as string;
-
-          if (mode === "assist") {
-            if (lvl == null) return `Next: ${n} — keep the assist band, aim +1–2 reps.`;
-            if (reps != null && reps >= 8 && (rpe == null || rpe <= 8)) {
-              const nextLvl = Math.max(1, lvl - 1);
-              if (nextLvl !== lvl) return `Next: ${n} — drop assistance to Band L${nextLvl} (same reps range).`;
-            }
-            return `Next: ${n} — keep Band L${lvl ?? "—"} assist, aim +1–2 reps.`;
-          }
-
-          // resist
-          if (lvl != null && reps != null && reps >= 15 && (rpe == null || rpe <= 9)) {
-            if (lvl < 5) return `Next: ${n} — bump to Band L${lvl + 1} resist (${cfg}), aim 10–12 reps.`;
-            if (cfg === "single") return `Next: ${n} — go Doubled (Band L${lvl} resist), aim 8–10 reps.`;
-            return `Next: ${n} — keep the band, add reps (15+ is money).`;
-          }
-
-          if (reps != null) return `Next: ${n} — same band, add +1–2 reps.`;
-          return `Next: ${n} — same band, repeat clean.`;
-        }
-
-        // Weight-based
-        if (w == null || reps == null) return `Next: ${n} — repeat and log weight/reps (so I can coach it).`;
-
-        const rpeOk = rpe == null || rpe <= 8;
-        const rpeHigh = rpe != null && rpe >= 9;
-
-        // Compounds: conservative, clean reps, no grinders
-        if (isCompoundExercise(n)) {
-          if (rpeHigh) return `Next: ${n} — repeat ${w} × ${reps} but cleaner (no grinders).`;
-          if (reps >= 6 && rpeOk) return `Next: ${n} — +5 lb: ${w + 5} × 5 (RPE ~8).`;
-          if (reps < 6 && rpeOk) return `Next: ${n} — hold ${w}, aim ${reps + 1} reps.`;
-          return `Next: ${n} — hold ${w}, aim +1 rep if it feels good.`;
-        }
-
-        // Accessories: aggressive reps-first, then load
-        if (rpeHigh) return `Next: ${n} — repeat ${w} × ${reps}, then chase +1 rep next time.`;
-        if (reps >= 15 && (rpe == null || rpe <= 9)) return `Next: ${n} — add load (+5 lb if possible), aim 10–12 reps.`;
-        if (reps >= 12 && (rpe == null || rpe <= 9)) return `Next: ${n} — same load, push toward 15 reps.`;
-        return `Next: ${n} — same load, add +1–2 reps.`;
-      }
-
-      // Build the coach line (multi-line)
       let coachLine = "Keep the wheels turning.";
-      if (sessionsThis === 0) {
-        coachLine = "No sessions logged in the last 7 days — get one on the board.";
-      } else {
-        const lines: string[] = [];
-        lines.push("Hybrid Coach v2:");
-        // Weekly context
-        if (tonPct >= 10) lines.push(`• Volume up ${Math.round(tonPct)}% — good. Keep compounds crisp (RPE 7–8), earn the jumps.`);
-        else if (tonPct <= -10) lines.push(`• Volume down ${Math.round(Math.abs(tonPct))}% — fine if planned. If not, tighten routine + sleep.`);
-        else lines.push("• Volume steady — perfect for consistent progression.");
-
-        if (setsPct >= 10) lines.push(`• Work sets up ${Math.round(setsPct)}% — watch joints, keep form strict.`);
-        else if (setsPct <= -10) lines.push(`• Work sets down ${Math.round(Math.abs(setsPct))}% — recovery week or drift. Choose deliberately.`);
-
-        // Prescriptions (up to 3)
-        const picks = [topCompound, topAccessory, topBand].filter((x, i, arr) => x && arr.indexOf(x) === i) as string[];
-        for (const name of picks) {
-          const rs = recentByEx.get(name);
-          if (!rs) continue;
-          const p = prescribe(rs);
-          if (p) lines.push(`• ${p}`);
-        }
-
-        // Rule of the week
-        lines.push("• Rule: compounds = small jumps / clean reps; accessories = reps-first to 12–15 then load; bands = resist reps→level, assist level→less assist.");
-
-        coachLine = lines.join("\n");
-      }
+      if (sessionsThis === 0) coachLine = "No sessions logged in the last 7 days — get one on the board.";
+      else if (tonThis > tonPrev && tonPct >= 10) coachLine = "Volume is up — nice. Keep intensity honest and recover hard.";
+      else if (tonThis < tonPrev && tonPct <= -10) coachLine = "Volume dipped — fine if planned. If not, tighten the routine this week.";
+      else if (setsThis > setsPrev && setsPct >= 10) coachLine = "More work sets this week — solid. Watch joints and sleep.";
+      else if (setsThis < setsPrev && setsPct <= -10) coachLine = "Fewer sets this week — could be recovery or could be drift. Choose deliberately.";
 
       setWeeklyCoach({
         thisWeekStart: fmt(startThis),
@@ -1853,7 +1641,7 @@ useEffect(() => {
               </div>
 
               <div style={{ marginTop: 10, fontSize: 13 }}>
-                <b>Coach says:</b> <span style={{ whiteSpace: "pre-line" }}>{weeklyCoach.coachLine}</span>
+                <b>Coach says:</b> {weeklyCoach.coachLine}
               </div>
             </div>
           )}
@@ -1898,76 +1686,6 @@ useEffect(() => {
               <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
                 Tip: “Assist” bands (pull-ups/dips) and “Resist” bands (rows/pressdowns) are tracked separately.
               </div>
-
-
-          {userId && (
-            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 800 }}>Band profile (est lbs)</div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Per user • Used for band “poundage” estimates</div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 10 }}>
-                {[1, 2, 3, 4, 5].map((lvl) => (
-                  <label key={lvl} style={{ fontSize: 12 }}>
-                    <div style={{ opacity: 0.75, marginBottom: 4 }}>Level {lvl}</div>
-                    <input
-                      value={bandProfileDraft[lvl]}
-                      onChange={(e) => setBandProfileDraft((p) => ({ ...p, [lvl]: e.target.value }))}
-                      inputMode="numeric"
-                      style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #ccc" }}
-                    />
-                  </label>
-                ))}
-              </div>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                <button
-                  onClick={async () => {
-                    if (!userId) return;
-                    const next: Record<number, number> = {};
-                    for (const lvl of [1, 2, 3, 4, 5]) {
-                      const n = Number(bandProfileDraft[lvl]);
-                      if (!Number.isFinite(n) || n <= 0) {
-                        alert("Band profile values must be positive numbers.");
-                        return;
-                      }
-                      next[lvl] = Math.round(n);
-                    }
-                    setBandProfile(next);
-                    await setBandProfileForUser(userId, next);
-                    if (tab === "dash") void refreshDashboard();
-                  }}
-                >
-                  Save band profile
-                </button>
-
-                <button
-                  onClick={async () => {
-                    if (!userId) return;
-                    setBandProfile({ ...DEFAULT_BAND_PROFILE });
-                    setBandProfileDraft({
-                      1: String(DEFAULT_BAND_PROFILE[1]),
-                      2: String(DEFAULT_BAND_PROFILE[2]),
-                      3: String(DEFAULT_BAND_PROFILE[3]),
-                      4: String(DEFAULT_BAND_PROFILE[4]),
-                      5: String(DEFAULT_BAND_PROFILE[5])
-                    });
-                    await setBandProfileForUser(userId, { ...DEFAULT_BAND_PROFILE });
-                    if (tab === "dash") void refreshDashboard();
-                  }}
-                  title="Reset to default 15/25/35/50/65"
-                >
-                  Reset defaults
-                </button>
-              </div>
-
-              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
-                Notes: “Doubled” bands are treated as 2×. Manual “Est lbs” on a set always overrides this profile.
-              </div>
-            </div>
-          )}
-
             </div>
           )}
 
@@ -2420,7 +2138,9 @@ useEffect(() => {
                                 return (
                                   <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                                     <div>
-                                      <b>{s.set_number}.</b> {formatSet(s)}
+                                      <b>{s.set_number}.</b> {s.weight_lbs ?? "—"} x {s.reps ?? "—"}
+                                      {s.is_warmup ? " (WU)" : ""}
+                                      {s.rpe != null ? ` @RPE ${s.rpe}` : ""}
                                     </div>
                                     <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
                                   </div>
@@ -2431,7 +2151,12 @@ useEffect(() => {
                         )}
 
                         {coachEnabled && (
-                          <CoachBoundary exerciseName={ex.name} sets={exSets} compound={compound} />
+                          <CoachBoundary
+                            exerciseName={ex.name}
+                            sets={exSets}
+                            compound={compound}
+                            onApplyTarget={(t) => applyNextTarget(ex.id, t as any)}
+                          />
                         )}
 
                       </div>
@@ -2459,6 +2184,7 @@ useEffect(() => {
     </div>
   );
 }
+
 
 
 
