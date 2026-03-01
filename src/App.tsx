@@ -67,6 +67,51 @@ type ExerciseDraft = {
   warmup: boolean;
 };
 
+const BAND_LBS: Record<number, number> = { 1: 15, 2: 25, 3: 35, 4: 50, 5: 65 };
+
+function estimateBandLbs(s: any): number | null {
+  const lvl = s.band_level != null ? Number(s.band_level) : null;
+  if (!lvl || !BAND_LBS[lvl]) return null;
+
+  const cfg = (s.band_config as string) ?? "single";
+  const mult = cfg === "doubled" ? 2 : 1;
+
+  // Manual override wins
+  const manual = s.band_est_lbs != null ? Number(s.band_est_lbs) : null;
+  if (manual != null && Number.isFinite(manual)) return Math.round(manual);
+
+  return Math.round(BAND_LBS[lvl] * mult);
+}
+
+function bandTag(s: any): string {
+  const mode = s.band_mode === "assist" ? "A" : "R";
+  const lvl = s.band_level != null ? `B${s.band_level}` : "B—";
+  const cfg = s.band_config === "doubled" ? "Dbl" : "Sgl";
+  return `${lvl}${mode} ${cfg}`.trim();
+}
+
+function displayLoad(s: any): { label: string; effectiveWeight: number | null } {
+  const lt = (s.load_type as string) ?? "weight";
+
+  if (lt === "bodyweight") return { label: "BW", effectiveWeight: null };
+
+  if (lt === "band") {
+    const est = estimateBandLbs(s);
+    const tag = bandTag(s);
+
+    // Only RESIST bands should feed 1RM math
+    const effective = s.band_mode === "resist" && est != null ? est : null;
+
+    return {
+      label: est != null ? `~${est} (${tag})` : `— (${tag})`,
+      effectiveWeight: effective
+    };
+  }
+
+  const w = s.weight_lbs != null ? Number(s.weight_lbs) : null;
+  return { label: w != null ? String(w) : "—", effectiveWeight: w };
+}
+
 function formatSet(s: SetLite) {
   const lt: LoadType = (s.load_type as LoadType) ?? "weight";
   const r = s.reps ?? "—";
@@ -77,11 +122,10 @@ function formatSet(s: SetLite) {
   if (lt === "bodyweight") {
     load = "BW";
   } else if (lt === "band") {
-    const lvl = s.band_level != null ? `B${s.band_level}` : "B—";
-    const mode = s.band_mode ? (s.band_mode === "assist" ? "A" : "R") : "";
-    const cfg = s.band_config ? (s.band_config === "doubled" ? "Dbl" : "Sgl") : "";
-    const est = s.band_est_lbs != null ? `(~${s.band_est_lbs}lb)` : "";
-    load = `${lvl}${mode ? mode : ""} ${cfg}`.trim() + (est ? ` ${est}` : "");
+    const tag = bandTag(s);
+    const estVal = estimateBandLbs(s);
+    const est = estVal != null ? `~${estVal}lb` : "";
+    load = `${tag}` + (est ? ` (${est})` : "");
   } else {
     load = s.weight_lbs != null ? String(s.weight_lbs) : "—";
   }
@@ -2088,15 +2132,16 @@ useEffect(() => {
                             <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Sets (today)</div>
                             <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
                               {exSets.map((s) => {
+                                const { label, effectiveWeight } = displayLoad(s);
                                 const est =
-                                  s.weight_lbs != null && s.reps != null
-                                    ? oneRmEpley(Number(s.weight_lbs), Number(s.reps))
+                                  effectiveWeight != null && s.reps != null
+                                    ? oneRmEpley(Number(effectiveWeight), Number(s.reps))
                                     : null;
 
                                 return (
                                   <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                                     <div>
-                                      <b>{s.set_number}.</b> {s.weight_lbs ?? "—"} x {s.reps ?? "—"}
+                                      <b>{s.set_number}.</b> {label} x {s.reps ?? "—"}
                                       {s.is_warmup ? " (WU)" : ""}
                                       {s.rpe != null ? ` @RPE ${s.rpe}` : ""}
                                     </div>
