@@ -234,6 +234,17 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
 
+  // Band analytics (offline-first)
+  type BandWeekly = {
+    bandSetsThis: number;
+    bandSetsPrev: number;
+    assistThis: number;
+    resistThis: number;
+    levelCountsThis: number[]; // idx 0..4 => level 1..5
+  };
+  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
+  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
+
   // Date
   const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
 
@@ -422,16 +433,6 @@ useEffect(() => {
       const dexieAny = localdb as any;
       const tableList: any[] = dexieAny.tables ?? [];
 
-  // Band analytics (offline-first)
-  type BandWeekly = {
-    bandSetsThis: number;
-    bandSetsPrev: number;
-    assistThis: number;
-    resistThis: number;
-    levelCountsThis: number[]; // idx 0..4 => level 1..5
-  };
-  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
-  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
       for (const t of tableList) {
         const name = t.name as string;
@@ -2184,6 +2185,8 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
     </div>
   );
 }
+
+
 
 
 
