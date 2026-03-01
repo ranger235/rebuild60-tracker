@@ -1698,11 +1698,10 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
                   </div>
                 </div>
               </div>
-
-              <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
-                <b>Coach says:</b>{"
-"}{weeklyCoach.coachLine}
-              </div>
+<div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
+  <b>Coach says:</b>{" "}
+  {weeklyCoach.coachLine}
+</div>
             </div>
           )}
 
