@@ -326,6 +326,17 @@ export default function App() {
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
+  // Band analytics (offline-first)
+  type BandWeekly = {
+    bandSetsThis: number;
+    bandSetsPrev: number;
+    assistThis: number;
+    resistThis: number;
+    levelCountsThis: number[]; // idx 0..4 => level 1..5
+  };
+  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
+  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
+
   // -----------------------------
   // Auth boot + autosync
   // -----------------------------
@@ -504,17 +515,6 @@ useEffect(() => {
       const tables: Record<string, any[]> = {};
       const dexieAny = localdb as any;
       const tableList: any[] = dexieAny.tables ?? [];
-
-  // Band analytics (offline-first)
-  type BandWeekly = {
-    bandSetsThis: number;
-    bandSetsPrev: number;
-    assistThis: number;
-    resistThis: number;
-    levelCountsThis: number[]; // idx 0..4 => level 1..5
-  };
-  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
-  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
       for (const t of tableList) {
         const name = t.name as string;
@@ -2300,6 +2300,8 @@ useEffect(() => {
     </div>
   );
 }
+
+
 
 
 
