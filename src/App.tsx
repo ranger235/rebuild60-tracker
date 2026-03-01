@@ -316,6 +316,18 @@ export default function App() {
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
+  // Band analytics (offline-first)
+  type BandWeekly = {
+    bandSetsThis: number;
+    bandSetsPrev: number;
+    assistThis: number;
+    resistThis: number;
+    levelCountsThis: number[]; // idx 0..4 => level 1..5
+  };
+  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
+  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
+
+
   // -----------------------------
   // Auth boot + autosync
   // -----------------------------
@@ -421,17 +433,6 @@ useEffect(() => {
       const tables: Record<string, any[]> = {};
       const dexieAny = localdb as any;
       const tableList: any[] = dexieAny.tables ?? [];
-
-  // Band analytics (offline-first)
-  type BandWeekly = {
-    bandSetsThis: number;
-    bandSetsPrev: number;
-    assistThis: number;
-    resistThis: number;
-    levelCountsThis: number[]; // idx 0..4 => level 1..5
-  };
-  const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
-  const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
       for (const t of tableList) {
         const name = t.name as string;
@@ -1188,8 +1189,6 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
       const bandResistByDay = new Map<string, number>();
       const bandLevelsByDay = new Map<string, number[]>(); // day -> [lvl1..lvl5] counts
 
-      const highRpeByDay = new Map<string, number>(); // day -> count of hard work sets (RPE>=9, non-warmup)
-
       // Per-day best e1RM for selected lift buckets (by exercise name match)
       const bestBenchE1RM = new Map<string, number>();
       const bestSquatE1RM = new Map<string, number>();
@@ -1208,11 +1207,6 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
         if (startDay && day < startDay) continue;
 
         setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
-
-        // Hard-set counter for fatigue guardrails (ignore warmups)
-        if (!(s as any).is_warmup && (s as any).rpe != null && Number((s as any).rpe) >= 9) {
-          highRpeByDay.set(day, (highRpeByDay.get(day) ?? 0) + 1);
-        }
 
         // Band analytics
         if ((s as any).load_type === "band") {
@@ -1322,64 +1316,12 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
       const tonPct = pct(tonThis, tonPrev);
       const setsPct = pct(setsThis, setsPrev);
 
-      
-      const benchPrevBest = bestInRange(bestBenchE1RM, prevDays);
-      const squatPrevBest = bestInRange(bestSquatE1RM, prevDays);
-      const dlPrevBest = bestInRange(bestDlE1RM, prevDays);
-
-      const avgDefined = (vals: Array<number | undefined>) => {
-        const xs = vals.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-        if (xs.length === 0) return 0;
-        return xs.reduce((a, b) => a + b, 0) / xs.length;
-      };
-
-      const strengthThis = avgDefined([benchBest, squatBest, dlBest]);
-      const strengthPrev = avgDefined([benchPrevBest, squatPrevBest, dlPrevBest]);
-      const strengthPct = pct(strengthThis, strengthPrev);
-
-      const hardSetsThis = sumMap(highRpeByDay, thisDays);
-
-      const dropFlags: string[] = [];
-      if (benchBest != null && benchPrevBest != null && benchBest < benchPrevBest * 0.9) dropFlags.push("bench");
-      if (squatBest != null && squatPrevBest != null && squatBest < squatPrevBest * 0.9) dropFlags.push("squat");
-      if (dlBest != null && dlPrevBest != null && dlBest < dlPrevBest * 0.9) dropFlags.push("deadlift");
-
-      const lines: string[] = [];
-
-      // Primary weekly message
-      if (sessionsThis === 0) {
-        lines.push("No sessions logged in the last 7 days — get one on the board.");
-      } else if (tonThis > tonPrev && tonPct >= 10) {
-        lines.push("Volume is up — nice. Keep intensity honest and recover hard.");
-      } else if (tonThis < tonPrev && tonPct <= -10) {
-        lines.push("Volume dipped — fine if planned. If not, tighten the routine this week.");
-      } else if (setsThis > setsPrev && setsPct >= 10) {
-        lines.push("More work sets this week — solid. Watch joints and sleep.");
-      } else if (setsThis < setsPrev && setsPct <= -10) {
-        lines.push("Fewer sets this week — could be recovery or could be drift. Choose deliberately.");
-      } else {
-        lines.push("Keep the wheels turning. Small wins, repeated.");
-      }
-
-      // Strength trend (based on best e1RM buckets)
-      if (strengthPrev > 0) {
-        if (strengthPct >= 3) lines.push(`Strength trend: up (~${Math.round(strengthPct)}%). Keep compounds crisp; don’t chase grinders.`);
-        else if (strengthPct <= -3) lines.push(`Strength trend: down (~${Math.round(Math.abs(strengthPct))}%). Hold loads and earn reps back.`);
-        else lines.push("Strength trend: flat. That’s fine — nudge reps up before adding load.");
-      }
-
-      // Fatigue guardrails
-      if (hardSetsThis >= 3) {
-        lines.push(`Fatigue flag: ${hardSetsThis} hard sets (RPE 9+) in the last 7 days. Consider holding load for compounds next session.`);
-      }
-      if (dropFlags.length > 0) {
-        lines.push(`Performance dip: best ${dropFlags.join(", ")} e1RM is >10% below last week. If this wasn’t planned, back off and rebuild.`);
-      }
-
-      // Hybrid rules reminder (Option C)
-      lines.push("Rule: compounds = small jumps / clean reps; accessories = reps-first to 12–15 then load; bands = resist reps→level, assist level→less assist.");
-
-      const coachLine = lines.join("\n");
+      let coachLine = "Keep the wheels turning.";
+      if (sessionsThis === 0) coachLine = "No sessions logged in the last 7 days — get one on the board.";
+      else if (tonThis > tonPrev && tonPct >= 10) coachLine = "Volume is up — nice. Keep intensity honest and recover hard.";
+      else if (tonThis < tonPrev && tonPct <= -10) coachLine = "Volume dipped — fine if planned. If not, tighten the routine this week.";
+      else if (setsThis > setsPrev && setsPct >= 10) coachLine = "More work sets this week — solid. Watch joints and sleep.";
+      else if (setsThis < setsPrev && setsPct <= -10) coachLine = "Fewer sets this week — could be recovery or could be drift. Choose deliberately.";
 
       setWeeklyCoach({
         thisWeekStart: fmt(startThis),
@@ -1698,10 +1640,10 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
                   </div>
                 </div>
               </div>
-<div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
-  <b>Coach says:</b>{" "}
-  {weeklyCoach.coachLine}
-</div>
+
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                <b>Coach says:</b> {weeklyCoach.coachLine}
+              </div>
             </div>
           )}
 
