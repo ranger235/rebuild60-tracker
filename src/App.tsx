@@ -293,6 +293,9 @@ export default function App() {
   // Dashboard computed series
   const [dashBusy, setDashBusy] = useState(false);
   const [analyticsStartDate, setAnalyticsStartDate] = useState<string | null>(null);
+  type RecoveryMode = "hold" | "minus5" | "cap8";
+  const [recoveryMode, setRecoveryMode] = useState<RecoveryMode | null>(null);
+  const [recoveryModeDraft, setRecoveryModeDraft] = useState<RecoveryMode>("hold");
   type WeeklyCoach = {
     thisWeekStart: string;
     thisWeekEnd: string;
@@ -360,6 +363,16 @@ useEffect(() => {
   })();
 }, [userId]);
 
+
+useEffect(() => {
+  if (!userId) return;
+  void (async () => {
+    const m = await getRecoveryMode(userId);
+    setRecoveryMode(m);
+    setRecoveryModeDraft(m ?? "hold");
+  })();
+}, [userId]);
+
   // Timer tick
   useEffect(() => {
     if (!timerOn) return;
@@ -417,7 +430,37 @@ useEffect(() => {
     } as any);
   }
 
-  async function getEarliestSessionDay(uid: string): Promise<string> {
+  
+  async function getRecoveryMode(uid: string): Promise<RecoveryMode | null> {
+    try {
+      const row = await localdb.localSettings.get([uid, "coach_recovery_mode"] as any);
+      const v = (row?.value ?? null) as any;
+      if (v === "hold" || v === "minus5" || v === "cap8") return v;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function setRecoveryModeForUser(uid: string, mode: RecoveryMode | null): Promise<void> {
+    const key = "coach_recovery_mode";
+    if (!mode) {
+      try {
+        await localdb.localSettings.delete([uid, key] as any);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    await localdb.localSettings.put({
+      user_id: uid,
+      key,
+      value: mode,
+      updatedAt: Date.now()
+    } as any);
+  }
+
+async function getEarliestSessionDay(uid: string): Promise<string> {
     const rows = await localdb.localSessions.where("user_id").equals(uid).sortBy("day_date");
     return rows[0]?.day_date ?? new Date().toISOString().slice(0, 10);
   }
@@ -631,8 +674,40 @@ useEffect(() => {
   }
 
 
-function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweight" | "band"; weightLbs?: number | null; reps?: number | null; bandLevel?: number | null; bandMode?: "assist" | "resist" | null; bandConfig?: "single" | "doubled" | null; bandEstLbs?: number | null }) {
+function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweight" | "band"; weightLbs?: number | null; reps?: number | null; bandLevel?: number | null; bandMode?: "assist" | "resist" | null; bandConfig?: "single" | "doubled" | null; bandEstLbs?: number | null }, compound?: boolean, exSets?: any[]) {
   const patch: Partial<ExerciseDraft> = { warmup: false };
+
+  // Recovery mode influences targets (Coach v2.6)
+  const mode = recoveryMode;
+
+  const lastWork = Array.isArray(exSets)
+    ? [...exSets].reverse().find((s: any) => !s.is_warmup && (s.weight_lbs != null || (s as any).load_type === "band" || (s as any).load_type === "bodyweight"))
+    : null;
+
+  const lastWeight = lastWork && lastWork.weight_lbs != null ? Number(lastWork.weight_lbs) : null;
+  const lastBandLevel = lastWork && (lastWork as any).load_type === "band" ? Number((lastWork as any).band_level ?? 0) : null;
+  const lastBandMode = lastWork && (lastWork as any).load_type === "band" ? ((lastWork as any).band_mode as any) : null;
+
+  const round5 = (x: number) => Math.round(x / 5) * 5;
+
+  // Cap RPE mode sets a default RPE field
+  if (mode === "cap8") {
+    patch.rpe = "8";
+  }
+
+  if (compound && mode === "minus5" && t.loadType === "weight" && t.weightLbs != null) {
+    t = { ...t, weightLbs: round5(Number(t.weightLbs) * 0.95) };
+  }
+
+  if (compound && mode === "hold") {
+    if (t.loadType === "weight" && t.weightLbs != null && lastWeight != null && Number(t.weightLbs) > lastWeight) {
+      t = { ...t, weightLbs: lastWeight };
+    }
+    if (t.loadType === "band" && (t.bandMode ?? "resist") === "resist" && lastBandMode === "resist" && lastBandLevel != null && t.bandLevel != null && Number(t.bandLevel) > lastBandLevel) {
+      t = { ...t, bandLevel: lastBandLevel };
+    }
+  }
+
 
   if (t.loadType === "bodyweight") {
     patch.loadType = "bodyweight";
@@ -1188,6 +1263,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
       const bandAssistByDay = new Map<string, number>();
       const bandResistByDay = new Map<string, number>();
       const bandLevelsByDay = new Map<string, number[]>(); // day -> [lvl1..lvl5] counts
+      const hardSetsByDay = new Map<string, number>(); // day -> hard work sets (RPE>=9)
 
       // Per-day best e1RM for selected lift buckets (by exercise name match)
       const bestBenchE1RM = new Map<string, number>();
@@ -1207,6 +1283,13 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
         if (startDay && day < startDay) continue;
 
         setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
+
+        // Fatigue: count hard work sets (RPE >= 9, non-warmup)
+        const rpe = (s as any).rpe as (number | null | undefined);
+        const isWarm = (s as any).is_warmup as (boolean | null | undefined);
+        if (!isWarm && rpe != null && rpe >= 9) {
+          hardSetsByDay.set(day, (hardSetsByDay.get(day) ?? 0) + 1);
+        }
 
         // Band analytics
         if ((s as any).load_type === "band") {
@@ -1323,6 +1406,46 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
       else if (setsThis > setsPrev && setsPct >= 10) coachLine = "More work sets this week — solid. Watch joints and sleep.";
       else if (setsThis < setsPrev && setsPct <= -10) coachLine = "Fewer sets this week — could be recovery or could be drift. Choose deliberately.";
 
+
+      // ---- Coach v2.6: trend + fatigue + recovery mode note (Hybrid) ----
+      const hardThis = thisDays.reduce((a, d) => a + (hardSetsByDay.get(d) ?? 0), 0);
+
+      const benchPrevBest = bestInRange(bestBenchE1RM, prevDays);
+      const squatPrevBest = bestInRange(bestSquatE1RM, prevDays);
+      const dlPrevBest = bestInRange(bestDlE1RM, prevDays);
+
+      const pct = (cur?: number, prev?: number) => {
+        if (!cur || !prev || prev <= 0) return null;
+        return ((cur - prev) / prev) * 100;
+      };
+
+      const deltas = [pct(benchBest, benchPrevBest), pct(squatBest, squatPrevBest), pct(dlBest, dlPrevBest)].filter((x): x is number => x != null);
+      const trendPct = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : 0;
+      const trendLabel = deltas.length
+        ? (trendPct >= 3 ? `up (~${Math.round(trendPct)}%)` : trendPct <= -3 ? `down (~${Math.round(Math.abs(trendPct))}%)` : "flat")
+        : "n/a";
+
+      const perfDip =
+        (pct(benchBest, benchPrevBest) != null && (pct(benchBest, benchPrevBest) as number) <= -10) ||
+        (pct(squatBest, squatPrevBest) != null && (pct(squatBest, squatPrevBest) as number) <= -10) ||
+        (pct(dlBest, dlPrevBest) != null && (pct(dlBest, dlPrevBest) as number) <= -10);
+
+      const fatigueFlag = hardThis >= 3 || perfDip;
+
+      const modeActive = recoveryMode ?? "none";
+      const lines: string[] = [];
+      lines.push(`Trend: ${trendLabel}`);
+      if (fatigueFlag) {
+        const bits: string[] = [];
+        if (hardThis >= 3) bits.push(`${hardThis} hard sets (RPE 9+)`);
+        if (perfDip) bits.push("performance dip (≥10%)");
+        lines.push(`Fatigue: ${bits.join(" • ")}`);
+      } else {
+        lines.push("Fatigue: clear");
+      }
+      if (modeActive !== "none") lines.push(`Recovery mode active: ${modeActive}`);
+      lines.push(coachLine);
+      coachLine = lines.join("\n");
       setWeeklyCoach({
         thisWeekStart: fmt(startThis),
         thisWeekEnd: fmt(endDay),
@@ -1641,8 +1764,30 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
                 </div>
               </div>
 
-              <div style={{ marginTop: 10, fontSize: 13 }}>
-                <b>Coach says:</b> {weeklyCoach.coachLine}
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #eee" }}>
+                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Recovery Mode</div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                    <input type="radio" name="recoveryMode" checked={recoveryModeDraft === "hold"} onChange={() => setRecoveryModeDraft("hold")} />
+                    Hold load
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                    <input type="radio" name="recoveryMode" checked={recoveryModeDraft === "minus5"} onChange={() => setRecoveryModeDraft("minus5")} />
+                    -5% compounds
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                    <input type="radio" name="recoveryMode" checked={recoveryModeDraft === "cap8"} onChange={() => setRecoveryModeDraft("cap8")} />
+                    Cap RPE 8
+                  </label>
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                  <button onClick={async () => { if (!userId) return; await setRecoveryModeForUser(userId, recoveryModeDraft); setRecoveryMode(recoveryModeDraft); }}>Apply Recovery Mode</button>
+                  <button onClick={async () => { if (!userId) return; await setRecoveryModeForUser(userId, null); setRecoveryMode(null); setRecoveryModeDraft("hold"); }}>Clear Plan</button>
+                  <div style={{ fontSize: 12, opacity: 0.7, alignSelf: "center" }}>Active: <b>{recoveryMode ?? "none"}</b></div>
+                </div>
+                <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
+                  <b>Coach says:</b>{" "}{weeklyCoach.coachLine}
+                </div>
               </div>
             </div>
           )}
@@ -2156,7 +2301,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
                             exerciseName={ex.name}
                             sets={exSets}
                             compound={compound}
-                            onApplyTarget={(t) => applyNextTarget(ex.id, t as any)}
+                            onApplyTarget={(t) => applyNextTarget(ex.id, t as any, compound, exSets)}
                           />
                         )}
 
@@ -2185,6 +2330,8 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
     </div>
   );
 }
+
+
 
 
 
