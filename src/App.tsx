@@ -169,7 +169,7 @@ function LineChart({
 
   if (!points || points.length === 0) {
     return (
-      <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+      <div className="card" style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
         <div style={{ fontWeight: 800 }}>{title}</div>
         <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>No data yet.</div>
       </div>
@@ -197,7 +197,7 @@ function LineChart({
   const last = points[points.length - 1]?.y ?? 0;
 
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+    <div className="card" style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
         <div style={{ fontWeight: 800 }}>{title}</div>
         <div style={{ fontSize: 12, opacity: 0.8 }}>
@@ -1705,7 +1705,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
 
   if (!userId) {
     return (
-      <div style={{ padding: 20, maxWidth: 520 }}>
+      <div className="app app-auth" style={{ padding: 20, maxWidth: 520 }}>
         <h2>Rebuild @ 60 Tracker</h2>
         <p>Login for private, offline-first logging.</p>
 
@@ -1734,8 +1734,8 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
   const openSessionObj = sessions.find((s) => s.id === openSessionId) ?? null;
 
   return (
-    <div style={{ padding: 20, maxWidth: 950 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="app" style={{ padding: 20, maxWidth: 950 }}>
+      <div className="topbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>Rebuild @ 60 Tracker</h2>
         <button onClick={signOut}>Sign Out</button>
       </div>
@@ -1770,7 +1770,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+      <div className="tabbar" style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
         <button onClick={() => setTab("quick")} disabled={tab === "quick"}>
           Quick Log
         </button>
@@ -1809,7 +1809,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
             Delete your test sessions and refresh to clean the charts.
           </div>
 
-          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+          <div className="card card-soft" style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
   <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics window</div>
   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
     <label style={{ fontSize: 12, opacity: 0.8 }}>
@@ -1876,7 +1876,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
 
           
           {weeklyCoach && (
-            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
+            <div className="card" style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 800 }}>Weekly Coach Summary</div>
                 <div style={{ fontSize: 12, opacity: 0.75 }}>
@@ -1947,7 +1947,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
 
 
           {bandWeekly && (
-            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
+            <div className="card" style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 800 }}>Band Work (7d)</div>
                 <div style={{ fontSize: 12, opacity: 0.75 }}>Prev 7d: {bandWeekly.bandSetsPrev}</div>
@@ -2010,7 +2010,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
             <LineChart title="Zone 2 minutes — last 28 days" points={zone2Series} />
           </div>
 
-          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+          <div className="card card-soft" style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Notes (last 14 days)</div>
             {notesFeed.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.75 }}>No notes saved yet.</div>
@@ -2062,7 +2062,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
           <hr />
 
           <h3>Backup / Restore</h3>
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
+          <div className="card" style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button onClick={exportBackup} disabled={backupBusy}>
                 {backupBusy ? "Working…" : "Export Backup (.json)"}
@@ -2114,7 +2114,7 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
           <h3>Workout Logger</h3>
 
           {/* Templates block */}
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12, marginTop: 10 }}>
+          <div className="card" style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12, marginTop: 10 }}>
             <h4 style={{ marginTop: 0 }}>Templates</h4>
 
             <div style={{ display: "grid", gap: 8 }}>
@@ -2510,6 +2510,8 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
     </div>
   );
 }
+
+
 
 
 
