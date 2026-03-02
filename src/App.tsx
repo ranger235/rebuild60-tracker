@@ -1414,21 +1414,21 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
       const squatPrevBest = bestInRange(bestSquatE1RM, prevDays);
       const dlPrevBest = bestInRange(bestDlE1RM, prevDays);
 
-      const pct = (cur?: number, prev?: number) => {
+      const pctChange = (cur?: number, prev?: number) => {
         if (!cur || !prev || prev <= 0) return null;
         return ((cur - prev) / prev) * 100;
       };
 
-      const deltas = [pct(benchBest, benchPrevBest), pct(squatBest, squatPrevBest), pct(dlBest, dlPrevBest)].filter((x): x is number => x != null);
+      const deltas = [pctChange(benchBest, benchPrevBest), pctChange(squatBest, squatPrevBest), pctChange(dlBest, dlPrevBest)].filter((x): x is number => x != null);
       const trendPct = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : 0;
       const trendLabel = deltas.length
         ? (trendPct >= 3 ? `up (~${Math.round(trendPct)}%)` : trendPct <= -3 ? `down (~${Math.round(Math.abs(trendPct))}%)` : "flat")
         : "n/a";
 
       const perfDip =
-        (pct(benchBest, benchPrevBest) != null && (pct(benchBest, benchPrevBest) as number) <= -10) ||
-        (pct(squatBest, squatPrevBest) != null && (pct(squatBest, squatPrevBest) as number) <= -10) ||
-        (pct(dlBest, dlPrevBest) != null && (pct(dlBest, dlPrevBest) as number) <= -10);
+        (pctChange(benchBest, benchPrevBest) != null && (pctChange(benchBest, benchPrevBest) as number) <= -10) ||
+        (pctChange(squatBest, squatPrevBest) != null && (pctChange(squatBest, squatPrevBest) as number) <= -10) ||
+        (pctChange(dlBest, dlPrevBest) != null && (pctChange(dlBest, dlPrevBest) as number) <= -10);
 
       const fatigueFlag = hardThis >= 3 || perfDip;
 
@@ -2330,6 +2330,8 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
     </div>
   );
 }
+
+
 
 
 
