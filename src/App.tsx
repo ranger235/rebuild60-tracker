@@ -1045,6 +1045,30 @@ async function addSet(exerciseId: string) {
     setTemplateExercises(ex);
   }
 
+  async function deleteTemplate(templateId: string) {
+    if (!userId) return;
+    const t = templates.find((x) => x.id === templateId);
+    const ok = window.confirm(`Delete template “${t?.name ?? "(unknown)"}”? This cannot be undone.`);
+    if (!ok) return;
+
+    // Local delete first (offline-first)
+    await localdb.transaction("rw", localdb.localTemplateExercises, localdb.localTemplates, async () => {
+      await localdb.localTemplateExercises.where({ template_id: templateId }).delete();
+      await localdb.localTemplates.delete(templateId);
+    });
+
+    // If this template is open, clear UI state
+    if (openTemplateId === templateId) {
+      setOpenTemplateId(null);
+      setTemplateExercises([]);
+    }
+
+    // Queue cloud delete
+    await enqueue("delete_template", { template_id: templateId, user_id: userId });
+
+    await loadTemplates();
+  }
+
   async function createTemplate() {
     if (!userId) return;
     const name = newTemplateName.trim();
@@ -1182,38 +1206,6 @@ async function addSet(exerciseId: string) {
     setTab("workout");
     alert("Session created from template (instant).");
   }
-
-
-  async function deleteTemplate(templateId: string) {
-    if (!userId) return;
-
-    const t = templates.find((x) => x.id === templateId) ?? null;
-    const label = t ? t.name : templateId;
-
-    const ok = confirm(
-      `Delete this template?\n\n${label}\n\nThis removes it locally immediately and queues a cloud delete.`
-    );
-    if (!ok) return;
-
-    try {
-      await localdb.transaction("rw", localdb.localTemplates, localdb.localTemplateExercises, async () => {
-        await localdb.localTemplateExercises.where({ template_id: templateId }).delete();
-        await localdb.localTemplates.delete(templateId);
-      });
-
-      await enqueue("delete_template", { template_id: templateId });
-
-      setOpenTemplateId((cur) => (cur === templateId ? null : cur));
-      if (openTemplateId === templateId) setTemplateExercises([]);
-
-      await loadTemplates();
-      alert("Template deleted (local). Will sync delete when online.");
-    } catch (e: any) {
-      console.error(e);
-      alert(`Delete failed: ${e?.message ?? String(e)}`);
-    }
-  }
-
 
   // -----------------------------
   // Last numbers
@@ -2060,7 +2052,7 @@ setTonnageSeries(tonSeries);
             {templates.length > 0 && (
               <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                 {templates.map((t) => (
-                  <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+                  <div key={t.id} style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
                     <button
                       onClick={() => openTemplate(t.id)}
                       style={{
@@ -2078,13 +2070,14 @@ setTonnageSeries(tonSeries);
                     <button
                       onClick={() => deleteTemplate(t.id)}
                       title="Delete template"
-                      style={{ minWidth: 88, opacity: 0.9 }}
+                      style={{ whiteSpace: "nowrap" }}
                     >
                       Delete
                     </button>
                   </div>
                 ))}
-          
+              </div>
+            )}
 
             {openTemplateId && (
               <div style={{ marginTop: 12 }}>
@@ -2447,6 +2440,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
