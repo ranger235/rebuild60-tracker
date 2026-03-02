@@ -1,121 +1,148 @@
 import type { Handler } from "@netlify/functions";
 
-/**
- * Netlify Function: /.netlify/functions/coach-ai
- *
- * Calls OpenAI Responses API server-side (API key stays in Netlify env vars).
- * Expects POST JSON: { userId?: string, weekStart?: string, summary: string }
- * Returns: { text: string, model: string, timestamp: string }
- */
+type OpenAIResponse = any;
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+function pickSummary(body: any): string {
+  if (!body) return "";
+  // Accept multiple client payload shapes (to avoid front-end mismatch).
+  // Preferred: { summary: "..." }
+  // Also accept: { prompt: "..." }, { text: "..." }, { input: "..." }, { payload: {...} }
+  const s =
+    body.summary ??
+    body.prompt ??
+    body.text ??
+    body.input ??
+    (typeof body.payload === "string" ? body.payload : undefined);
 
-function jsonResponse(statusCode: number, body: any) {
-  return {
-    statusCode,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
-      "access-control-allow-headers": "content-type",
-      "access-control-allow-methods": "POST,OPTIONS",
-    },
-    body: JSON.stringify(body),
-  };
-}
+  if (typeof s === "string" && s.trim()) return s.trim();
 
-function extractOutputText(resp: any): string {
-  // Responses API returns an "output" array with message items containing content blocks.
-  const out = resp?.output;
-  if (!Array.isArray(out)) return "";
-
-  const chunks: string[] = [];
-
-  for (const item of out) {
-    if (item?.type === "message" && item?.role === "assistant" && Array.isArray(item?.content)) {
-      for (const c of item.content) {
-        if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
-        if (c?.type === "summary_text" && typeof c?.text === "string") chunks.push(c.text);
-      }
+  // If we got an object payload, stringify a compact version as fallback.
+  if (body.payload && typeof body.payload === "object") {
+    try {
+      return JSON.stringify(body.payload);
+    } catch {
+      /* ignore */
     }
   }
-
-  // Some SDKs also provide a convenience field.
-  if (chunks.length === 0 && typeof resp?.output_text === "string") return resp.output_text;
-
-  return chunks.join("\n").trim();
+  // Last resort: stringify body (but cap length)
+  try {
+    const raw = JSON.stringify(body);
+    return raw.length > 12000 ? raw.slice(0, 12000) + "…(truncated)" : raw;
+  } catch {
+    return "";
+  }
 }
 
 export const handler: Handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") return jsonResponse(204, {});
-  if (event.httpMethod !== "POST") return jsonResponse(405, { error: "Method not allowed. Use POST." });
-
-  if (!OPENAI_API_KEY) {
-    return jsonResponse(500, { error: "Missing OPENAI_API_KEY in Netlify environment variables." });
-  }
-
-  let payload: any = null;
   try {
-    payload = event.body ? JSON.parse(event.body) : null;
-  } catch {
-    return jsonResponse(400, { error: "Invalid JSON body." });
-  }
-
-  const summary = String(payload?.summary ?? "").trim();
-  if (!summary) return jsonResponse(400, { error: "Missing 'summary' in request body." });
-
-  const model = "gpt-5.2";
-  const timestamp = new Date().toISOString();
-
-  // IMPORTANT: In Responses API, message content blocks must be typed as "input_text" (not "text").
-  const input = [
-    {
-      role: "developer",
-      content: [
-        {
-          type: "input_text",
-          text:
-            "You are a no-nonsense strength coach for a 60-year-old lifter running a hybrid program: conservative progression on compounds, aggressive reps-first on accessories, band resist/assist supported, and recovery-aware (sleep/protein/zone2). " +
-            "Give concise, practical suggestions. Use bullet points. Avoid medical claims. If fatigue is flagged, propose a recovery mode (hold, -5%, or cap RPE 8).",
-        },
-      ],
-    },
-    {
-      role: "user",
-      content: [{ type: "input_text", text: summary }],
-    },
-  ];
-
-  const reqBody: any = {
-    model,
-    input,
-    // Keep it tight; the UI can call again later.
-    max_output_tokens: 600,
-  };
-
-  try {
-    const r = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "authorization": `Bearer ${OPENAI_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(reqBody),
-    });
-
-    const data = await r.json();
-
-    if (!r.ok) {
-      return jsonResponse(r.status, {
-        error: data?.error?.message ?? "OpenAI API error",
-        details: data?.error ?? data,
-      });
+    if (event.httpMethod !== "POST") {
+      return {
+        statusCode: 405,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "Method not allowed. Use POST." }),
+      };
     }
 
-    const text = extractOutputText(data) || "(No text returned.)";
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return {
+        statusCode: 500,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ error: "Missing OPENAI_API_KEY environment variable." }),
+      };
+    }
 
-    return jsonResponse(200, { text, model, timestamp });
+    const body = event.body ? JSON.parse(event.body) : null;
+    const summary = pickSummary(body);
+
+    if (!summary) {
+      return {
+        statusCode: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          error: "Missing coaching summary payload.",
+          hint: "Send JSON with { summary: '...' } (preferred). This function also accepts { prompt }, { text }, or { payload }.",
+        }),
+      };
+    }
+
+    const system = [
+      "You are Rev, a no-BS hybrid bodybuilding coach for a 60-year-old lifter (offline-first Rebuild @ 60 Tracker).",
+      "Tone: practical, encouraging, slightly profane, classic old-school training mindset.",
+      "Output MUST be concise, multi-line, actionable. No medical claims; suggest seeing clinician for symptoms.",
+      "Use the data provided. Provide: (1) headline, (2) 3–6 bullets, (3) next-session targets (compounds + accessories + bands), (4) recovery mode suggestion if warranted.",
+    ].join("\n");
+
+    const userPrompt = [
+      "Here is the latest 7–14 day training + quick log summary from the app.",
+      "Analyze trends, fatigue, and give next-session targets. Keep it short and punchy.",
+      "",
+      summary,
+    ].join("\n");
+
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-5.2",
+        input: [
+          { role: "system", content: [{ type: "input_text", text: system }] },
+          { role: "user", content: [{ type: "input_text", text: userPrompt }] },
+        ],
+        // Keep responses reasonably sized; user wants twice/day.
+        max_output_tokens: 900,
+      }),
+    });
+
+    const data: OpenAIResponse = await resp.json();
+
+    if (!resp.ok) {
+      return {
+        statusCode: resp.status,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          error: "OpenAI request failed",
+          details: data,
+        }),
+      };
+    }
+
+    // Extract output text (Responses API returns an array of output items).
+    let text = "";
+    const output = data?.output;
+    if (Array.isArray(output)) {
+      for (const item of output) {
+        if (item?.type === "output_text" && typeof item?.text === "string") {
+          text += item.text;
+        } else if (item?.content && Array.isArray(item.content)) {
+          for (const c of item.content) {
+            if (c?.type === "output_text" && typeof c?.text === "string") text += c.text;
+            if (c?.type === "summary_text" && typeof c?.text === "string" && !text) text += c.text;
+          }
+        }
+      }
+    }
+    if (!text && typeof data?.output_text === "string") text = data.output_text;
+
+    return {
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text: text || "(No text returned.)",
+        model: data?.model ?? "gpt-5.2",
+        timestamp: new Date().toISOString(),
+      }),
+    };
   } catch (err: any) {
-    return jsonResponse(500, { error: "Server error calling OpenAI.", details: String(err?.message ?? err) });
+    return {
+      statusCode: 500,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ error: "Server error", message: String(err?.message ?? err) }),
+    };
   }
 };
+
 
