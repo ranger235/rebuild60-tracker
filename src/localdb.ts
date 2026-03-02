@@ -15,9 +15,9 @@ export type PendingOpName =
   | "insert_exercise"
   | "insert_set"
   | "create_template"
-  | "delete_template"
   | "insert_template_exercise"
   | "update_template_exercise"
+  | "delete_template"
   | "delete_session"
   | "delete_set"
   | "renumber_sets"
@@ -213,6 +213,8 @@ export class RebuildDB extends Dexie {
 }
 
 export const localdb = new RebuildDB();
+
+
 
 ;
 
