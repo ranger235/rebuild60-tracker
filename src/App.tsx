@@ -6,6 +6,7 @@ import {
   type LocalWorkoutExercise,
   type LocalWorkoutSession,
   type LocalWorkoutSet,
+  type LoadType,
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
@@ -41,7 +42,12 @@ function isoToDay(iso: string): string {
 }
 
 type SetLite = {
+  load_type?: LoadType;
   weight_lbs: number | null;
+  band_level?: number | null;
+  band_mode?: "assist" | "resist" | null;
+  band_config?: "single" | "doubled" | null;
+  band_est_lbs?: number | null;
   reps: number | null;
   rpe: number | null;
   is_warmup: boolean;
@@ -54,18 +60,47 @@ type LastSetSummary = {
 };
 
 type ExerciseDraft = {
-  weight: string;
+  loadType: LoadType;
+  weight: string; // lbs when loadType=weight
+  bandLevel: string; // 1..5 when loadType=band
+  bandMode: "assist" | "resist";
+  bandConfig: "single" | "doubled";
+  bandEst: string; // optional estimated lbs when loadType=band
   reps: string;
   rpe: string;
   warmup: boolean;
 };
 
+const DEFAULT_DRAFT: ExerciseDraft = {
+  loadType: "weight",
+  weight: "",
+  bandLevel: "1",
+  bandMode: "resist",
+  bandConfig: "single",
+  bandEst: "",
+  reps: "",
+  rpe: "",
+  warmup: false
+};
+
 function formatSet(s: SetLite) {
-  const w = s.weight_lbs ?? "—";
   const r = s.reps ?? "—";
   const wu = s.is_warmup ? "WU" : "";
   const rpe = s.rpe != null ? `@${s.rpe}` : "";
-  return `${w}x${r}${wu}${rpe}`;
+  const lt: LoadType = (s.load_type ?? "weight") as LoadType;
+  let loadLabel = "—";
+  if (lt === "weight") {
+    loadLabel = s.weight_lbs != null ? String(s.weight_lbs) : "—";
+  } else if (lt === "bodyweight") {
+    loadLabel = "BW";
+  } else {
+    const lvl = s.band_level ?? null;
+    const mode = s.band_mode ?? null;
+    const cfg = s.band_config ?? null;
+    const est = s.band_est_lbs ?? null;
+    loadLabel = `B${lvl ?? "?"}${mode ? (mode === "assist" ? "A" : "R") : ""}${cfg ? (cfg === "doubled" ? "×2" : "") : ""}${est != null ? `~${est}` : ""}`;
+  }
+  return `${loadLabel}x${r}${wu}${rpe}`;
 }
 
 function isCompoundExercise(name: string): boolean {
@@ -642,7 +677,7 @@ async function saveQuickLog() {
     setDraftByExerciseId((prev) => {
       const next = { ...prev };
       for (const e of ex) {
-        if (!next[e.id]) next[e.id] = { weight: "", reps: "", rpe: "", warmup: false };
+        if (!next[e.id]) next[e.id] = DEFAULT_DRAFT;
       }
       return next;
     });
@@ -688,7 +723,7 @@ async function saveQuickLog() {
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [exerciseId]: { ...(prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }), ...patch }
+      [exerciseId]: { ...(prev[exerciseId] ?? DEFAULT_DRAFT), ...patch }
     }));
   }
 
@@ -721,7 +756,7 @@ async function saveQuickLog() {
 
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [id]: prev[id] ?? { weight: "", reps: "", rpe: "", warmup: false }
+      [id]: prev[id] ?? DEFAULT_DRAFT
     }));
 
     await openSession(openSessionId);
@@ -731,13 +766,39 @@ async function saveQuickLog() {
   }
 
   async function addSet(exerciseId: string) {
-    const d = draftByExerciseId[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false };
+    const d = draftByExerciseId[exerciseId] ?? DEFAULT_DRAFT;
 
     const reps = d.reps ? Number(d.reps) : null;
-    const w = d.weight ? Number(d.weight) : null;
-
     if (!reps || reps <= 0) {
       alert("Reps required.");
+      return;
+    }
+
+    const loadType: LoadType = (d.loadType ?? "weight") as LoadType;
+
+    // Parse load fields by type
+    const weight_lbs =
+      loadType === "weight" ? (d.weight ? Number(d.weight) : null) : null;
+
+    const band_level =
+      loadType === "band" ? (d.bandLevel ? Number(d.bandLevel) : null) : null;
+
+    const band_mode =
+      loadType === "band" ? (d.bandMode ?? "resist") : null;
+
+    const band_config =
+      loadType === "band" ? (d.bandConfig ?? "single") : null;
+
+    const band_est_lbs =
+      loadType === "band" ? (d.bandEst ? Number(d.bandEst) : null) : null;
+
+    if (loadType === "weight" && (weight_lbs == null || Number.isNaN(weight_lbs))) {
+      alert("Weight required for weight-based sets.");
+      return;
+    }
+
+    if (loadType === "band" && (!band_level || band_level < 1)) {
+      alert("Band level required for band sets.");
       return;
     }
 
@@ -749,7 +810,12 @@ async function saveQuickLog() {
       id,
       exercise_id: exerciseId,
       set_number: nextSetNumber,
-      weight_lbs: w,
+      load_type: loadType,
+      weight_lbs,
+      band_level,
+      band_mode,
+      band_config,
+      band_est_lbs,
       reps,
       rpe: advanced && d.rpe ? Number(d.rpe) : null,
       is_warmup: advanced ? !!d.warmup : false
@@ -761,13 +827,18 @@ async function saveQuickLog() {
       id,
       exercise_id: exerciseId,
       set_number: nextSetNumber,
-      weight_lbs: w,
+      load_type: loadType,
+      weight_lbs,
+      band_level,
+      band_mode,
+      band_config,
+      band_est_lbs,
       reps,
       rpe: advanced && d.rpe ? Number(d.rpe) : null,
       is_warmup: advanced ? !!d.warmup : false
     });
 
-    updateDraft(exerciseId, { weight: "", reps: "", rpe: "", warmup: false });
+    updateDraft(exerciseId, { ...DEFAULT_DRAFT });
 
     setSecs(90);
     setTimerOn(true);
@@ -779,7 +850,12 @@ async function saveQuickLog() {
       setLastByExerciseName((prev) => {
         const prevSummary = prev[ex.name];
         const appended: SetLite = {
-          weight_lbs: w ?? null,
+          load_type: loadType,
+          weight_lbs: weight_lbs ?? null,
+          band_level: band_level ?? null,
+          band_mode: band_mode ?? null,
+          band_config: band_config ?? null,
+          band_est_lbs: band_est_lbs ?? null,
           reps: reps ?? null,
           rpe: advanced && d.rpe ? Number(d.rpe) : null,
           is_warmup: advanced ? !!d.warmup : false
@@ -984,7 +1060,7 @@ async function saveQuickLog() {
 
       setDraftByExerciseId((prev) => ({
         ...prev,
-        [exerciseId]: prev[exerciseId] ?? { weight: "", reps: "", rpe: "", warmup: false }
+        [exerciseId]: prev[exerciseId] ?? DEFAULT_DRAFT
       }));
     }
 
@@ -1014,7 +1090,12 @@ async function saveQuickLog() {
     if (ss.length === 0) return null;
 
     const all = ss.map((x) => ({
+      load_type: (x.load_type ?? "weight") as LoadType,
       weight_lbs: x.weight_lbs ?? null,
+      band_level: x.band_level ?? null,
+      band_mode: x.band_mode ?? null,
+      band_config: x.band_config ?? null,
+      band_est_lbs: x.band_est_lbs ?? null,
       reps: x.reps ?? null,
       rpe: x.rpe ?? null,
       is_warmup: !!x.is_warmup
@@ -1060,7 +1141,7 @@ async function saveQuickLog() {
 
     const { data: ss, error: ssErr } = await supabase
       .from("workout_sets")
-      .select("weight_lbs, reps, rpe, is_warmup, set_number")
+      .select("load_type, weight_lbs, band_level, band_mode, band_config, band_est_lbs, reps, rpe, is_warmup, set_number")
       .eq("exercise_id", best.id)
       .order("set_number", { ascending: true });
 
@@ -1131,7 +1212,12 @@ async function saveQuickLog() {
     if (!chosen) return;
 
     updateDraft(exerciseId, {
+      loadType: (chosen.load_type ?? "weight") as LoadType,
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
+      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "1",
+      bandMode: (chosen.band_mode ?? "resist") as any,
+      bandConfig: (chosen.band_config ?? "single") as any,
+      bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
       warmup: !!chosen.is_warmup
@@ -1152,7 +1238,12 @@ async function saveQuickLog() {
     if (!chosen) return;
 
     updateDraft(exerciseId, {
+      loadType: (chosen.load_type ?? "weight") as LoadType,
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
+      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "1",
+      bandMode: (chosen.band_mode ?? "resist") as any,
+      bandConfig: (chosen.band_config ?? "single") as any,
+      bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
       warmup: !!chosen.is_warmup
@@ -1888,7 +1979,7 @@ async function saveQuickLog() {
                     const exSets = setsForExercise(ex.id);
                     const lastSummary = lastByExerciseName[ex.name];
                     const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
-                    const d = draftByExerciseId[ex.id] ?? { weight: "", reps: "", rpe: "", warmup: false };
+                    const d = draftByExerciseId[ex.id] ?? DEFAULT_DRAFT;
 
                     const compound = isCompoundExercise(ex.name);
                     const defaultLabel = compound ? "Default: 1st work" : "Default: top set";
@@ -1936,31 +2027,85 @@ async function saveQuickLog() {
                           )}
                         </div>
 
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
-                            gap: 8,
-                            marginTop: 10
-                          }}
-                        >
-                          <input
-                            placeholder="Weight"
-                            value={d.weight}
-                            onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
-                          />
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+                          <select
+                            value={d.loadType}
+                            onChange={(e) => updateDraft(ex.id, { loadType: e.target.value as any })}
+                          >
+                            <option value="weight">Weight</option>
+                            <option value="band">Band</option>
+                            <option value="bodyweight">Bodyweight</option>
+                          </select>
+
+                          {d.loadType === "weight" && (
+                            <input
+                              placeholder="Weight (lbs)"
+                              value={d.weight}
+                              onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
+                              style={{ width: 130 }}
+                            />
+                          )}
+
+                          {d.loadType === "band" && (
+                            <>
+                              <select
+                                value={d.bandLevel}
+                                onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
+                              >
+                                <option value="1">Band 1</option>
+                                <option value="2">Band 2</option>
+                                <option value="3">Band 3</option>
+                                <option value="4">Band 4</option>
+                                <option value="5">Band 5</option>
+                              </select>
+
+                              <select
+                                value={d.bandMode}
+                                onChange={(e) => updateDraft(ex.id, { bandMode: e.target.value as any })}
+                              >
+                                <option value="resist">Resist</option>
+                                <option value="assist">Assist</option>
+                              </select>
+
+                              <select
+                                value={d.bandConfig}
+                                onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
+                              >
+                                <option value="single">Single</option>
+                                <option value="doubled">Doubled</option>
+                              </select>
+
+                              <input
+                                placeholder="Est lbs (opt)"
+                                value={d.bandEst}
+                                onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value })}
+                                style={{ width: 130 }}
+                              />
+                            </>
+                          )}
+
+                          {d.loadType === "bodyweight" && (
+                            <div style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: 8, fontSize: 12 }}>
+                              BW
+                            </div>
+                          )}
+
                           <input
                             placeholder="Reps"
                             value={d.reps}
                             onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
+                            style={{ width: 90 }}
                           />
+
                           {advanced && (
                             <input
                               placeholder="RPE"
                               value={d.rpe}
                               onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
+                              style={{ width: 90 }}
                             />
                           )}
+
                           <button onClick={() => addSet(ex.id)}>Save Set</button>
                         </div>
 
@@ -1988,7 +2133,17 @@ async function saveQuickLog() {
                                 return (
                                   <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                                     <div>
-                                      <b>{s.set_number}.</b> {s.weight_lbs ?? "—"} x {s.reps ?? "—"}
+                                      <b>{s.set_number}.</b> {formatSet({
+                                        load_type: (s.load_type ?? "weight") as any,
+                                        weight_lbs: (s.weight_lbs ?? null) as any,
+                                        band_level: (s.band_level ?? null) as any,
+                                        band_mode: (s.band_mode ?? null) as any,
+                                        band_config: (s.band_config ?? null) as any,
+                                        band_est_lbs: (s.band_est_lbs ?? null) as any,
+                                        reps: (s.reps ?? null) as any,
+                                        rpe: (s.rpe ?? null) as any,
+                                        is_warmup: !!s.is_warmup
+                                      })}
                                       {s.is_warmup ? " (WU)" : ""}
                                       {s.rpe != null ? ` @RPE ${s.rpe}` : ""}
                                     </div>
