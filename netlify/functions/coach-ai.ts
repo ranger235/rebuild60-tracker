@@ -1,79 +1,121 @@
-// Netlify Function: AI Coach Add-on (server-side)
-// Reads OPENAI_API_KEY from Netlify environment variables.
+import type { Handler } from "@netlify/functions";
 
-function extractText(resp) {
-  if (typeof resp?.output_text === "string") return resp.output_text;
-  try {
-    const out = resp?.output;
-    if (Array.isArray(out)) {
-      for (const item of out) {
-        const content = item?.content;
-        if (Array.isArray(content)) {
-          for (const c of content) {
-            if (c?.type === "output_text" && typeof c?.text === "string") return c.text;
-            if (typeof c?.text === "string") return c.text;
-          }
-        }
-      }
-    }
-  } catch {}
-  return "";
+/**
+ * Netlify Function: /.netlify/functions/coach-ai
+ *
+ * Calls OpenAI Responses API server-side (API key stays in Netlify env vars).
+ * Expects POST JSON: { userId?: string, weekStart?: string, summary: string }
+ * Returns: { text: string, model: string, timestamp: string }
+ */
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+function jsonResponse(statusCode: number, body: any) {
+  return {
+    statusCode,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "POST,OPTIONS",
+    },
+    body: JSON.stringify(body),
+  };
 }
 
-export const handler = async (event) => {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: JSON.stringify({ error: "Method not allowed" }) };
+function extractOutputText(resp: any): string {
+  // Responses API returns an "output" array with message items containing content blocks.
+  const out = resp?.output;
+  if (!Array.isArray(out)) return "";
+
+  const chunks: string[] = [];
+
+  for (const item of out) {
+    if (item?.type === "message" && item?.role === "assistant" && Array.isArray(item?.content)) {
+      for (const c of item.content) {
+        if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
+        if (c?.type === "summary_text" && typeof c?.text === "string") chunks.push(c.text);
+      }
+    }
   }
 
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) {
-    return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY env var" }) };
+  // Some SDKs also provide a convenience field.
+  if (chunks.length === 0 && typeof resp?.output_text === "string") return resp.output_text;
+
+  return chunks.join("\n").trim();
+}
+
+export const handler: Handler = async (event) => {
+  if (event.httpMethod === "OPTIONS") return jsonResponse(204, {});
+  if (event.httpMethod !== "POST") return jsonResponse(405, { error: "Method not allowed. Use POST." });
+
+  if (!OPENAI_API_KEY) {
+    return jsonResponse(500, { error: "Missing OPENAI_API_KEY in Netlify environment variables." });
   }
 
-  let payload = null;
+  let payload: any = null;
   try {
     payload = event.body ? JSON.parse(event.body) : null;
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: "Invalid JSON body" }) };
+    return jsonResponse(400, { error: "Invalid JSON body." });
   }
 
-  const systemPrompt = "You are \"Rev\", an old-school, no-BS strength coach for a 60-year-old lifter running a hybrid program.\nYou are advisory only (not medical). Be practical, concise, and motivating. Use bullet points and short paragraphs.\nFocus on:\n- Conservative progression for compounds; reps-first and/or small load bumps.\n- More aggressive progression for accessories (reps-first).\n- Integrate recovery cues from sleep, protein, zone2, and training fatigue.\n- Recommend Recovery Mode if appropriate (Hold Load / -5% Compounds / Cap RPE 8).\nOutput: plain text only. No markdown tables. Max ~12 bullets total.";
-  const userText = `Here is the current training summary JSON. Provide coaching suggestions.\n\n${JSON.stringify(payload, null, 2)}`;
+  const summary = String(payload?.summary ?? "").trim();
+  if (!summary) return jsonResponse(400, { error: "Missing 'summary' in request body." });
+
+  const model = "gpt-5.2";
+  const timestamp = new Date().toISOString();
+
+  // IMPORTANT: In Responses API, message content blocks must be typed as "input_text" (not "text").
+  const input = [
+    {
+      role: "developer",
+      content: [
+        {
+          type: "input_text",
+          text:
+            "You are a no-nonsense strength coach for a 60-year-old lifter running a hybrid program: conservative progression on compounds, aggressive reps-first on accessories, band resist/assist supported, and recovery-aware (sleep/protein/zone2). " +
+            "Give concise, practical suggestions. Use bullet points. Avoid medical claims. If fatigue is flagged, propose a recovery mode (hold, -5%, or cap RPE 8).",
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [{ type: "input_text", text: summary }],
+    },
+  ];
+
+  const reqBody: any = {
+    model,
+    input,
+    // Keep it tight; the UI can call again later.
+    max_output_tokens: 600,
+  };
 
   try {
-    const apiResp = await fetch("https://api.openai.com/v1/responses", {
+    const r = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json"
+        "authorization": `Bearer ${OPENAI_API_KEY}`,
+        "content-type": "application/json",
       },
-      body: JSON.stringify({
-        model: "gpt-5.2",
-        input: [
-          { role: "system", content: [{ type: "text", text: systemPrompt }] },
-          { role: "user", content: [{ type: "text", text: userText }] }
-        ],
-        max_output_tokens: 700
-      })
+      body: JSON.stringify(reqBody),
     });
 
-    const respJson = await apiResp.json().catch(() => ({}));
+    const data = await r.json();
 
-    if (!apiResp.ok) {
-      const msg = respJson?.error?.message || respJson?.message || `OpenAI error (${apiResp.status})`;
-      return { statusCode: 500, body: JSON.stringify({ error: msg }) };
+    if (!r.ok) {
+      return jsonResponse(r.status, {
+        error: data?.error?.message ?? "OpenAI API error",
+        details: data?.error ?? data,
+      });
     }
 
-    const text = extractText(respJson).trim();
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        text,
-        model: "gpt-5.2",
-        ts: Date.now()
-      })
-    };
-  } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e?.message || "Server error" }) };
+    const text = extractOutputText(data) || "(No text returned.)";
+
+    return jsonResponse(200, { text, model, timestamp });
+  } catch (err: any) {
+    return jsonResponse(500, { error: "Server error calling OpenAI.", details: String(err?.message ?? err) });
   }
 };
+
