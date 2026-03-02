@@ -296,6 +296,14 @@ export default function App() {
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
+  // Quick Log trend series (last 28 days)
+  const [weightSeries, setWeightSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [waistSeries, setWaistSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [sleepSeries, setSleepSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [calSeries, setCalSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [z2Series, setZ2Series] = useState<{ xLabel: string; y: number }[]>([]);
+
   // -----------------------------
   // Auth boot + autosync
   // -----------------------------
@@ -523,66 +531,31 @@ export default function App() {
     }
   }
 
-  async function loadQuickLogForDay(day: string) {
-    if (!userId) return;
 
+async function loadQuickLogForDay(day: string) {
+    if (!userId) return;
     try {
-      const daily = await localdb.dailyMetrics.get([userId, day]);
-      const nutr = await localdb.nutritionDaily.get([userId, day]);
+      const dm = await localdb.dailyMetrics.get([userId, day]);
+      const nd = await localdb.nutritionDaily.get([userId, day]);
       const z2 = await localdb.zone2Daily.get([userId, day]);
 
-      setWeight(daily?.weight_lbs != null ? String(daily.weight_lbs) : "");
-      setWaist(daily?.waist_in != null ? String(daily.waist_in) : "");
-      setSleepHours(daily?.sleep_hours != null ? String(daily.sleep_hours) : "");
-      setNotes(daily?.notes ?? "");
+      setWeight(dm?.weight_lbs != null ? String(dm.weight_lbs) : "");
+      setWaist(dm?.waist_in != null ? String(dm.waist_in) : "");
+      setSleepHours(dm?.sleep_hours != null ? String(dm.sleep_hours) : "");
+      setNotes(dm?.notes != null ? String(dm.notes) : "");
 
-      setCalories(nutr?.calories != null ? String(nutr.calories) : "");
-      setProtein(nutr?.protein_g != null ? String(nutr.protein_g) : "");
+      setCalories(nd?.calories != null ? String(nd.calories) : "");
+      setProtein(nd?.protein_g != null ? String(nd.protein_g) : "");
 
       setZ2Minutes(z2?.minutes != null ? String(z2.minutes) : "");
-    } catch (e) {
-      console.error("loadQuickLogForDay failed", e);
+    } catch {
+      // ignore local read errors
     }
   }
 
 
-  async function saveQuickLog() {
+async function saveQuickLog() {
     if (!userId) return;
-
-    const now = Date.now();
-
-    // Write-through to local tables so Dashboard/Quick Log always reflect latest (even offline).
-    await localdb.dailyMetrics.put({
-      user_id: userId,
-      day_date: selectedDayDate,
-      weight_lbs: weight ? Number(weight) : null,
-      waist_in: waist ? Number(waist) : null,
-      sleep_hours: sleepHours ? Number(sleepHours) : null,
-      notes: notes || null,
-      updatedAt: now
-    });
-
-    await localdb.nutritionDaily.put({
-      user_id: userId,
-      day_date: selectedDayDate,
-      calories: calories ? Number(calories) : null,
-      protein_g: protein ? Number(protein) : null,
-      updatedAt: now
-    });
-
-    if (z2Minutes) {
-      await localdb.zone2Daily.put({
-        user_id: userId,
-        day_date: selectedDayDate,
-        modality: "Walk",
-        minutes: Number(z2Minutes),
-        updatedAt: now
-      });
-    } else {
-      // If cleared, remove any existing Zone 2 for that day in local cache (keeps UI honest)
-      await localdb.zone2Daily.delete([userId, selectedDayDate]);
-    }
-
 
     await enqueue("upsert_daily", {
       user_id: userId,
@@ -609,7 +582,37 @@ export default function App() {
       });
     }
 
-    alert("Saved instantly (local). Will sync when online.");
+    // Write-through to local Dexie tables so Dashboard + offline views have data immediately
+    await localdb.dailyMetrics.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      weight_lbs: weight ? Number(weight) : null,
+      waist_in: waist ? Number(waist) : null,
+      sleep_hours: sleepHours ? Number(sleepHours) : null,
+      notes: notes || null,
+      updatedAt: Date.now()
+    });
+
+    await localdb.nutritionDaily.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      calories: calories ? Number(calories) : null,
+      protein_g: protein ? Number(protein) : null,
+      updatedAt: Date.now()
+    });
+
+    await localdb.zone2Daily.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      modality: "Walk",
+      minutes: z2Minutes ? Number(z2Minutes) : null,
+      updatedAt: Date.now()
+    });
+
+    // Keep dashboard charts up to date
+    refreshDashboard();
+
+        alert("Saved instantly (local). Will sync when online.");
   }
 
   // -----------------------------
@@ -1332,11 +1335,73 @@ export default function App() {
         .filter((d) => bestDlE1RM.get(d) != null)
         .map((d) => ({ xLabel: d.slice(5), y: bestDlE1RM.get(d)! }));
 
+
+      // Quick Log trends (last 28 days) — local Dexie tables
+      const dayKeys = days.map((d) => [userId, d] as [string, string]);
+
+      const dailyRows = await localdb.dailyMetrics.bulkGet(dayKeys);
+      const nutrRows = await localdb.nutritionDaily.bulkGet(dayKeys);
+      const z2Rows = await localdb.zone2Daily.bulkGet(dayKeys);
+
+      const wSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.weight_lbs;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const wsSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.waist_in;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const slSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.sleep_hours;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const cSeries = days
+        .map((d, i) => {
+          const row = nutrRows[i];
+          const v = row?.calories;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const pSeries = days
+        .map((d, i) => {
+          const row = nutrRows[i];
+          const v = row?.protein_g;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const zSeries = days
+        .map((d, i) => {
+          const row = z2Rows[i];
+          const v = row?.minutes;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
       setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
       setSquatSeries(squat);
       setDlSeries(dl);
+      setWeightSeries(wSeries);
+      setWaistSeries(wsSeries);
+      setSleepSeries(slSeries);
+      setCalSeries(cSeries);
+      setProteinSeries(pSeries);
+      setZ2Series(zSeries);
     } finally {
       setDashBusy(false);
     }
@@ -1353,7 +1418,7 @@ export default function App() {
     setSets([]);
     loadSessionsForDay(selectedDayDate);
     loadTemplates();
-    void loadQuickLogForDay(selectedDayDate);
+    loadQuickLogForDay(selectedDayDate);
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -1486,49 +1551,7 @@ export default function App() {
             Delete your test sessions and refresh to clean the charts.
           </div>
 
-          <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-              <div style={{ fontWeight: 800 }}>Quick Log (Selected Day)</div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>{selectedDayDate}</div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginTop: 10 }}>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Weight</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{weight || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Waist</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{waist || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Sleep</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{sleepHours || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Calories</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{calories || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Protein (g)</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{protein || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Zone 2 (min)</div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{z2Minutes || "—"}</div>
-              </div>
-            </div>
-
-            {notes ? (
-              <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
-                <b>Notes:</b> {notes}
-              </div>
-            ) : (
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>No notes logged for this day.</div>
-            )}
-          </div>
-
-
+          
           {weeklyCoach && (
             <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1619,6 +1642,17 @@ export default function App() {
             <LineChart title="Bench (name includes 'bench')" points={benchSeries} />
             <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
             <LineChart title="Deadlift (name includes 'deadlift' or 'dl')" points={dlSeries} />
+          </div>
+
+
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
+          <div style={{ display: "grid", gap: 12 }}>
+            <LineChart title="Bodyweight (lbs)" points={weightSeries} />
+            <LineChart title="Waist (in)" points={waistSeries} />
+            <LineChart title="Sleep (hours)" points={sleepSeries} />
+            <LineChart title="Calories" points={calSeries} />
+            <LineChart title="Protein (g)" points={proteinSeries} />
+            <LineChart title="Zone 2 (minutes)" points={z2Series} />
           </div>
 
           <div style={{ marginTop: 14, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
@@ -1995,6 +2029,8 @@ export default function App() {
     </div>
   );
 }
+
+
 
 
 
