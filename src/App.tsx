@@ -523,9 +523,66 @@ export default function App() {
     }
   }
 
-
-async function saveQuickLog() {
+  async function loadQuickLogForDay(day: string) {
     if (!userId) return;
+
+    try {
+      const daily = await localdb.dailyMetrics.get([userId, day]);
+      const nutr = await localdb.nutritionDaily.get([userId, day]);
+      const z2 = await localdb.zone2Daily.get([userId, day]);
+
+      setWeight(daily?.weight_lbs != null ? String(daily.weight_lbs) : "");
+      setWaist(daily?.waist_in != null ? String(daily.waist_in) : "");
+      setSleepHours(daily?.sleep_hours != null ? String(daily.sleep_hours) : "");
+      setNotes(daily?.notes ?? "");
+
+      setCalories(nutr?.calories != null ? String(nutr.calories) : "");
+      setProtein(nutr?.protein_g != null ? String(nutr.protein_g) : "");
+
+      setZ2Minutes(z2?.minutes != null ? String(z2.minutes) : "");
+    } catch (e) {
+      console.error("loadQuickLogForDay failed", e);
+    }
+  }
+
+
+  async function saveQuickLog() {
+    if (!userId) return;
+
+    const now = Date.now();
+
+    // Write-through to local tables so Dashboard/Quick Log always reflect latest (even offline).
+    await localdb.dailyMetrics.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      weight_lbs: weight ? Number(weight) : null,
+      waist_in: waist ? Number(waist) : null,
+      sleep_hours: sleepHours ? Number(sleepHours) : null,
+      notes: notes || null,
+      updatedAt: now
+    });
+
+    await localdb.nutritionDaily.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      calories: calories ? Number(calories) : null,
+      protein_g: protein ? Number(protein) : null,
+      updatedAt: now
+    });
+
+    if (z2Minutes) {
+      await localdb.zone2Daily.put({
+        user_id: userId,
+        day_date: selectedDayDate,
+        modality: "Walk",
+        minutes: Number(z2Minutes),
+        updatedAt: now
+      });
+    } else {
+      // If cleared, remove any existing Zone 2 for that day in local cache (keeps UI honest)
+      await localdb.zone2Daily.delete([userId, selectedDayDate]);
+    }
+
 
     await enqueue("upsert_daily", {
       user_id: userId,
@@ -1296,6 +1353,7 @@ async function saveQuickLog() {
     setSets([]);
     loadSessionsForDay(selectedDayDate);
     loadTemplates();
+    void loadQuickLogForDay(selectedDayDate);
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -1428,7 +1486,49 @@ async function saveQuickLog() {
             Delete your test sessions and refresh to clean the charts.
           </div>
 
-          
+          <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fff", marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div style={{ fontWeight: 800 }}>Quick Log (Selected Day)</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>{selectedDayDate}</div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginTop: 10 }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Weight</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{weight || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Waist</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{waist || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Sleep</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{sleepHours || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Calories</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{calories || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Protein (g)</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{protein || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Zone 2 (min)</div>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{z2Minutes || "—"}</div>
+              </div>
+            </div>
+
+            {notes ? (
+              <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
+                <b>Notes:</b> {notes}
+              </div>
+            ) : (
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>No notes logged for this day.</div>
+            )}
+          </div>
+
+
           {weeklyCoach && (
             <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1895,6 +1995,8 @@ async function saveQuickLog() {
     </div>
   );
 }
+
+
 
 
 
