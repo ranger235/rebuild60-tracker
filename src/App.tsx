@@ -40,6 +40,71 @@ function isoToDay(iso: string): string {
   }
 }
 
+
+// -----------------------------
+// Exercise name normalization + aliases
+// -----------------------------
+function normalizeExerciseName(raw: string): string {
+  return (raw || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[_\-]/g, " ")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Compact key used for lookups (Last numbers, analytics buckets, etc.)
+function exerciseKey(raw: string): string {
+  const n = normalizeExerciseName(raw).replace(/\s+/g, "");
+  // Common shorthands first
+  if (n === "rdl") return "romaniandeadlift";
+  if (n === "dl") return "deadlift";
+  if (n === "bp") return "benchpress";
+  if (n === "ohp") return "overheadpress";
+  return n;
+}
+
+// Display name (what the UI shows)
+function displayExerciseName(raw: string): string {
+  const k = exerciseKey(raw);
+  if (k === "romaniandeadlift") return "Romanian Deadlift";
+  if (k === "deadlift") return "Deadlift";
+  if (k === "benchpress") return "Bench Press";
+  if (k === "overheadpress") return "Overhead Press";
+  // Keep user's original casing if it's not a known alias
+  return raw;
+}
+
+// When the user types a known alias as the full name, store the expanded canonical name.
+// (Prevents separate histories like "RDL" vs "Romanian Deadlift".)
+function canonicalizeExerciseInput(raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return trimmed;
+  const n = normalizeExerciseName(trimmed).replace(/\s+/g, "");
+  if (n === "rdl") return "Romanian Deadlift";
+  if (n === "dl") return "Deadlift";
+  if (n === "bp") return "Bench Press";
+  if (n === "ohp") return "Overhead Press";
+  return trimmed;
+}
+
+function isBenchName(name: string): boolean {
+  const k = exerciseKey(name);
+  const n = normalizeExerciseName(name);
+  return k === "benchpress" || n.includes("bench");
+}
+function isSquatName(name: string): boolean {
+  const n = normalizeExerciseName(name);
+  return n.includes("squat");
+}
+function isDeadliftName(name: string): boolean {
+  const k = exerciseKey(name);
+  const n = normalizeExerciseName(name);
+  // include RDL as a deadlift-family movement for the DL trend line
+  return k === "deadlift" || k === "romaniandeadlift" || n.includes("deadlift") || n === "dl" || n === "rdl";
+}
+
 type SetLite = {
   load_type?: "weight" | "band" | "bodyweight" | null;
   weight_lbs: number | null;
@@ -729,8 +794,8 @@ async function saveQuickLog() {
   async function addExercise() {
     if (!openSessionId) return;
 
-    const name = newExerciseName.trim();
-    if (!name) return;
+    const name = canonicalizeExerciseInput(newExerciseName);
+    if (!name.trim()) return;
 
     const id = uuid();
     const sort_order = exercises.length;
@@ -1094,8 +1159,9 @@ async function addSet(exerciseId: string) {
   // Last numbers
   // -----------------------------
   async function getLocalLastForExerciseName(exName: string, excludeSessionId: string | null): Promise<LastSetSummary | null> {
+    const k = exerciseKey(exName);
     const allExercises = await localdb.localExercises.toArray();
-    const matches = allExercises.filter((e) => e.name === exName && e.session_id !== excludeSessionId);
+    const matches = allExercises.filter((e) => exerciseKey(e.name) === k && e.session_id !== excludeSessionId);
     if (matches.length === 0) return null;
 
     let best: { ex: LocalWorkoutExercise; started_at: string } | null = null;
@@ -1128,6 +1194,8 @@ async function addSet(exerciseId: string) {
     if (!userId) return null;
     if (!navigator.onLine) return null;
 
+    const k = exerciseKey(exName);
+
     const { data: sess, error: sessErr } = await supabase
       .from("workout_sessions")
       .select("id, started_at")
@@ -1139,19 +1207,23 @@ async function addSet(exerciseId: string) {
 
     const sessionIds = sess.map((s) => s.id);
 
+    // Pull exercises for recent sessions and filter client-side by alias key.
     const { data: ex, error: exErr } = await supabase
       .from("workout_exercises")
       .select("id, session_id, name")
-      .eq("name", exName)
       .in("session_id", sessionIds);
 
     if (exErr || !ex || ex.length === 0) return null;
 
+    const matches = ex.filter((e: any) => exerciseKey(String(e.name || "")) === k);
+    if (matches.length === 0) return null;
+
+    // Choose the most recent session in sess ordering
     const sessionRank = new Map<string, number>();
     sess.forEach((s, idx) => sessionRank.set(s.id, idx));
 
-    let best = ex[0];
-    for (const e of ex) {
+    let best = matches[0];
+    for (const e of matches) {
       const rBest = sessionRank.get(best.session_id) ?? 9999;
       const rE = sessionRank.get(e.session_id) ?? 9999;
       if (rE < rBest) best = e;
@@ -1183,17 +1255,18 @@ async function addSet(exerciseId: string) {
   }
 
   async function ensureLastForExerciseName(exName: string) {
-    if (lastByExerciseName[exName]) return;
+    const k = exerciseKey(exName);
+    if (lastByExerciseName[k]) return;
 
     const local = await getLocalLastForExerciseName(exName, openSessionId);
     if (local) {
-      setLastByExerciseName((prev) => ({ ...prev, [exName]: local }));
+      setLastByExerciseName((prev) => ({ ...prev, [k]: local }));
       return;
     }
 
     const cloud = await getCloudLastForExerciseName(exName);
     if (cloud) {
-      setLastByExerciseName((prev) => ({ ...prev, [exName]: cloud }));
+      setLastByExerciseName((prev) => ({ ...prev, [k]: cloud }));
       return;
     }
   }
@@ -1235,7 +1308,7 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
   }
 
   function applyDefaultAutofill(exerciseId: string, exName: string) {
-    const summary = lastByExerciseName[exName];
+    const summary = lastByExerciseName[exerciseKey(exName)];
     if (!summary || summary.sets.length === 0) return;
 
     const existing = draftByExerciseId[exerciseId];
@@ -1259,7 +1332,7 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
   }
 
   function applyLastModeToDraft(exerciseId: string, exName: string, mode: "last" | "top" | "firstWork") {
-    const summary = lastByExerciseName[exName];
+    const summary = lastByExerciseName[exerciseKey(exName)];
     if (!summary || summary.sets.length === 0) return;
 
     const chosen =
@@ -1337,12 +1410,11 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
           tonnageByDay.set(day, (tonnageByDay.get(day) ?? 0) + w * r);
 
           // e1RM (best per day) for bucketed names
-          const n = info.name.toLowerCase();
           const e1 = oneRmEpley(w, r);
 
-          if (n.includes("bench")) bumpMax(bestBenchE1RM, day, e1);
-          if (n.includes("squat")) bumpMax(bestSquatE1RM, day, e1);
-          if (n.includes("deadlift") || n === "dl") bumpMax(bestDlE1RM, day, e1);
+          if (isBenchName(info.name)) bumpMax(bestBenchE1RM, day, e1);
+          if (isSquatName(info.name)) bumpMax(bestSquatE1RM, day, e1);
+          if (isDeadliftName(info.name)) bumpMax(bestDlE1RM, day, e1);
         }
       }
 
@@ -1965,7 +2037,7 @@ setTonnageSeries(tonSeries);
                         .slice()
                         .sort((a, b) => a.sort_order - b.sort_order)
                         .map((e) => (
-                          <li key={e.id}>{e.name}</li>
+                          <li key={e.id}>{displayExerciseName(e.name)}</li>
                         ))}
                     </ol>
                   </div>
@@ -2052,7 +2124,7 @@ setTonnageSeries(tonSeries);
                 <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
                   {exercises.map((ex) => {
                     const exSets = setsForExercise(ex.id);
-                    const lastSummary = lastByExerciseName[ex.name];
+                    const lastSummary = lastByExerciseName[exerciseKey(ex.name)];
                     const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
                     const d = draftByExerciseId[ex.id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
 
@@ -2063,7 +2135,7 @@ setTonnageSeries(tonSeries);
                       <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                           <div style={{ fontWeight: 800 }}>
-                            {ex.name}{" "}
+                            {displayExerciseName(ex.name)}{" "}
                             <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 600 }}>
                               ({defaultLabel})
                             </span>
@@ -2278,7 +2350,7 @@ setTonnageSeries(tonSeries);
                         )}
 
                         {coachEnabled && (
-                          <CoachBoundary exerciseName={ex.name} sets={exSets} compound={compound} />
+                          <CoachBoundary exerciseName={displayExerciseName(ex.name)} sets={exSets} compound={compound} />
                         )}
 
                       </div>
@@ -2306,6 +2378,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
