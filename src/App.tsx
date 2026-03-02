@@ -246,6 +246,27 @@ export default function App() {
   const [z2Minutes, setZ2Minutes] = useState("");
   const [notes, setNotes] = useState("");
 
+  // Load Quick Log values for selected day (local-first)
+  useEffect(() => {
+    if (!userId) return;
+    (async () => {
+      const dm = await localdb.dailyMetrics.get([userId, selectedDayDate]);
+      const nu = await localdb.nutritionDaily.get([userId, selectedDayDate]);
+      const z2 = await localdb.zone2Daily.get([userId, selectedDayDate]);
+
+      setWeight(dm?.weight_lbs != null ? String(dm.weight_lbs) : "");
+      setWaist(dm?.waist_in != null ? String(dm.waist_in) : "");
+      setSleepHours(dm?.sleep_hours != null ? String(dm.sleep_hours) : "");
+      setNotes(dm?.notes != null ? String(dm.notes) : "");
+
+      setCalories(nu?.calories != null ? String(nu.calories) : "");
+      setProtein(nu?.protein_g != null ? String(nu.protein_g) : "");
+
+      setZ2Minutes(z2?.minutes != null ? String(z2.minutes) : "");
+    })();
+  }, [userId, selectedDayDate]);
+
+
   // Rest timer
   const [timerOn, setTimerOn] = useState(false);
   const [secs, setSecs] = useState(90);
@@ -329,6 +350,16 @@ export default function App() {
   };
   const [bandWeekly, setBandWeekly] = useState<BandWeekly | null>(null);
   const [bandSeries, setBandSeries] = useState<{ xLabel: string; y: number }[]>([]);
+
+  // Quick Log series (offline-first)
+  const [weightSeries, setWeightSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [waistSeries, setWaistSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [sleepSeries, setSleepSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [calorieSeries, setCalorieSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [zone2Series, setZone2Series] = useState<{ xLabel: string; y: number }[]>([]);
+  const [notesFeed, setNotesFeed] = useState<{ day: string; note: string }[]>([]);
+
 
 
   // -----------------------------
@@ -568,6 +599,36 @@ async function getEarliestSessionDay(uid: string): Promise<string> {
   async function saveQuickLog() {
     if (!userId) return;
 
+    const now = Date.now();
+
+    // Local-first: write to Dexie so Dashboard + Coach can use it offline immediately
+    await localdb.dailyMetrics.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      weight_lbs: weight ? Number(weight) : null,
+      waist_in: waist ? Number(waist) : null,
+      sleep_hours: sleepHours ? Number(sleepHours) : null,
+      notes: notes || null,
+      updatedAt: now
+    });
+
+    await localdb.nutritionDaily.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      calories: calories ? Number(calories) : null,
+      protein_g: protein ? Number(protein) : null,
+      updatedAt: now
+    });
+
+    await localdb.zone2Daily.put({
+      user_id: userId,
+      day_date: selectedDayDate,
+      modality: "Walk",
+      minutes: z2Minutes ? Number(z2Minutes) : null,
+      updatedAt: now
+    });
+
+    // Sync queue: authoritative ops (will push to Supabase when online)
     await enqueue("upsert_daily", {
       user_id: userId,
       day_date: selectedDayDate,
@@ -1332,6 +1393,56 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
         days.push(`${yyyy}-${mm}-${dd}`);
       }
 
+
+      // Quick Log: pull last 28 days from local Dexie (offline-first)
+      const dmKeys = days.map((d) => [userId, d] as [string, string]);
+      const dailyRows = await localdb.dailyMetrics.bulkGet(dmKeys);
+      const nutriRows = await localdb.nutritionDaily.bulkGet(dmKeys);
+      const z2Rows = await localdb.zone2Daily.bulkGet(dmKeys);
+
+      const dmByDay = new Map<string, any>();
+      const nuByDay = new Map<string, any>();
+      const z2ByDay = new Map<string, any>();
+      for (const r of dailyRows) if (r) dmByDay.set(r.day_date, r);
+      for (const r of nutriRows) if (r) nuByDay.set(r.day_date, r);
+      for (const r of z2Rows) if (r) z2ByDay.set(r.day_date, r);
+
+      const wPts: { xLabel: string; y: number }[] = [];
+      const waistPts: { xLabel: string; y: number }[] = [];
+      const sleepPts: { xLabel: string; y: number }[] = [];
+      const protPts: { xLabel: string; y: number }[] = [];
+      const calPts: { xLabel: string; y: number }[] = [];
+      const z2Pts: { xLabel: string; y: number }[] = [];
+
+      const noteFeed: { day: string; note: string }[] = [];
+
+      for (const d of days) {
+        const dm = dmByDay.get(d);
+        const nu = nuByDay.get(d);
+        const z2 = z2ByDay.get(d);
+
+        if (dm?.weight_lbs != null) wPts.push({ xLabel: d.slice(5), y: Number(dm.weight_lbs) });
+        if (dm?.waist_in != null) waistPts.push({ xLabel: d.slice(5), y: Number(dm.waist_in) });
+        if (dm?.sleep_hours != null) sleepPts.push({ xLabel: d.slice(5), y: Number(dm.sleep_hours) });
+
+        if (nu?.protein_g != null) protPts.push({ xLabel: d.slice(5), y: Number(nu.protein_g) });
+        if (nu?.calories != null) calPts.push({ xLabel: d.slice(5), y: Number(nu.calories) });
+
+        if (z2?.minutes != null) z2Pts.push({ xLabel: d.slice(5), y: Number(z2.minutes) });
+
+        if (dm?.notes && String(dm.notes).trim().length > 0) {
+          noteFeed.push({ day: d, note: String(dm.notes) });
+        }
+      }
+      // Most-recent notes first (last ~14 days)
+      setNotesFeed(noteFeed.slice(-14).reverse());
+      setWeightSeries(wPts);
+      setWaistSeries(waistPts);
+      setSleepSeries(sleepPts);
+      setProteinSeries(protPts);
+      setCalorieSeries(calPts);
+      setZone2Series(z2Pts);
+
       // Weekly coach summary: compare last 7 days vs prior 7 days
       const fmt = (d: Date) => {
         const yyyy = d.getFullYear();
@@ -1444,6 +1555,48 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
         lines.push("Fatigue: clear");
       }
       if (modeActive !== "none") lines.push(`Recovery mode active: ${modeActive}`);
+
+      // Quick Log awareness (sleep / protein / zone2) for this week
+      const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+      const sleepAvg = avg(
+        thisDays
+          .map((d) => (dmByDay.get(d)?.sleep_hours as number | null | undefined))
+          .filter((v): v is number => typeof v === "number" && isFinite(v))
+      );
+      const proteinAvg = avg(
+        thisDays
+          .map((d) => (nuByDay.get(d)?.protein_g as number | null | undefined))
+          .filter((v): v is number => typeof v === "number" && isFinite(v))
+      );
+      const calAvg = avg(
+        thisDays
+          .map((d) => (nuByDay.get(d)?.calories as number | null | undefined))
+          .filter((v): v is number => typeof v === "number" && isFinite(v))
+      );
+      const zone2Sum = thisDays
+        .map((d) => (z2ByDay.get(d)?.minutes as number | null | undefined))
+        .filter((v): v is number => typeof v === "number" && isFinite(v))
+        .reduce((a, b) => a + b, 0);
+
+      const qlBits: string[] = [];
+      if (sleepAvg != null) qlBits.push(`Sleep avg: ${sleepAvg.toFixed(1)}h`);
+      if (proteinAvg != null) qlBits.push(`Protein avg: ${Math.round(proteinAvg)}g`);
+      if (calAvg != null) qlBits.push(`Calories avg: ${Math.round(calAvg)}`);
+      if (zone2Sum > 0) qlBits.push(`Zone 2: ${Math.round(zone2Sum)} min`);
+
+      if (qlBits.length) lines.push(`Quick Log: ${qlBits.join(" • ")}`);
+
+      // Gentle nudges (non-medical)
+      if (sleepAvg != null && sleepAvg < 6) {
+        lines.push("Nudge: sleep is running low — consider Recovery mode: cap8 or hold.");
+      }
+      if (proteinAvg != null && proteinAvg < 160) {
+        lines.push("Nudge: protein is low for a rebuild — tighten that up before chasing load.");
+      }
+      if (zone2Sum >= 150 && fatigueFlag) {
+        lines.push("Nudge: lots of Zone 2 + fatigue flag — keep compounds crisp (no grinders).");
+      }
+
       lines.push(coachLine);
       coachLine = lines.join("\n");
       setWeeklyCoach({
@@ -1846,6 +1999,33 @@ function applyNextTarget(exerciseId: string, t: { loadType: "weight" | "bodyweig
             <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
             <LineChart title="Deadlift (name includes 'deadlift' or 'dl')" points={dlSeries} />
           </div>
+
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (local)</h4>
+          <div style={{ display: "grid", gap: 12 }}>
+            <LineChart title="Bodyweight — last 28 days" points={weightSeries} />
+            <LineChart title="Waist — last 28 days" points={waistSeries} />
+            <LineChart title="Sleep hours — last 28 days" points={sleepSeries} />
+            <LineChart title="Protein (g) — last 28 days" points={proteinSeries} />
+            <LineChart title="Calories — last 28 days" points={calorieSeries} />
+            <LineChart title="Zone 2 minutes — last 28 days" points={zone2Series} />
+          </div>
+
+          <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 12 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Notes (last 14 days)</div>
+            {notesFeed.length === 0 ? (
+              <div style={{ fontSize: 12, opacity: 0.75 }}>No notes saved yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {notesFeed.map((n) => (
+                  <div key={n.day} style={{ border: "1px solid #f0f0f0", borderRadius: 10, padding: 10 }}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>{n.day}</div>
+                    <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{n.note}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
 
           <div style={{ marginTop: 14, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
             <b>Note:</b> These strength charts match by exercise name keywords. If you use names like “Flat BB Press”,
