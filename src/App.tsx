@@ -2084,7 +2084,7 @@ setTonnageSeries(tonSeries);
                     </button>
                   </div>
                 ))}
-            )}
+          
 
             {openTemplateId && (
               <div style={{ marginTop: 12 }}>
