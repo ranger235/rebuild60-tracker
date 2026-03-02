@@ -108,6 +108,33 @@ export type LocalWorkoutTemplateExercise = ExerciseTags & {
   sort_order: number;
 };
 
+
+export type LocalDailyMetrics = {
+  user_id: string;
+  day_date: string; // YYYY-MM-DD
+  weight_lbs?: number | null;
+  waist_in?: number | null;
+  sleep_hours?: number | null;
+  notes?: string | null; // ONE note per day (journal-style)
+  updatedAt: number;
+};
+
+export type LocalNutritionDaily = {
+  user_id: string;
+  day_date: string; // YYYY-MM-DD
+  calories?: number | null;
+  protein_g?: number | null;
+  updatedAt: number;
+};
+
+export type LocalZone2Daily = {
+  user_id: string;
+  day_date: string; // YYYY-MM-DD
+  modality: string; // e.g. "Walk"
+  minutes?: number | null;
+  updatedAt: number;
+};
+
 export class RebuildDB extends Dexie {
   pendingOps!: Table<PendingOp, number>;
 
@@ -121,6 +148,10 @@ export class RebuildDB extends Dexie {
 
   localTemplates!: Table<LocalWorkoutTemplate, string>;
   localTemplateExercises!: Table<LocalWorkoutTemplateExercise, string>;
+
+  dailyMetrics!: Table<LocalDailyMetrics, [string, string]>; // [user_id, day_date]
+  nutritionDaily!: Table<LocalNutritionDaily, [string, string]>; // [user_id, day_date]
+  zone2Daily!: Table<LocalZone2Daily, [string, string]>; // [user_id, day_date]
 
   constructor() {
     super("rebuild60_local");
@@ -161,10 +192,28 @@ export class RebuildDB extends Dexie {
       localTemplates: "id, user_id, created_at",
       localTemplateExercises: "id, template_id, sort_order"
     });
+
+    // v5: quick log local tables (daily metrics, nutrition, zone2)
+    this.version(5).stores({
+      pendingOps: "++id, createdAt, op, status",
+      localSettings: "[user_id+key], user_id, key, updatedAt",
+      localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
+      localSessions: "id, user_id, day_date, started_at",
+      localExercises: "id, session_id, sort_order",
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order",
+      dailyMetrics: "[user_id+day_date], user_id, day_date, updatedAt",
+      nutritionDaily: "[user_id+day_date], user_id, day_date, updatedAt",
+      zone2Daily: "[user_id+day_date], user_id, day_date, updatedAt"
+    });
+
 }
 }
 
 export const localdb = new RebuildDB();
+
+
 
 
 
