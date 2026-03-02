@@ -71,10 +71,30 @@ type ExerciseDraft = {
 };
 
 function formatSet(s: SetLite) {
-  const w = s.weight_lbs ?? "—";
   const r = s.reps ?? "—";
-  const wu = s.is_warmup ? "WU" : "";
-  const rpe = s.rpe != null ? `@${s.rpe}` : "";
+  const wu = s.is_warmup ? " WU" : "";
+  const rpe = s.rpe != null ? ` @${s.rpe}` : "";
+
+  const lt = (s.load_type ?? "weight") as "weight" | "band" | "bodyweight";
+  if (lt === "bodyweight") {
+    return `BW x${r}${wu}${rpe}`;
+  }
+  if (lt === "band") {
+    const lvl = s.band_level ?? "—";
+    const mode = s.band_mode === "assist" ? "A" : "R";
+    const cfg = s.band_config === "doubled" ? "D" : "S";
+    const est =
+      s.band_est_lbs != null
+        ? Number(s.band_est_lbs)
+        : (() => {
+            const m = bandEquivMapRef.current?.[String(lvl)];
+            return typeof m === "number" ? m : null;
+          })();
+    const estTxt = est != null ? `~${est}` : "";
+    return `B${lvl}${mode}${cfg}${estTxt} x${r}${wu}${rpe}`;
+  }
+
+  const w = s.weight_lbs ?? "—";
   return `${w}x${r}${wu}${rpe}`;
 }
 
@@ -303,6 +323,11 @@ async function saveBandEquiv(next: Record<string, number>) {
   setBandEquivMap(next);
 }
 
+useEffect(() => {
+  // load persisted band equivalence map for this user
+  loadBandEquiv();
+}, [userId]);
+
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
@@ -351,6 +376,14 @@ async function saveBandEquiv(next: Record<string, number>) {
   const [benchSeries, setBenchSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  // Quick Log trend series (last 28 days)
+  const [weightSeries, setWeightSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [waistSeries, setWaistSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [sleepSeries, setSleepSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [calSeries, setCalSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [z2Series, setZ2Series] = useState<{ xLabel: string; y: number }[]>([]);
+
 
   // -----------------------------
   // Auth boot + autosync
@@ -1427,11 +1460,71 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
         .filter((d) => bestDlE1RM.get(d) != null)
         .map((d) => ({ xLabel: d.slice(5), y: bestDlE1RM.get(d)! }));
 
-      setTonnageSeries(tonSeries);
+      
+      // Quick Log trends (last 28 days) from local Dexie tables
+      const dayKeys = days.map((d) => [userId, d] as [string, string]);
+      const dailyRows = await localdb.dailyMetrics.bulkGet(dayKeys);
+      const nutrRows = await localdb.nutritionDaily.bulkGet(dayKeys);
+      const z2Rows = await localdb.zone2Daily.bulkGet(dayKeys);
+
+      const wSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.weight_lbs;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const wsSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.waist_in;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const slSeries = days
+        .map((d, i) => {
+          const row = dailyRows[i];
+          const v = row?.sleep_hours;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const cSeries = days
+        .map((d, i) => {
+          const row = nutrRows[i];
+          const v = row?.calories;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const pSeries = days
+        .map((d, i) => {
+          const row = nutrRows[i];
+          const v = row?.protein_g;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const zSeries = days
+        .map((d, i) => {
+          const row = z2Rows[i];
+          const v = row?.minutes;
+          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
+        })
+        .filter(Boolean) as { xLabel: string; y: number }[];
+setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
       setSquatSeries(squat);
       setDlSeries(dl);
+      setWeightSeries(wSeries);
+      setWaistSeries(wsSeries);
+      setSleepSeries(slSeries);
+      setCalSeries(cSeries);
+      setProteinSeries(pSeries);
+      setZ2Series(zSeries);
     } finally {
       setDashBusy(false);
     }
@@ -1579,6 +1672,61 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
             Everything here is built from your <b>local</b> workout data (sessions/exercises/sets), so it works offline.
             Delete your test sessions and refresh to clean the charts.
           </div>
+
+          {/* Band equivalent lbs override (used for band set e1RM/tonnage approximations when band_est_lbs is blank) */}
+          <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fbfbfb", marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div style={{ fontWeight: 800 }}>Band Equivalent Weights</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Saved locally (Dexie) per user</div>
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
+              These are your default “equivalent lbs” for band levels <b>1–5</b>. Used only when a band set has no explicit “Est lbs”.
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(60px, 1fr))", gap: 8, marginTop: 10 }}>
+              {(["1","2","3","4","5"] as const).map((k) => (
+                <div key={k} style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>L{k}</div>
+                  <input
+                    value={String(bandEquivMap[k] ?? "")}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const num = raw.trim() === "" ? 0 : Number(raw);
+                      const next = { ...bandEquivMap, [k]: Number.isFinite(num) ? num : bandEquivMap[k] };
+                      setBandEquivMap(next);
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button onClick={() => saveBandEquiv(bandEquivMap)}>Save</button>
+              <button
+                onClick={() =>
+                  saveBandEquiv({ "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 })
+                }
+                title="Reset to defaults"
+              >
+                Reset
+              </button>
+              <button onClick={loadBandEquiv} title="Reload saved values">
+                Reload
+              </button>
+            </div>
+          </div>
+
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
+          <div style={{ display: "grid", gap: 12 }}>
+            <LineChart title="Bodyweight (lbs)" points={weightSeries} />
+            <LineChart title="Waist (in)" points={waistSeries} />
+            <LineChart title="Sleep (hours)" points={sleepSeries} />
+            <LineChart title="Calories" points={calSeries} />
+            <LineChart title="Protein (g)" points={proteinSeries} />
+            <LineChart title="Zone 2 (minutes)" points={z2Series} />
+          </div>
+
 
           
           {weeklyCoach && (
@@ -2158,6 +2306,7 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
     </div>
   );
 }
+
 
 
 
