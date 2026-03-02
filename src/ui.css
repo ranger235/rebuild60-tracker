@@ -1,0 +1,120 @@
+:root{
+  --bg:#f6f6f6;
+  --card:#ffffff;
+  --ink:#111;
+  --muted:#444;
+  --border:#222;
+  --border-soft:#bbb;
+  --btn:#e9e9e9;
+  --btn-ink:#111;
+  --btn-active:#111;
+  --btn-active-ink:#fff;
+  --focus:#111;
+}
+
+html, body{
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 14px;
+}
+
+.app{
+  margin: 0 auto;
+  line-height: 1.3;
+}
+
+h2, h3{
+  letter-spacing: .2px;
+}
+
+.topbar h2{
+  margin: 0;
+}
+
+hr{
+  border: none;
+  border-top: 2px solid var(--border-soft);
+  margin: 14px 0;
+}
+
+.card{
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.06);
+}
+
+.card-soft{
+  border-color: var(--border-soft);
+}
+
+.tabbar{
+  align-items: center;
+}
+
+button{
+  background: var(--btn);
+  color: var(--btn-ink);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover{
+  filter: brightness(.98);
+}
+
+button:disabled{
+  cursor: default;
+  opacity: .55;
+}
+
+.tabbar button:disabled{
+  opacity: 1;
+  background: var(--btn-active);
+  color: var(--btn-active-ink);
+}
+
+button[title]{
+  text-decoration: none;
+}
+
+input, textarea, select{
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+}
+
+textarea{
+  min-height: 84px;
+  resize: vertical;
+}
+
+input:focus, textarea:focus, select:focus, button:focus{
+  outline: 3px solid rgba(0,0,0,.15);
+  outline-offset: 2px;
+}
+
+small, .muted{
+  color: var(--muted);
+}
+
+@media (max-width: 520px){
+  .app{
+    padding: 14px !important;
+  }
+  button{
+    padding: 8px 10px;
+  }
+  input, textarea, select{
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
