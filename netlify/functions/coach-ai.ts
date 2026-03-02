@@ -33,6 +33,48 @@ function pickSummary(body: any): string {
   }
 }
 
+
+function buildPrompt(body: any): string {
+  if (!body || typeof body !== "object") return "";
+
+  // If the app sent the structured payload, format it explicitly so the model reliably uses it.
+  const hasStructured = body.coach_core || body.quick_log_today || body.week;
+  if (!hasStructured) return "";
+
+  const week = body.week ?? {};
+  const qc = body.quick_log_today ?? {};
+  const core = body.coach_core ?? body;
+
+  const safeJson = (v: any) => {
+    try {
+      const s = JSON.stringify(v, null, 2);
+      return s.length > 12000 ? s.slice(0, 12000) + "\n…(truncated)" : s;
+    } catch {
+      return String(v);
+    }
+  };
+
+  return [
+    "STRUCTURED APP PAYLOAD (use this — do not ignore):",
+    "",
+    `Week: ${week.start ?? "?"} → ${week.end ?? "?"}`,
+    "",
+    "Quick Log (selected day):",
+    `- day_date: ${qc.day_date ?? "?"}`,
+    `- weight_lbs: ${qc.weight_lbs ?? "null"}`,
+    `- waist_in: ${qc.waist_in ?? "null"}`,
+    `- sleep_hours: ${qc.sleep_hours ?? "null"}`,
+    `- calories: ${qc.calories ?? "null"}`,
+    `- protein_g: ${qc.protein_g ?? "null"}`,
+    `- zone2_minutes: ${qc.zone2_minutes ?? "null"}`,
+    qc.notes ? `- notes: ${qc.notes}` : "- notes: (none)",
+    "",
+    "Coach Core (deterministic v2.6 summary object):",
+    safeJson(core),
+  ].join("\n");
+}
+
+
 export const handler: Handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -52,8 +94,13 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    const body = event.body ? JSON.parse(event.body) : null;
-    const summary = pickSummary(body);
+    let body: any = null;
+    try {
+      body = event.body ? JSON.parse(event.body) : null;
+    } catch {
+      body = null;
+    }
+    const summary = buildPrompt(body) || pickSummary(body);
 
     if (!summary) {
       return {
@@ -70,6 +117,7 @@ export const handler: Handler = async (event) => {
       "You are Rev, a no-BS hybrid bodybuilding coach for a 60-year-old lifter (offline-first Rebuild @ 60 Tracker).",
       "Tone: practical, encouraging, slightly profane, classic old-school training mindset.",
       "Output MUST be concise, multi-line, actionable. No medical claims; suggest seeing clinician for symptoms.",
+      "This is an AI add-on. Do NOT override deterministic Coach v2.6; add suggestions + context only.",
       "Use the data provided. Provide: (1) headline, (2) 3–6 bullets, (3) next-session targets (compounds + accessories + bands), (4) recovery mode suggestion if warranted.",
     ].join("\n");
 
@@ -133,6 +181,7 @@ export const handler: Handler = async (event) => {
       body: JSON.stringify({
         text: text || "(No text returned.)",
         model: data?.model ?? "gpt-5.2",
+        ts: Date.now(),
         timestamp: new Date().toISOString(),
       }),
     };
@@ -144,5 +193,7 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
+
 
 
