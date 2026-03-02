@@ -6,7 +6,6 @@ import {
   type LocalWorkoutExercise,
   type LocalWorkoutSession,
   type LocalWorkoutSet,
-  type LoadType,
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
@@ -42,7 +41,7 @@ function isoToDay(iso: string): string {
 }
 
 type SetLite = {
-  load_type?: LoadType;
+  load_type?: "weight" | "band" | "bodyweight" | null;
   weight_lbs: number | null;
   band_level?: number | null;
   band_mode?: "assist" | "resist" | null;
@@ -60,47 +59,23 @@ type LastSetSummary = {
 };
 
 type ExerciseDraft = {
-  loadType: LoadType;
-  weight: string; // lbs when loadType=weight
+  loadType: "weight" | "band" | "bodyweight";
+  weight: string; // used for loadType=weight
   bandLevel: string; // 1..5 when loadType=band
   bandMode: "assist" | "resist";
   bandConfig: "single" | "doubled";
-  bandEst: string; // optional estimated lbs when loadType=band
+  bandEst: string; // optional override
   reps: string;
   rpe: string;
   warmup: boolean;
 };
 
-const DEFAULT_DRAFT: ExerciseDraft = {
-  loadType: "weight",
-  weight: "",
-  bandLevel: "1",
-  bandMode: "resist",
-  bandConfig: "single",
-  bandEst: "",
-  reps: "",
-  rpe: "",
-  warmup: false
-};
-
 function formatSet(s: SetLite) {
+  const w = s.weight_lbs ?? "—";
   const r = s.reps ?? "—";
   const wu = s.is_warmup ? "WU" : "";
   const rpe = s.rpe != null ? `@${s.rpe}` : "";
-  const lt: LoadType = (s.load_type ?? "weight") as LoadType;
-  let loadLabel = "—";
-  if (lt === "weight") {
-    loadLabel = s.weight_lbs != null ? String(s.weight_lbs) : "—";
-  } else if (lt === "bodyweight") {
-    loadLabel = "BW";
-  } else {
-    const lvl = s.band_level ?? null;
-    const mode = s.band_mode ?? null;
-    const cfg = s.band_config ?? null;
-    const est = s.band_est_lbs ?? null;
-    loadLabel = `B${lvl ?? "?"}${mode ? (mode === "assist" ? "A" : "R") : ""}${cfg ? (cfg === "doubled" ? "×2" : "") : ""}${est != null ? `~${est}` : ""}`;
-  }
-  return `${loadLabel}x${r}${wu}${rpe}`;
+  return `${w}x${r}${wu}${rpe}`;
 }
 
 function isCompoundExercise(name: string): boolean {
@@ -282,6 +257,52 @@ export default function App() {
   });
 
 
+
+// Band equivalent lbs calibration (user editable)
+const [bandEquivMap, setBandEquivMap] = useState<Record<string, number>>({
+  "1": 10,
+  "2": 20,
+  "3": 30,
+  "4": 40,
+  "5": 50
+});
+const bandEquivMapRef = useRef<Record<string, number>>(bandEquivMap);
+useEffect(() => {
+  bandEquivMapRef.current = bandEquivMap;
+}, [bandEquivMap]);
+
+async function loadBandEquiv() {
+  if (!userId) return;
+  const row = await localdb.localSettings.get([userId, "band_equiv_v1"]);
+  if (row?.value) {
+    try {
+      const parsed = JSON.parse(row.value);
+      if (parsed && typeof parsed === "object") {
+        const next: Record<string, number> = { ...bandEquivMap };
+        for (const k of ["1", "2", "3", "4", "5"]) {
+          const v = (parsed as any)[k];
+          if (typeof v === "number" && isFinite(v)) next[k] = v;
+        }
+        setBandEquivMap(next);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function saveBandEquiv(next: Record<string, number>) {
+  if (!userId) return;
+  const updatedAt = Date.now();
+  await localdb.localSettings.put({
+    user_id: userId,
+    key: "band_equiv_v1",
+    value: JSON.stringify(next),
+    updatedAt
+  });
+  setBandEquivMap(next);
+}
+
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
@@ -331,14 +352,6 @@ export default function App() {
   const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
 
-  // Quick Log trend series (last 28 days)
-  const [weightSeries, setWeightSeries] = useState<{ xLabel: string; y: number }[]>([]);
-  const [waistSeries, setWaistSeries] = useState<{ xLabel: string; y: number }[]>([]);
-  const [sleepSeries, setSleepSeries] = useState<{ xLabel: string; y: number }[]>([]);
-  const [calSeries, setCalSeries] = useState<{ xLabel: string; y: number }[]>([]);
-  const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
-  const [z2Series, setZ2Series] = useState<{ xLabel: string; y: number }[]>([]);
-
   // -----------------------------
   // Auth boot + autosync
   // -----------------------------
@@ -360,6 +373,11 @@ export default function App() {
     if (!userId) return;
     const stop = startAutoSync(setStatus);
     return stop;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    void loadBandEquiv();
   }, [userId]);
 
 
@@ -567,28 +585,6 @@ export default function App() {
   }
 
 
-async function loadQuickLogForDay(day: string) {
-    if (!userId) return;
-    try {
-      const dm = await localdb.dailyMetrics.get([userId, day]);
-      const nd = await localdb.nutritionDaily.get([userId, day]);
-      const z2 = await localdb.zone2Daily.get([userId, day]);
-
-      setWeight(dm?.weight_lbs != null ? String(dm.weight_lbs) : "");
-      setWaist(dm?.waist_in != null ? String(dm.waist_in) : "");
-      setSleepHours(dm?.sleep_hours != null ? String(dm.sleep_hours) : "");
-      setNotes(dm?.notes != null ? String(dm.notes) : "");
-
-      setCalories(nd?.calories != null ? String(nd.calories) : "");
-      setProtein(nd?.protein_g != null ? String(nd.protein_g) : "");
-
-      setZ2Minutes(z2?.minutes != null ? String(z2.minutes) : "");
-    } catch {
-      // ignore local read errors
-    }
-  }
-
-
 async function saveQuickLog() {
     if (!userId) return;
 
@@ -617,37 +613,7 @@ async function saveQuickLog() {
       });
     }
 
-    // Write-through to local Dexie tables so Dashboard + offline views have data immediately
-    await localdb.dailyMetrics.put({
-      user_id: userId,
-      day_date: selectedDayDate,
-      weight_lbs: weight ? Number(weight) : null,
-      waist_in: waist ? Number(waist) : null,
-      sleep_hours: sleepHours ? Number(sleepHours) : null,
-      notes: notes || null,
-      updatedAt: Date.now()
-    });
-
-    await localdb.nutritionDaily.put({
-      user_id: userId,
-      day_date: selectedDayDate,
-      calories: calories ? Number(calories) : null,
-      protein_g: protein ? Number(protein) : null,
-      updatedAt: Date.now()
-    });
-
-    await localdb.zone2Daily.put({
-      user_id: userId,
-      day_date: selectedDayDate,
-      modality: "Walk",
-      minutes: z2Minutes ? Number(z2Minutes) : null,
-      updatedAt: Date.now()
-    });
-
-    // Keep dashboard charts up to date
-    refreshDashboard();
-
-        alert("Saved instantly (local). Will sync when online.");
+    alert("Saved instantly (local). Will sync when online.");
   }
 
   // -----------------------------
@@ -677,7 +643,7 @@ async function saveQuickLog() {
     setDraftByExerciseId((prev) => {
       const next = { ...prev };
       for (const e of ex) {
-        if (!next[e.id]) next[e.id] = DEFAULT_DRAFT;
+        if (!next[e.id]) next[e.id] = { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
       }
       return next;
     });
@@ -723,7 +689,7 @@ async function saveQuickLog() {
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [exerciseId]: { ...(prev[exerciseId] ?? DEFAULT_DRAFT), ...patch }
+      [exerciseId]: { ...(prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }), ...patch }
     }));
   }
 
@@ -756,7 +722,7 @@ async function saveQuickLog() {
 
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [id]: prev[id] ?? DEFAULT_DRAFT
+      [id]: prev[id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
     }));
 
     await openSession(openSessionId);
@@ -765,114 +731,135 @@ async function saveQuickLog() {
     applyDefaultAutofill(id, name);
   }
 
-  async function addSet(exerciseId: string) {
-    const d = draftByExerciseId[exerciseId] ?? DEFAULT_DRAFT;
+  
+async function addSet(exerciseId: string) {
+  const d =
+    draftByExerciseId[exerciseId] ??
+    { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
 
-    const reps = d.reps ? Number(d.reps) : null;
-    if (!reps || reps <= 0) {
-      alert("Reps required.");
-      return;
-    }
-
-    const loadType: LoadType = (d.loadType ?? "weight") as LoadType;
-
-    // Parse load fields by type
-    const weight_lbs =
-      loadType === "weight" ? (d.weight ? Number(d.weight) : null) : null;
-
-    const band_level =
-      loadType === "band" ? (d.bandLevel ? Number(d.bandLevel) : null) : null;
-
-    const band_mode =
-      loadType === "band" ? (d.bandMode ?? "resist") : null;
-
-    const band_config =
-      loadType === "band" ? (d.bandConfig ?? "single") : null;
-
-    const band_est_lbs =
-      loadType === "band" ? (d.bandEst ? Number(d.bandEst) : null) : null;
-
-    if (loadType === "weight" && (weight_lbs == null || Number.isNaN(weight_lbs))) {
-      alert("Weight required for weight-based sets.");
-      return;
-    }
-
-    if (loadType === "band" && (!band_level || band_level < 1)) {
-      alert("Band level required for band sets.");
-      return;
-    }
-
-    const existing = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
-    const nextSetNumber = (existing?.length ?? 0) + 1;
-
-    const id = uuid();
-    const local: LocalWorkoutSet = {
-      id,
-      exercise_id: exerciseId,
-      set_number: nextSetNumber,
-      load_type: loadType,
-      weight_lbs,
-      band_level,
-      band_mode,
-      band_config,
-      band_est_lbs,
-      reps,
-      rpe: advanced && d.rpe ? Number(d.rpe) : null,
-      is_warmup: advanced ? !!d.warmup : false
-    };
-
-    await localdb.localSets.put(local);
-
-    await enqueue("insert_set", {
-      id,
-      exercise_id: exerciseId,
-      set_number: nextSetNumber,
-      load_type: loadType,
-      weight_lbs,
-      band_level,
-      band_mode,
-      band_config,
-      band_est_lbs,
-      reps,
-      rpe: advanced && d.rpe ? Number(d.rpe) : null,
-      is_warmup: advanced ? !!d.warmup : false
-    });
-
-    updateDraft(exerciseId, { ...DEFAULT_DRAFT });
-
-    setSecs(90);
-    setTimerOn(true);
-
-    if (openSessionId) await openSession(openSessionId);
-
-    const ex = exercises.find((e) => e.id === exerciseId);
-    if (ex) {
-      setLastByExerciseName((prev) => {
-        const prevSummary = prev[ex.name];
-        const appended: SetLite = {
-          load_type: loadType,
-          weight_lbs: weight_lbs ?? null,
-          band_level: band_level ?? null,
-          band_mode: band_mode ?? null,
-          band_config: band_config ?? null,
-          band_est_lbs: band_est_lbs ?? null,
-          reps: reps ?? null,
-          rpe: advanced && d.rpe ? Number(d.rpe) : null,
-          is_warmup: advanced ? !!d.warmup : false
-        };
-        return {
-          ...prev,
-          [ex.name]: {
-            source: "local",
-            started_at: new Date().toISOString(),
-            sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
-          }
-        };
-      });
-    }
+  const reps = d.reps ? Number(d.reps) : null;
+  if (!reps || reps <= 0) {
+    alert("Reps required.");
+    return;
   }
 
-  // -----------------------------
+  const loadType = d.loadType || "weight";
+
+  // Band equiv map (from localSettings)
+  const bandEquiv = bandEquivMapRef.current;
+
+  let weight_lbs: number | null = null;
+  let band_level: number | null = null;
+  let band_mode: "assist" | "resist" | null = null;
+  let band_config: "single" | "doubled" | null = null;
+  let band_est_lbs: number | null = null;
+
+  if (loadType === "weight") {
+    const w = d.weight ? Number(d.weight) : null;
+    if (!w || w <= 0) {
+      alert("Weight required (or switch to Band/BW).");
+      return;
+    }
+    weight_lbs = w;
+  } else if (loadType === "band") {
+    const lvl = d.bandLevel ? Number(d.bandLevel) : null;
+    if (!lvl || lvl < 1 || lvl > 5) {
+      alert("Band level (1–5) required.");
+      return;
+    }
+    band_level = lvl;
+    band_mode = d.bandMode || "resist";
+    band_config = d.bandConfig || "single";
+    const override = d.bandEst ? Number(d.bandEst) : null;
+
+    const base = bandEquiv?.[String(lvl)] != null ? Number(bandEquiv[String(lvl)]) : null;
+    const cfgMult = band_config === "doubled" ? 2 : 1;
+    const est = override && override > 0 ? override : base != null ? base * cfgMult : null;
+
+    band_est_lbs = est != null ? Math.round(est) : null;
+  } else {
+    // bodyweight
+    weight_lbs = null;
+  }
+
+  const existing = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
+  const nextSetNumber = (existing?.length ?? 0) + 1;
+
+  const id = uuid();
+  const local: LocalWorkoutSet = {
+    id,
+    exercise_id: exerciseId,
+    set_number: nextSetNumber,
+    load_type: loadType as any,
+    weight_lbs,
+    band_level,
+    band_mode,
+    band_config,
+    band_est_lbs,
+    reps,
+    rpe: advanced && d.rpe ? Number(d.rpe) : null,
+    is_warmup: advanced ? !!d.warmup : false
+  };
+
+  await localdb.localSets.put(local);
+
+  await enqueue("insert_set", {
+    id,
+    exercise_id: exerciseId,
+    set_number: nextSetNumber,
+    load_type: loadType,
+    weight_lbs,
+    band_level,
+    band_mode,
+    band_config,
+    band_est_lbs,
+    reps,
+    rpe: advanced && d.rpe ? Number(d.rpe) : null,
+    is_warmup: advanced ? !!d.warmup : false
+  });
+
+  // Reset only the fields that correspond to the load type, keep selections so logging is fast
+  updateDraft(exerciseId, {
+    weight: loadType === "weight" ? "" : d.weight,
+    bandEst: loadType === "band" ? "" : d.bandEst,
+    reps: "",
+    rpe: "",
+    warmup: false
+  });
+
+  setSecs(90);
+  setTimerOn(true);
+
+  if (openSessionId) await openSession(openSessionId);
+
+  const ex = exercises.find((e) => e.id === exerciseId);
+  if (ex) {
+    setLastByExerciseName((prev) => {
+      const prevSummary = prev[ex.name];
+      const appended: SetLite = {
+        load_type: loadType,
+        weight_lbs: weight_lbs ?? null,
+        band_level,
+        band_mode,
+        band_config,
+        band_est_lbs,
+        reps: reps ?? null,
+        rpe: advanced && d.rpe ? Number(d.rpe) : null,
+        is_warmup: advanced ? !!d.warmup : false
+      };
+      return {
+        ...prev,
+        [ex.name]: {
+          source: "local",
+          started_at: new Date().toISOString(),
+          sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
+        }
+      };
+    });
+  }
+}
+
+// -----------------------------
   // Delete Session (local now + cloud queued)
   // -----------------------------
   async function deleteSession(sessionId: string) {
@@ -1060,7 +1047,7 @@ async function saveQuickLog() {
 
       setDraftByExerciseId((prev) => ({
         ...prev,
-        [exerciseId]: prev[exerciseId] ?? DEFAULT_DRAFT
+        [exerciseId]: prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
       }));
     }
 
@@ -1090,12 +1077,12 @@ async function saveQuickLog() {
     if (ss.length === 0) return null;
 
     const all = ss.map((x) => ({
-      load_type: (x.load_type ?? "weight") as LoadType,
+      load_type: (x as any).load_type ?? null,
       weight_lbs: x.weight_lbs ?? null,
-      band_level: x.band_level ?? null,
-      band_mode: x.band_mode ?? null,
-      band_config: x.band_config ?? null,
-      band_est_lbs: x.band_est_lbs ?? null,
+      band_level: (x as any).band_level ?? null,
+      band_mode: (x as any).band_mode ?? null,
+      band_config: (x as any).band_config ?? null,
+      band_est_lbs: (x as any).band_est_lbs ?? null,
       reps: x.reps ?? null,
       rpe: x.rpe ?? null,
       is_warmup: !!x.is_warmup
@@ -1147,8 +1134,13 @@ async function saveQuickLog() {
 
     if (ssErr || !ss || ss.length === 0) return null;
 
-    const all = ss.map((x) => ({
+    const all = ss.map((x: any) => ({
+      load_type: x.load_type ?? null,
       weight_lbs: x.weight_lbs ?? null,
+      band_level: x.band_level ?? null,
+      band_mode: x.band_mode ?? null,
+      band_config: x.band_config ?? null,
+      band_est_lbs: x.band_est_lbs ?? null,
       reps: x.reps ?? null,
       rpe: x.rpe ?? null,
       is_warmup: !!x.is_warmup
@@ -1183,7 +1175,16 @@ async function saveQuickLog() {
     return work ?? setsAll[0] ?? null;
   }
 
-  function pickTopSet(setsAll: SetLite[]): SetLite | null {
+  
+function effectiveLoadForTopSet(s: SetLite): number {
+  const lt = s.load_type ?? "weight";
+  if (lt === "weight") return Number(s.weight_lbs ?? -1);
+  if (lt === "band") return Number(s.band_est_lbs ?? -1);
+  // bodyweight: treat as 0 so it doesn't beat loaded sets
+  return 0;
+}
+
+function pickTopSet(setsAll: SetLite[]): SetLite | null {
     let best: SetLite | null = null;
     for (const s of setsAll) {
       const w = s.weight_lbs ?? -1;
@@ -1212,11 +1213,11 @@ async function saveQuickLog() {
     if (!chosen) return;
 
     updateDraft(exerciseId, {
-      loadType: (chosen.load_type ?? "weight") as LoadType,
+      loadType: (chosen.load_type as any) ?? "weight",
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
-      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "1",
-      bandMode: (chosen.band_mode ?? "resist") as any,
-      bandConfig: (chosen.band_config ?? "single") as any,
+      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "",
+      bandMode: (chosen.band_mode as any) ?? "resist",
+      bandConfig: (chosen.band_config as any) ?? "single",
       bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
@@ -1238,11 +1239,11 @@ async function saveQuickLog() {
     if (!chosen) return;
 
     updateDraft(exerciseId, {
-      loadType: (chosen.load_type ?? "weight") as LoadType,
+      loadType: (chosen.load_type as any) ?? "weight",
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
-      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "1",
-      bandMode: (chosen.band_mode ?? "resist") as any,
-      bandConfig: (chosen.band_config ?? "single") as any,
+      bandLevel: chosen.band_level != null ? String(chosen.band_level) : "",
+      bandMode: (chosen.band_mode as any) ?? "resist",
+      bandConfig: (chosen.band_config as any) ?? "single",
       bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
@@ -1426,73 +1427,11 @@ async function saveQuickLog() {
         .filter((d) => bestDlE1RM.get(d) != null)
         .map((d) => ({ xLabel: d.slice(5), y: bestDlE1RM.get(d)! }));
 
-
-      // Quick Log trends (last 28 days) — local Dexie tables
-      const dayKeys = days.map((d) => [userId, d] as [string, string]);
-
-      const dailyRows = await localdb.dailyMetrics.bulkGet(dayKeys);
-      const nutrRows = await localdb.nutritionDaily.bulkGet(dayKeys);
-      const z2Rows = await localdb.zone2Daily.bulkGet(dayKeys);
-
-      const wSeries = days
-        .map((d, i) => {
-          const row = dailyRows[i];
-          const v = row?.weight_lbs;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const wsSeries = days
-        .map((d, i) => {
-          const row = dailyRows[i];
-          const v = row?.waist_in;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const slSeries = days
-        .map((d, i) => {
-          const row = dailyRows[i];
-          const v = row?.sleep_hours;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const cSeries = days
-        .map((d, i) => {
-          const row = nutrRows[i];
-          const v = row?.calories;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const pSeries = days
-        .map((d, i) => {
-          const row = nutrRows[i];
-          const v = row?.protein_g;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const zSeries = days
-        .map((d, i) => {
-          const row = z2Rows[i];
-          const v = row?.minutes;
-          return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
-        })
-        .filter(Boolean) as { xLabel: string; y: number }[];
-
       setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
       setSquatSeries(squat);
       setDlSeries(dl);
-      setWeightSeries(wSeries);
-      setWaistSeries(wsSeries);
-      setSleepSeries(slSeries);
-      setCalSeries(cSeries);
-      setProteinSeries(pSeries);
-      setZ2Series(zSeries);
     } finally {
       setDashBusy(false);
     }
@@ -1509,7 +1448,6 @@ async function saveQuickLog() {
     setSets([]);
     loadSessionsForDay(selectedDayDate);
     loadTemplates();
-    loadQuickLogForDay(selectedDayDate);
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -1733,17 +1671,6 @@ async function saveQuickLog() {
             <LineChart title="Bench (name includes 'bench')" points={benchSeries} />
             <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
             <LineChart title="Deadlift (name includes 'deadlift' or 'dl')" points={dlSeries} />
-          </div>
-
-
-          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
-          <div style={{ display: "grid", gap: 12 }}>
-            <LineChart title="Bodyweight (lbs)" points={weightSeries} />
-            <LineChart title="Waist (in)" points={waistSeries} />
-            <LineChart title="Sleep (hours)" points={sleepSeries} />
-            <LineChart title="Calories" points={calSeries} />
-            <LineChart title="Protein (g)" points={proteinSeries} />
-            <LineChart title="Zone 2 (minutes)" points={z2Series} />
           </div>
 
           <div style={{ marginTop: 14, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
@@ -1979,7 +1906,7 @@ async function saveQuickLog() {
                     const exSets = setsForExercise(ex.id);
                     const lastSummary = lastByExerciseName[ex.name];
                     const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
-                    const d = draftByExerciseId[ex.id] ?? DEFAULT_DRAFT;
+                    const d = draftByExerciseId[ex.id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
 
                     const compound = isCompoundExercise(ex.name);
                     const defaultLabel = compound ? "Default: 1st work" : "Default: top set";
@@ -2027,87 +1954,135 @@ async function saveQuickLog() {
                           )}
                         </div>
 
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
-                          <select
-                            value={d.loadType}
-                            onChange={(e) => updateDraft(ex.id, { loadType: e.target.value as any })}
-                          >
-                            <option value="weight">Weight</option>
-                            <option value="band">Band</option>
-                            <option value="bodyweight">Bodyweight</option>
-                          </select>
+                        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+  <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 700 }}>Load:</div>
+  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+    <button
+      onClick={() => updateDraft(ex.id, { loadType: "weight" })}
+      style={{ fontWeight: d.loadType === "weight" ? 800 : 600 }}
+    >
+      Weight
+    </button>
+    <button
+      onClick={() => updateDraft(ex.id, { loadType: "band" })}
+      style={{ fontWeight: d.loadType === "band" ? 800 : 600 }}
+    >
+      Band
+    </button>
+    <button
+      onClick={() => updateDraft(ex.id, { loadType: "bodyweight" })}
+      style={{ fontWeight: d.loadType === "bodyweight" ? 800 : 600 }}
+    >
+      BW
+    </button>
+  </div>
+</div>
 
-                          {d.loadType === "weight" && (
-                            <input
-                              placeholder="Weight (lbs)"
-                              value={d.weight}
-                              onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
-                              style={{ width: 130 }}
-                            />
-                          )}
+{d.loadType === "weight" && (
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
+      gap: 8,
+      marginTop: 10
+    }}
+  >
+    <input
+      placeholder="Weight"
+      value={d.weight}
+      onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
+    />
+    <input
+      placeholder="Reps"
+      value={d.reps}
+      onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
+    />
+    {advanced && (
+      <input
+        placeholder="RPE"
+        value={d.rpe}
+        onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
+      />
+    )}
+    <button onClick={() => addSet(ex.id)}>Save Set</button>
+  </div>
+)}
 
-                          {d.loadType === "band" && (
-                            <>
-                              <select
-                                value={d.bandLevel}
-                                onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
-                              >
-                                <option value="1">Band 1</option>
-                                <option value="2">Band 2</option>
-                                <option value="3">Band 3</option>
-                                <option value="4">Band 4</option>
-                                <option value="5">Band 5</option>
-                              </select>
+{d.loadType === "band" && (
+  <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+      <input
+        placeholder="Level 1–5"
+        value={d.bandLevel}
+        onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
+      />
+      <select
+        value={d.bandMode}
+        onChange={(e) => updateDraft(ex.id, { bandMode: e.target.value as any })}
+      >
+        <option value="resist">Resist</option>
+        <option value="assist">Assist</option>
+      </select>
+      <select
+        value={d.bandConfig}
+        onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
+      >
+        <option value="single">Single</option>
+        <option value="doubled">Doubled</option>
+      </select>
+      <input
+        placeholder="Est lbs (optional)"
+        value={d.bandEst}
+        onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value })}
+      />
+    </div>
 
-                              <select
-                                value={d.bandMode}
-                                onChange={(e) => updateDraft(ex.id, { bandMode: e.target.value as any })}
-                              >
-                                <option value="resist">Resist</option>
-                                <option value="assist">Assist</option>
-                              </select>
+    <div style={{ display: "grid", gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 8 }}>
+      <div style={{ fontSize: 12, opacity: 0.8, alignSelf: "center" }}>
+        Uses Dashboard band equiv if Est lbs blank
+      </div>
+      <input
+        placeholder="Reps"
+        value={d.reps}
+        onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
+      />
+      {advanced && (
+        <input
+          placeholder="RPE"
+          value={d.rpe}
+          onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
+        />
+      )}
+      <button onClick={() => addSet(ex.id)}>Save Set</button>
+    </div>
+  </div>
+)}
 
-                              <select
-                                value={d.bandConfig}
-                                onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
-                              >
-                                <option value="single">Single</option>
-                                <option value="doubled">Doubled</option>
-                              </select>
-
-                              <input
-                                placeholder="Est lbs (opt)"
-                                value={d.bandEst}
-                                onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value })}
-                                style={{ width: 130 }}
-                              />
-                            </>
-                          )}
-
-                          {d.loadType === "bodyweight" && (
-                            <div style={{ padding: "6px 10px", border: "1px solid #ccc", borderRadius: 8, fontSize: 12 }}>
-                              BW
-                            </div>
-                          )}
-
-                          <input
-                            placeholder="Reps"
-                            value={d.reps}
-                            onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
-                            style={{ width: 90 }}
-                          />
-
-                          {advanced && (
-                            <input
-                              placeholder="RPE"
-                              value={d.rpe}
-                              onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
-                              style={{ width: 90 }}
-                            />
-                          )}
-
-                          <button onClick={() => addSet(ex.id)}>Save Set</button>
-                        </div>
+{d.loadType === "bodyweight" && (
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
+      gap: 8,
+      marginTop: 10
+    }}
+  >
+    <div style={{ fontSize: 12, opacity: 0.8, alignSelf: "center" }}>Bodyweight set</div>
+    <input
+      placeholder="Reps"
+      value={d.reps}
+      onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
+    />
+    {advanced && (
+      <input
+        placeholder="RPE"
+        value={d.rpe}
+        onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
+      />
+    )}
+    <button onClick={() => addSet(ex.id)}>Save Set</button>
+  </div>
+)}
 
                         {advanced && (
                           <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
@@ -2134,18 +2109,17 @@ async function saveQuickLog() {
                                   <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                                     <div>
                                       <b>{s.set_number}.</b> {formatSet({
-                                        load_type: (s.load_type ?? "weight") as any,
-                                        weight_lbs: (s.weight_lbs ?? null) as any,
-                                        band_level: (s.band_level ?? null) as any,
-                                        band_mode: (s.band_mode ?? null) as any,
-                                        band_config: (s.band_config ?? null) as any,
-                                        band_est_lbs: (s.band_est_lbs ?? null) as any,
-                                        reps: (s.reps ?? null) as any,
-                                        rpe: (s.rpe ?? null) as any,
-                                        is_warmup: !!s.is_warmup
-                                      })}
-                                      {s.is_warmup ? " (WU)" : ""}
-                                      {s.rpe != null ? ` @RPE ${s.rpe}` : ""}
+                                          load_type: (s as any).load_type ?? null,
+                                          weight_lbs: s.weight_lbs ?? null,
+                                          band_level: (s as any).band_level ?? null,
+                                          band_mode: (s as any).band_mode ?? null,
+                                          band_config: (s as any).band_config ?? null,
+                                          band_est_lbs: (s as any).band_est_lbs ?? null,
+                                          reps: s.reps ?? null,
+                                          rpe: s.rpe ?? null,
+                                          is_warmup: !!s.is_warmup
+                                        })}
+                                      
                                     </div>
                                     <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
                                   </div>
@@ -2184,6 +2158,8 @@ async function saveQuickLog() {
     </div>
   );
 }
+
+
 
 
 
