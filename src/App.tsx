@@ -1183,6 +1183,38 @@ async function addSet(exerciseId: string) {
     alert("Session created from template (instant).");
   }
 
+
+  async function deleteTemplate(templateId: string) {
+    if (!userId) return;
+
+    const t = templates.find((x) => x.id === templateId) ?? null;
+    const label = t ? t.name : templateId;
+
+    const ok = confirm(
+      `Delete this template?\n\n${label}\n\nThis removes it locally immediately and queues a cloud delete.`
+    );
+    if (!ok) return;
+
+    try {
+      await localdb.transaction("rw", localdb.localTemplates, localdb.localTemplateExercises, async () => {
+        await localdb.localTemplateExercises.where({ template_id: templateId }).delete();
+        await localdb.localTemplates.delete(templateId);
+      });
+
+      await enqueue("delete_template", { template_id: templateId });
+
+      setOpenTemplateId((cur) => (cur === templateId ? null : cur));
+      if (openTemplateId === templateId) setTemplateExercises([]);
+
+      await loadTemplates();
+      alert("Template deleted (local). Will sync delete when online.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Delete failed: ${e?.message ?? String(e)}`);
+    }
+  }
+
+
   // -----------------------------
   // Last numbers
   // -----------------------------
@@ -2028,21 +2060,30 @@ setTonnageSeries(tonSeries);
             {templates.length > 0 && (
               <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                 {templates.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => openTemplate(t.id)}
-                    style={{
-                      textAlign: "left",
-                      padding: 10,
-                      border: t.id === openTemplateId ? "2px solid black" : "1px solid #ccc",
-                      borderRadius: 8
-                    }}
-                  >
-                    <div style={{ fontWeight: 800 }}>{t.name}</div>
-                    <div style={{ opacity: 0.75, fontSize: 12 }}>{t.description ?? ""}</div>
-                  </button>
+                  <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+                    <button
+                      onClick={() => openTemplate(t.id)}
+                      style={{
+                        textAlign: "left",
+                        padding: 10,
+                        border: t.id === openTemplateId ? "2px solid black" : "1px solid #ccc",
+                        borderRadius: 8,
+                        flex: 1
+                      }}
+                    >
+                      <div style={{ fontWeight: 800 }}>{t.name}</div>
+                      <div style={{ opacity: 0.75, fontSize: 12 }}>{t.description ?? ""}</div>
+                    </button>
+
+                    <button
+                      onClick={() => deleteTemplate(t.id)}
+                      title="Delete template"
+                      style={{ minWidth: 88, opacity: 0.9 }}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ))}
-              </div>
             )}
 
             {openTemplateId && (
@@ -2406,6 +2447,8 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
+
 
 
 
