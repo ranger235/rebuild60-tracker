@@ -57,11 +57,29 @@ function normalizeExerciseName(raw: string): string {
 // Compact key used for lookups (Last numbers, analytics buckets, etc.)
 function exerciseKey(raw: string): string {
   const n = normalizeExerciseName(raw).replace(/\s+/g, "");
-  // Common shorthands first
+  // Common shorthands / aliases first (canonical keys)
   if (n === "rdl") return "romaniandeadlift";
   if (n === "dl") return "deadlift";
   if (n === "bp") return "benchpress";
   if (n === "ohp") return "overheadpress";
+
+  // Bench variations
+  if (n === "flatbench" || n === "flatbenchpress" || n === "barbellbench" || n === "barbellbenchpress")
+    return "benchpress";
+  if (n === "dbbench" || n === "dbbenchpress" || n === "dumbbellbench" || n === "dumbbellbenchpress" || n === "dbbp")
+    return "dumbbellbenchpress";
+
+  // Squat variations
+  if (
+    n === "ssbsquat" ||
+    n === "ssbsquats" ||
+    n === "safetysquatbar" ||
+    n === "safetysquatbarsquat" ||
+    n === "safetysquatbarsquats"
+  )
+    return "ssbsquat";
+  if (n === "splitsquat" || n === "splitsquats") return "splitsquat";
+
   return n;
 }
 
@@ -71,7 +89,10 @@ function displayExerciseName(raw: string): string {
   if (k === "romaniandeadlift") return "Romanian Deadlift";
   if (k === "deadlift") return "Deadlift";
   if (k === "benchpress") return "Bench Press";
+  if (k === "dumbbellbenchpress") return "DB Bench Press";
   if (k === "overheadpress") return "Overhead Press";
+  if (k === "ssbsquat") return "SSB Squat";
+  if (k === "splitsquat") return "Split Squat";
   // Keep user's original casing if it's not a known alias
   return raw;
 }
@@ -81,18 +102,25 @@ function displayExerciseName(raw: string): string {
 function canonicalizeExerciseInput(raw: string): string {
   const trimmed = (raw || "").trim();
   if (!trimmed) return trimmed;
-  const n = normalizeExerciseName(trimmed).replace(/\s+/g, "");
-  if (n === "rdl") return "Romanian Deadlift";
-  if (n === "dl") return "Deadlift";
-  if (n === "bp") return "Bench Press";
-  if (n === "ohp") return "Overhead Press";
+  const k = exerciseKey(trimmed);
+
+  // If user typed only an alias as the full exercise name, store the canonical display name.
+  // This prevents split histories like "RDL" vs "Romanian Deadlift".
+  if (k === "romaniandeadlift") return "Romanian Deadlift";
+  if (k === "deadlift") return "Deadlift";
+  if (k === "benchpress") return "Bench Press";
+  if (k === "dumbbellbenchpress") return "DB Bench Press";
+  if (k === "overheadpress") return "Overhead Press";
+  if (k === "ssbsquat") return "SSB Squat";
+  if (k === "splitsquat") return "Split Squat";
+
   return trimmed;
 }
 
 function isBenchName(name: string): boolean {
   const k = exerciseKey(name);
   const n = normalizeExerciseName(name);
-  return k === "benchpress" || n.includes("bench");
+  return k === "benchpress" || k === "dumbbellbenchpress" || n.includes("bench");
 }
 function isSquatName(name: string): boolean {
   const n = normalizeExerciseName(name);
@@ -2378,6 +2406,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
