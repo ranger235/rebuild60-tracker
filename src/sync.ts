@@ -47,6 +47,15 @@ async function processOp(op: PendingOp["op"], payload: any) {
       await supabase.from("workout_templates").insert(payload);
       return;
 
+    case "delete_template": {
+      const template_id = payload?.template_id;
+      if (!template_id) throw new Error("delete_template missing template_id");
+      // delete template exercises then template
+      await supabase.from("workout_template_exercises").delete().eq("template_id", template_id);
+      await supabase.from("workout_templates").delete().eq("id", template_id);
+      return;
+    }
+
     case "insert_template_exercise":
       await supabase.from("workout_template_exercises").insert(payload);
       return;
@@ -181,4 +190,6 @@ export function startAutoSync(setStatus: (s: string) => void) {
     window.clearInterval(h);
   };
 }
+
+
 
