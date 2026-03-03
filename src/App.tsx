@@ -10,6 +10,7 @@ import {
   type LocalWorkoutTemplateExercise
 } from "./localdb";
 import { CoachBoundary } from "./CoachPanel";
+import LineChart from "./components/LineChart";
 
 function todayISO(): string {
   const d = new Date();
@@ -253,76 +254,6 @@ type BackupEnvelope = {
 
 // -----------------------------
 // Simple SVG sparkline / line chart
-// -----------------------------
-function LineChart({
-  title,
-  points,
-  height = 120
-}: {
-  title: string;
-  points: { xLabel: string; y: number }[];
-  height?: number;
-}) {
-  const width = 340;
-  const pad = 18;
-
-  if (!points || points.length === 0) {
-    return (
-      <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
-        <div style={{ fontWeight: 800 }}>{title}</div>
-        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>No data yet.</div>
-      </div>
-    );
-  }
-
-  const ys = points.map((p) => p.y);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const span = maxY - minY || 1;
-
-  const toX = (i: number) => {
-    if (points.length === 1) return pad;
-    return pad + (i * (width - pad * 2)) / (points.length - 1);
-  };
-  const toY = (y: number) => {
-    const t = (y - minY) / span; // 0..1
-    return pad + (1 - t) * (height - pad * 2);
-  };
-
-  const d = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(p.y).toFixed(1)}`)
-    .join(" ");
-
-  const last = points[points.length - 1]?.y ?? 0;
-
-  return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-        <div style={{ fontWeight: 800 }}>{title}</div>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>
-          Latest: <b>{Number.isFinite(last) ? Math.round(last) : last}</b>
-        </div>
-      </div>
-
-      <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ marginTop: 8 }}>
-        <path d={d} fill="none" stroke="currentColor" strokeWidth="2" />
-        {/* min/max labels */}
-        <text x={pad} y={pad - 4} fontSize="10" opacity="0.65">
-          {Math.round(maxY)}
-        </text>
-        <text x={pad} y={height - 4} fontSize="10" opacity="0.65">
-          {Math.round(minY)}
-        </text>
-      </svg>
-
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.75 }}>
-        <span>{points[0]?.xLabel}</span>
-        <span>{points[points.length - 1]?.xLabel}</span>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
@@ -2509,6 +2440,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
