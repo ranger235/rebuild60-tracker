@@ -504,7 +504,8 @@ export const handler: Handler = async (event) => {
       "- No medical claims. If warning symptoms appear, advise clinician.",
       "Output format (MUST follow exactly):",
       "1) HEADLINE: one sentence. If DERIVED SIGNALS.deload.active is true, headline MUST start with 'DELOAD' and specify FULL / LOWER / PUSH.",
-      "2) QUICK LOG SNAPSHOT: exactly 3 bullets (entries, basics days, latest note or 'no note').",
+      "2) QUICK LOG SIGNALS: 6–8 bullets total. Must include: entries (7d/14d), basics days (7d), sleep avg (3d + 7d if available), protein avg (3d + target), bodyweight trend (14d % if available), Zone 2 (days + minutes in 7d), joint signal summary (knee/back/shoulder + pain yes/no), and latest note (or 'no note').",
+      "   Then add 2 bullets labeled 'Impact:' explaining how Quick Log changed the plan (e.g., RPE cap, deload trigger, no load increase, substitutions).",
       "3) TRAINING SNAPSHOT: exactly 3 bullets (sessions/tonnage/sets, best lifts if present, and any spike/red flags).",
       "4) DATA CONFIDENCE: one line (HIGH/MEDIUM/LOW + 5–12 word reason).",
       "5) RECOVERY BUDGET: one line (GREEN/YELLOW/RED + what to do next 48h). Must explicitly name Quick Log signal(s) driving it (sleep/protein/joints/BW/Z2).",
@@ -586,6 +587,7 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
 
 
 
