@@ -52,110 +52,289 @@ function parseDate(d?: string): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+
 function deriveSignals(body: any) {
   const qRecent: QuickLogRow[] = Array.isArray(body?.quick_log_recent) ? body.quick_log_recent : [];
   const workouts: WorkoutSession[] = Array.isArray(body?.recent_workouts) ? body.recent_workouts : [];
 
-  // Quick Log window stats
   const qSorted = [...qRecent].sort((a, b) => (parseDate(a.day_date) ?? 0) - (parseDate(b.day_date) ?? 0));
   const last7 = qSorted.slice(-7);
   const last14 = qSorted.slice(-14);
+  const last3 = qSorted.slice(-3);
 
-  const basicsDays = last7.reduce((acc, d) => {
+  const basicsDays7 = last7.reduce((acc, d) => {
     const sleep = safeNum(d.sleep_hours);
     const protein = safeNum(d.protein_g);
     return acc + (sleep != null && protein != null ? 1 : 0);
   }, 0);
+
   const qEntries7 = last7.length;
   const qEntries14 = last14.length;
 
   const weights14 = last14.map(d => safeNum(d.weight_lbs)).filter((x): x is number => x != null);
   const waist14 = last14.map(d => safeNum(d.waist_in)).filter((x): x is number => x != null);
+
+  const sleep3 = last3.map(d => safeNum(d.sleep_hours)).filter((x): x is number => x != null);
   const sleep7 = last7.map(d => safeNum(d.sleep_hours)).filter((x): x is number => x != null);
+  const protein3 = last3.map(d => safeNum(d.protein_g)).filter((x): x is number => x != null);
   const protein7 = last7.map(d => safeNum(d.protein_g)).filter((x): x is number => x != null);
   const z27 = last7.map(d => safeNum(d.zone2_minutes)).filter((x): x is number => x != null);
 
-  const wtDelta = weights14.length >= 2 ? weights14[weights14.length - 1] - weights14[0] : null;
-  const waistDelta = waist14.length >= 2 ? waist14[waist14.length - 1] - waist14[0] : null;
+  const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+
+  const avgSleep3 = avg(sleep3);
+  const avgSleep7 = avg(sleep7);
+  const avgProtein3 = avg(protein3);
+  const avgProtein7 = avg(protein7);
+  const totalZone2Min7 = z27.reduce((a, b) => a + b, 0);
+  const zone2Days7 = last7.reduce((acc, d) => acc + (safeNum(d.zone2_minutes) != null && safeNum(d.zone2_minutes)! > 0 ? 1 : 0), 0);
+
+  const wtDelta14 = weights14.length >= 2 ? weights14[weights14.length - 1] - weights14[0] : null;
+  const waistDelta14 = waist14.length >= 2 ? waist14[waist14.length - 1] - waist14[0] : null;
+  const wtPct14 =
+    weights14.length >= 2 && weights14[0] > 0 ? ((weights14[weights14.length - 1] - weights14[0]) / weights14[0]) * 100 : null;
 
   // Training window stats
   const wSorted = [...workouts].sort((a, b) => (parseDate(a.day_date) ?? 0) - (parseDate(b.day_date) ?? 0));
   const wLast6 = wSorted.slice(-6);
   const sessionsRecent = wLast6.length;
-  const totalTonnage = wLast6.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
-  const totalSets = wLast6.reduce((acc, s) => acc + (safeNum(s.set_count) ?? 0), 0);
+  const totalTonnageRecent = wLast6.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const totalSetsRecent = wLast6.reduce((acc, s) => acc + (safeNum(s.set_count) ?? 0), 0);
 
   // Spike estimate (compare last 3 sessions tonnage vs previous 3)
-  const last3 = wLast6.slice(-3);
-  const prev3 = wLast6.slice(0, Math.max(0, wLast6.length - 3));
-  const tonLast3 = last3.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
-  const tonPrev3 = prev3.slice(-3).reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
-  const spikePct = tonPrev3 > 0 ? ((tonLast3 - tonPrev3) / tonPrev3) * 100 : null;
+  const wLast3 = wLast6.slice(-3);
+  const wPrev3 = wLast6.slice(0, Math.max(0, wLast6.length - 3)).slice(-3);
+  const tonLast3 = wLast3.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const tonPrev3 = wPrev3.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const spikePctApprox = tonPrev3 > 0 ? ((tonLast3 - tonPrev3) / tonPrev3) * 100 : null;
+  const spikeClamped = spikePctApprox != null ? clamp(spikePctApprox, -99, 300) : null;
 
-  // Pain/fatigue flags from notes
-  const noteText = [body?.quick_log_today?.notes, ...qRecent.map((d: any) => d?.notes)]
+  // Parse notes for "green vs red" joint signals (simple, conservative)
+  const notesAll = [body?.quick_log_today?.notes, ...qRecent.map((d: any) => d?.notes)]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
-  const flags = {
-    knee: /\bknee\b/.test(noteText),
-    back: /\bback\b/.test(noteText) || /\blower\s*back\b/.test(noteText),
-    shoulder: /\bshoulder\b/.test(noteText) || /\brotator\b/.test(noteText),
-    pain: /\bpain\b/.test(noteText) || /\bhurt\b/.test(noteText) || /\bsore\b/.test(noteText),
+
+  const has = (re: RegExp) => re.test(notesAll);
+  const pos = /\b(behaving|good|fine|ok|okay|better|improving|stable|solid)\b/;
+  const neg = /\b(pain|hurt|sore|ache|tight|tweak|flare|worse|bad)\b/;
+
+  const kneeMention = has(/\bknee\b/);
+  const backMention = has(/\b(back|lower\s*back)\b/);
+  const shoulderMention = has(/\b(shoulder|rotator)\b/);
+
+  const hasNeg = has(neg);
+  const hasPos = has(pos);
+
+  // A joint flag is "active" only if mentioned AND negative sentiment is present.
+  // If user says "knee/back behaving", we treat it as NOT active.
+  const jointFlags = {
+    knee: kneeMention && hasNeg && !hasPos,
+    back: backMention && hasNeg && !hasPos,
+    shoulder: shoulderMention && hasNeg && !hasPos,
   };
+
+  const pain = has(/\b(pain|hurt|sore)\b/) && hasNeg;
+  const fatigue = has(/\b(fatigue|tired|exhausted|wrecked)\b/);
 
   // Data confidence
   let confidence: "HIGH" | "MEDIUM" | "LOW" = "LOW";
   const hasWorkouts = wLast6.length > 0;
   const hasTrends = qEntries14 >= 4;
-  const hasBasics = basicsDays >= 3;
+  const hasBasics = basicsDays7 >= 3;
   if (hasWorkouts && hasTrends && hasBasics) confidence = "HIGH";
-  else if (hasWorkouts && (hasTrends || basicsDays >= 1)) confidence = "MEDIUM";
+  else if (hasWorkouts && (hasTrends || basicsDays7 >= 1)) confidence = "MEDIUM";
 
   // Recovery budget (conservative heuristic)
-  const avgSleep = sleep7.length ? sleep7.reduce((a, b) => a + b, 0) / sleep7.length : null;
-  const budgetScore =
-    (spikePct != null ? (spikePct > 40 ? 2 : spikePct > 25 ? 1 : 0) : 1) +
-    (flags.pain ? 1 : 0) +
-    (avgSleep != null ? (avgSleep < 5.5 ? 2 : avgSleep < 6.5 ? 1 : 0) : 1);
-  const budget = budgetScore >= 4 ? "RED" : budgetScore >= 2 ? "YELLOW" : "GREEN";
+  // Start at GREEN and add penalties; then apply small buffs.
+  let budgetScore = 0;
+  if (spikeClamped == null) budgetScore += 1; // unknown load adds uncertainty
+  else if (spikeClamped > 40) budgetScore += 2;
+  else if (spikeClamped > 25) budgetScore += 1;
 
-  const oneThing = (() => {
+  if (pain) budgetScore += 2;
+  if (jointFlags.knee || jointFlags.back || jointFlags.shoulder) budgetScore += 1;
+  if (fatigue) budgetScore += 1;
+
+  if (avgSleep3 != null) {
+    if (avgSleep3 < 5.5) budgetScore += 2;
+    else if (avgSleep3 < 6.5) budgetScore += 1;
+  } else {
+    budgetScore += 1;
+  }
+
+  // Protein governor: use ratio if bodyweight exists, else absolute threshold.
+  const bw = safeNum(body?.quick_log_today?.weight_lbs) ?? (weights14.length ? weights14[weights14.length - 1] : null);
+  const proteinTarget3 = bw != null ? 0.7 * bw : 150;
+  if (avgProtein3 != null && avgProtein3 < proteinTarget3) budgetScore += 1;
+  if (wtPct14 != null && wtPct14 <= -2) budgetScore += 1; // losing >~1%/wk
+
+  // Zone 2 provides a small recovery buffer.
+  if (zone2Days7 >= 3) budgetScore -= 1;
+
+  const recoveryBudget: "GREEN" | "YELLOW" | "RED" = budgetScore >= 4 ? "RED" : budgetScore >= 2 ? "YELLOW" : "GREEN";
+
+  // Governor (speed limit)
+  const rpeCap = (() => {
+    if (avgSleep3 != null && avgSleep3 < 6.5) return 7;
+    if (recoveryBudget === "RED") return 7;
+    return 8;
+  })();
+
+  const allowLoadIncrease =
+    recoveryBudget === "GREEN" &&
+    basicsDays7 >= 4 &&
+    (avgSleep3 == null || avgSleep3 >= 6.5) &&
+    (avgProtein3 == null || avgProtein3 >= proteinTarget3) &&
+    !pain;
+
+  const allowVolumeIncrease = recoveryBudget === "GREEN" && basicsDays7 >= 5 && !pain;
+
+  // Find last top-set loads for patterns (best effort)
+  const patternTop = (() => {
+    const out: Record<string, number | null> = { push: null, lower: null, hinge: null, pull: null };
+    const rePush = /\b(bench|incline|press|ohp|overhead)\b/i;
+    const reLower = /\b(squat|ssb|safety\s*squat|split\s*squat|lunge|leg\s*press)\b/i;
+    const reHinge = /\b(deadlift|rdl|romanian|hinge|good\s*morning)\b/i;
+    const rePull = /\b(row|pulldown|pullup|chin)\b/i;
+
+    // Walk workouts from most recent to oldest and record first seen top-set per pattern.
+    const sortedDesc = [...workouts].sort((a, b) => (parseDate(b.day_date) ?? 0) - (parseDate(a.day_date) ?? 0));
+    for (const s of sortedDesc) {
+      const ex = Array.isArray(s?.exercises) ? s.exercises : [];
+      for (const e of ex) {
+        const name = (e?.name ?? "").toString();
+        const bs = e?.best_set;
+        const w = bs && bs.load_type !== "band" ? safeNum(bs.weight_lbs) : null;
+        if (w == null) continue;
+
+        const trySet = (k: string, ok: boolean) => {
+          if (ok && out[k] == null) out[k] = w;
+        };
+
+        trySet("push", rePush.test(name));
+        trySet("lower", reLower.test(name));
+        trySet("hinge", reHinge.test(name));
+        trySet("pull", rePull.test(name));
+      }
+      if (Object.values(out).every(v => v != null)) break;
+    }
+    return out;
+  })();
+
+  const deload = (() => {
+    const deloadWeek = recoveryBudget === "RED" && spikeClamped != null && spikeClamped >= 40;
+    const kneeDeload = jointFlags.knee;
+    const backDeload = jointFlags.back;
+    const shoulderDeload = jointFlags.shoulder;
+
+    // Systemic deload if deloadWeek OR pain+fatigue combo
+    const systemic = deloadWeek || (recoveryBudget === "RED" && (pain || fatigue));
+
+    const pattern = {
+      full: systemic,
+      lower: !systemic && (kneeDeload || backDeload),
+      push: !systemic && shoulderDeload,
+      pull: !systemic && false, // reserved for future "elbow" etc
+    };
+
+    const active = pattern.full || pattern.lower || pattern.push || pattern.pull;
+
+    const startDate = new Date().toISOString().slice(0, 10);
+    const tag = active ? "DELOAD" : null;
+
+    const pct = 0.65;
+    const prescribe = (w: number | null) => (w != null ? Math.round((w * pct) / 5) * 5 : null);
+
+    const loads = {
+      push: prescribe(patternTop.push),
+      lower: prescribe(patternTop.lower),
+      hinge: prescribe(patternTop.hinge),
+      pull: prescribe(patternTop.pull),
+    };
+
+    // Equipment-aware substitution suggestions (based on known user setup)
+    const substitutions = {
+      lower: [
+        "Leverage squat (upright, controlled depth)",
+        "Reverse sled drags (if available) or forward drags light",
+        "Split squat to comfortable depth",
+        "Leg extension / curl (if joints tolerate)",
+      ],
+      push: [
+        "DB press (neutral grip) or machine/leverage press",
+        "Incline DB press over barbell bench if shoulder cranky",
+        "Push-ups / close-grip pushups",
+      ],
+      hinge: [
+        "Hip thrust / glute bridge",
+        "Ham curl (machine or bench attachment)",
+        "Back extension (easy) if pain-free",
+      ],
+    };
+
+    return {
+      active,
+      pattern,
+      startDate: active ? startDate : null,
+      durationDays: active ? 7 : 0,
+      tag,
+      percent: pct,
+      loadsLbs: loads,
+      substitutions,
+    };
+  })();
+
+  const oneThingToLogTomorrow = (() => {
     const sleepMissing = body?.quick_log_today?.sleep_hours == null;
     const proteinMissing = body?.quick_log_today?.protein_g == null;
     if (sleepMissing && proteinMissing) return "Sleep hours + protein grams.";
     if (sleepMissing) return "Sleep hours.";
     if (proteinMissing) return "Protein grams.";
     if (body?.quick_log_today?.weight_lbs == null) return "Morning bodyweight.";
+    if (body?.quick_log_today?.zone2_minutes == null) return "Zone 2 minutes.";
     return "A 1-line note on joints/energy.";
   })();
-
-  const spike = spikePct != null ? clamp(spikePct, -99, 300) : null;
 
   return {
     quickLog: {
       entries7: qEntries7,
       entries14: qEntries14,
-      basicsDays7: basicsDays,
-      wtDelta14: wtDelta,
-      waistDelta14: waistDelta,
-      avgSleep7: avgSleep,
-      avgProtein7: protein7.length ? protein7.reduce((a, b) => a + b, 0) / protein7.length : null,
-      totalZone2Min7: z27.reduce((a, b) => a + b, 0),
+      basicsDays7,
+      wtDelta14,
+      wtPct14,
+      waistDelta14,
+      avgSleep3,
+      avgSleep7,
+      avgProtein3,
+      avgProtein7,
+      proteinTarget3: bw != null ? Math.round(proteinTarget3) : proteinTarget3,
+      totalZone2Min7,
+      zone2Days7,
     },
     training: {
       sessionsRecent,
-      totalTonnageRecent: totalTonnage,
-      totalSetsRecent: totalSets,
-      spikePctApprox: spike,
+      totalTonnageRecent,
+      totalSetsRecent,
+      spikePctApprox: spikeClamped,
+      patternTopSetLbs: patternTop,
     },
-    flags,
+    flags: {
+      ...jointFlags,
+      pain,
+      fatigue,
+    },
+    governor: {
+      rpeCap,
+      allowLoadIncrease,
+      allowVolumeIncrease,
+    },
+    deload,
     confidence,
-    recoveryBudget: budget,
-    oneThingToLogTomorrow: oneThing,
+    recoveryBudget,
+    oneThingToLogTomorrow,
   };
 }
-
 function pickSummary(body: any): string {
   if (!body) return "";
   // Accept multiple client payload shapes (to avoid front-end mismatch).
@@ -318,16 +497,18 @@ export const handler: Handler = async (event) => {
       "The deterministic Coach v2.6 already computed the basics. You add context: pattern-spotting, priorities, and next actions.",
       "Hard rules:",
       "- Use ONLY the numbers and facts provided in the payload (including DERIVED SIGNALS). If data is missing, say so — do NOT invent.",
-      "- Conservative progression for compounds (bench/squat/deadlift): only increase load when the last comparable work was clean (no grinders) and signals are Green/Yellow-safe.",
+      "- Conservative progression for compounds (bench/squat/deadlift): only increase load when the last comparable work was clean (no grinders) and signals are Green/Yellow-safe.
+      "- Quick Log is a GOVERNOR: you MUST use sleep/protein/bodyweight/joint notes/Zone2 to change the plan, not merely repeat them.",
+      "- Obey governor + deload objects from DERIVED SIGNALS. If deload.active is true, you MUST prescribe a deload (full or pattern) with the computed loads and substitutions.",",
       "- Keep it punchy. No long lectures. No endless 'Missing:' lists.",
       "- No medical claims. If warning symptoms appear, advise clinician.",
       "Output format (MUST follow exactly):",
-      "1) HEADLINE: one sentence.",
+      "1) HEADLINE: one sentence. If DERIVED SIGNALS.deload.active is true, headline MUST start with 'DELOAD' and specify FULL / LOWER / PUSH.",
       "2) QUICK LOG SNAPSHOT: exactly 3 bullets (entries, basics days, latest note or 'no note').",
       "3) TRAINING SNAPSHOT: exactly 3 bullets (sessions/tonnage/sets, best lifts if present, and any spike/red flags).",
       "4) DATA CONFIDENCE: one line (HIGH/MEDIUM/LOW + 5–12 word reason).",
-      "5) RECOVERY BUDGET: one line (GREEN/YELLOW/RED + what to do next 48h).",
-      "6) NEXT SESSION TARGETS: max 3 bullets, specific. Prefer: repeat load + add 1 rep, or hold load submax. If bands present, give band target.",
+      "5) RECOVERY BUDGET: one line (GREEN/YELLOW/RED + what to do next 48h). Must explicitly name Quick Log signal(s) driving it (sleep/protein/joints/BW/Z2).",
+      "6) NEXT SESSION TARGETS: max 3 bullets, specific. Must obey governor/deload. At least one bullet must be directly tied to Quick Log/governor (e.g., RPE cap, no load increase, protein target, joint substitution). Prefer: repeat load + add 1 rep, or hold load submax. If bands present, give band target.",
       "7) DO NOT DO THIS: exactly 1 bullet.",
       "8) ONE THING TO LOG TOMORROW: exactly 1 bullet.",
       "Style: direct, encouraging, slightly profane. Traditional training mindset. No fluff.",
@@ -405,6 +586,8 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
+
 
 
 
