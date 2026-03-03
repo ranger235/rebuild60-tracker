@@ -601,6 +601,14 @@ useEffect(() => {
 
     setAiCoachBusy(true);
     try {
+
+      // Always pull latest Quick Log snapshot from Dexie (source of truth for offline-first)
+      const [qDaily, qNutr, qZ2] = await Promise.all([
+        localdb.dailyMetrics.get([userId, selectedDayDate]),
+        localdb.nutritionDaily.get([userId, selectedDayDate]),
+        localdb.zone2Daily.get([userId, selectedDayDate])
+      ]);
+
       const payload = {
         user_id: userId,
         week: {
@@ -1898,6 +1906,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
