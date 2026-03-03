@@ -13,6 +13,7 @@ import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode
 import DashboardView from "./components/DashboardView";
 import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function todayISO(): string {
   const d = new Date();
@@ -1767,7 +1768,8 @@ setTonnageSeries(tonSeries);
 
       
       {tab === "dash" && (
-        <DashboardView
+        <ErrorBoundary scope="Dashboard" onEmergencyExport={exportBackup}>
+          <DashboardView
           dashBusy={dashBusy}
           refreshDashboard={refreshDashboard}
           exportBackup={exportBackup}
@@ -1813,10 +1815,12 @@ setTonnageSeries(tonSeries);
           secs={secs}
           setSecs={setSecs}
         />
+        </ErrorBoundary>
       )}
 
       {tab === "quick" && (
-        <QuickLogView
+        <ErrorBoundary scope="Quick Log" onEmergencyExport={exportBackup}>
+          <QuickLogView
           weight={weight}
           setWeight={setWeight}
           waist={waist}
@@ -1841,9 +1845,11 @@ setTonnageSeries(tonSeries);
           timerOn={timerOn}
           setTimerOn={setTimerOn}
         />
+        </ErrorBoundary>
       )}
 {tab === "workout" && (
-        <WorkoutLoggerView
+        <ErrorBoundary scope="Workout" onEmergencyExport={exportBackup}>
+          <WorkoutLoggerView
           templates={templates}
           openTemplateId={openTemplateId}
           templateExercises={templateExercises}
@@ -1886,10 +1892,13 @@ setTonnageSeries(tonSeries);
           secs={secs}
           setSecs={setSecs}
         />
+        </ErrorBoundary>
       )}
     </div>
   );
 }
+
+
 
 
 
