@@ -43,6 +43,8 @@ function buildPrompt(body: any): string {
 
   const week = body.week ?? {};
   const qc = body.quick_log_today ?? {};
+  const qRecent = Array.isArray(body.quick_log_recent) ? body.quick_log_recent : [];
+  const recentWorkouts = Array.isArray(body.recent_workouts) ? body.recent_workouts : [];
   const core = body.coach_core ?? body;
 
   const safeJson = (v: any) => {
@@ -68,6 +70,46 @@ function buildPrompt(body: any): string {
     `- protein_g: ${qc.protein_g ?? "null"}`,
     `- zone2_minutes: ${qc.zone2_minutes ?? "null"}`,
     qc.notes ? `- notes: ${qc.notes}` : "- notes: (none)",
+    "",
+    "Quick Log (recent window, oldest→newest):",
+    qRecent.length
+      ? qRecent
+          .map((d: any) => {
+            const w = d?.weight_lbs ?? "null";
+            const wa = d?.waist_in ?? "null";
+            const sl = d?.sleep_hours ?? "null";
+            const c = d?.calories ?? "null";
+            const p = d?.protein_g ?? "null";
+            const z = d?.zone2_minutes ?? "null";
+            return `- ${d?.day_date ?? "?"}: wt ${w}, waist ${wa}, sleep ${sl}, cal ${c}, pro ${p}, z2 ${z}`;
+          })
+          .join("\n")
+      : "- (no recent quick log data)",
+    "",
+    "Recent workouts (most recent first; compact; best set per exercise):",
+    recentWorkouts.length
+      ? recentWorkouts
+          .map((s: any) => {
+            const ex = Array.isArray(s?.exercises) ? s.exercises : [];
+            const exLines = ex
+              .slice(0, 12)
+              .map((e: any) => {
+                const b = e?.best_set;
+                if (!b) return `  • ${e?.name ?? "?"}: (no work sets)`;
+                if (b.load_type === "band") {
+                  const lvl = b.band_level ?? "?";
+                  const mode = b.band_mode ?? "resist";
+                  const cfg = b.band_config ?? "single";
+                  const est = b.band_est_lbs != null ? `~${b.band_est_lbs}` : "";
+                  return `  • ${e?.name ?? "?"}: B${lvl} ${mode}/${cfg}${est} x${b.reps}${b.rpe != null ? ` @${b.rpe}` : ""}`;
+                }
+                return `  • ${e?.name ?? "?"}: ${b.weight_lbs ?? "?"}x${b.reps}${b.rpe != null ? ` @${b.rpe}` : ""}`;
+              })
+              .join("\n");
+            return [`- ${s?.day_date ?? "?"} ${s?.title ?? "Session"}`, exLines].join("\n");
+          })
+          .join("\n")
+      : "- (no recent workouts in window)",
     "",
     "Coach Core (deterministic v2.6 summary object):",
     safeJson(core),
@@ -114,16 +156,23 @@ export const handler: Handler = async (event) => {
     }
 
     const system = [
-      "You are Rev, a no-BS hybrid bodybuilding coach for a 60-year-old lifter (offline-first Rebuild @ 60 Tracker).",
-      "Tone: practical, encouraging, slightly profane, classic old-school training mindset.",
-      "Output MUST be concise, multi-line, actionable. No medical claims; suggest seeing clinician for symptoms.",
-      "This is an AI add-on. Do NOT override deterministic Coach v2.6; add suggestions + context only.",
-      "Use the data provided. Provide: (1) headline, (2) 3–6 bullets, (3) next-session targets (compounds + accessories + bands), (4) recovery mode suggestion if warranted.",
+      "You are Rev, a no-BS hybrid bodybuilding coach for a 60-year-old lifter using the offline-first Rebuild @ 60 Tracker.",
+      "Tone: practical, encouraging, slightly profane, old-school training mindset. No fluff.",
+      "Hard rules:",
+      "- Use ONLY the numbers and facts provided in the payload. If data is missing, say it's missing.",
+      "- This is an AI add-on. Do NOT override deterministic Coach v2.6. Add context, pattern-spotting, and next actions.",
+      "- No medical claims. If warning symptoms are mentioned, advise clinician.",
+      "Output format (MUST follow):",
+      "1) HEADLINE: one line.",
+      "2) WHAT I'M SEEING: 3–6 bullets (training + quick log trends).",
+      "3) NEXT SESSION TARGETS: bullets. Include key compounds if present (bench/squat/deadlift) and 2–4 accessories. If bands are present, include band targets.",
+      "4) THIS WEEK'S FOCUS: 1–2 bullets.",
+      "5) RECOVERY CHECK: one line (sleep/protein/zone2) and a conservative option if fatigue is high.",
     ].join("\n");
 
     const userPrompt = [
-      "Here is the latest 7–14 day training + quick log summary from the app.",
-      "Analyze trends, fatigue, and give next-session targets. Keep it short and punchy.",
+      "Here is a structured training + quick log snapshot from the app.",
+      "Make it actionable, conservative, and specific. Keep it punchy.",
       "",
       summary,
     ].join("\n");
@@ -193,6 +242,7 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
 
 
 
