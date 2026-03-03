@@ -34,8 +34,9 @@ type Props = {
   importFileRef: RefObject<HTMLInputElement | null>;
 
   loadBandEquiv: () => void;
-  bandEquiv: Record<number, number>;
-  setBandEquiv: (updater: (prev: Record<number, number>) => Record<number, number>) => void;
+  bandEquivMap: Record<string, number>;
+  setBandEquivMap: (next: Record<string, number>) => void;
+  saveBandEquiv: (next: Record<string, number>) => void;
 
   weight: string;
   setWeight: (v: string) => void;
@@ -86,8 +87,9 @@ export default function DashboardView(props: Props) {
     backupBusy,
     importFileRef,
     loadBandEquiv,
-    bandEquiv,
-    setBandEquiv,
+    bandEquivMap,
+    setBandEquivMap,
+    saveBandEquiv,
     weight,
     setWeight,
     waist,
@@ -297,3 +299,4 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
