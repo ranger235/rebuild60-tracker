@@ -1780,8 +1780,9 @@ setTonnageSeries(tonSeries);
           backupBusy={backupBusy}
           importFileRef={importFileRef}
           loadBandEquiv={loadBandEquiv}
-          bandEquiv={bandEquiv}
-          setBandEquiv={setBandEquiv}
+          bandEquivMap={bandEquivMap}
+          setBandEquivMap={setBandEquivMap}
+          saveBandEquiv={saveBandEquiv}
           weight={weight}
           setWeight={setWeight}
           waist={waist}
@@ -2319,6 +2320,8 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
+
 
 
 
