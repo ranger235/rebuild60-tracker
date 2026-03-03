@@ -2,6 +2,160 @@ import type { Handler } from "@netlify/functions";
 
 type OpenAIResponse = any;
 
+type QuickLogRow = {
+  day_date?: string;
+  weight_lbs?: number | null;
+  waist_in?: number | null;
+  sleep_hours?: number | null;
+  calories?: number | null;
+  protein_g?: number | null;
+  zone2_minutes?: number | null;
+  notes?: string | null;
+};
+
+type WorkoutBestSet = {
+  load_type?: "weight" | "band" | "bodyweight" | string;
+  weight_lbs?: number | null;
+  reps?: number | null;
+  rpe?: number | null;
+  band_level?: number | string | null;
+  band_mode?: string | null;
+  band_config?: string | null;
+  band_est_lbs?: number | null;
+};
+
+type WorkoutExercise = {
+  name?: string;
+  best_set?: WorkoutBestSet | null;
+};
+
+type WorkoutSession = {
+  day_date?: string;
+  title?: string;
+  exercises?: WorkoutExercise[];
+  tonnage_lbs?: number | null;
+  set_count?: number | null;
+};
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function safeNum(v: any): number | null {
+  const n = typeof v === "number" ? v : v == null ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseDate(d?: string): number | null {
+  if (!d || typeof d !== "string") return null;
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? t : null;
+}
+
+function deriveSignals(body: any) {
+  const qRecent: QuickLogRow[] = Array.isArray(body?.quick_log_recent) ? body.quick_log_recent : [];
+  const workouts: WorkoutSession[] = Array.isArray(body?.recent_workouts) ? body.recent_workouts : [];
+
+  // Quick Log window stats
+  const qSorted = [...qRecent].sort((a, b) => (parseDate(a.day_date) ?? 0) - (parseDate(b.day_date) ?? 0));
+  const last7 = qSorted.slice(-7);
+  const last14 = qSorted.slice(-14);
+
+  const basicsDays = last7.reduce((acc, d) => {
+    const sleep = safeNum(d.sleep_hours);
+    const protein = safeNum(d.protein_g);
+    return acc + (sleep != null && protein != null ? 1 : 0);
+  }, 0);
+  const qEntries7 = last7.length;
+  const qEntries14 = last14.length;
+
+  const weights14 = last14.map(d => safeNum(d.weight_lbs)).filter((x): x is number => x != null);
+  const waist14 = last14.map(d => safeNum(d.waist_in)).filter((x): x is number => x != null);
+  const sleep7 = last7.map(d => safeNum(d.sleep_hours)).filter((x): x is number => x != null);
+  const protein7 = last7.map(d => safeNum(d.protein_g)).filter((x): x is number => x != null);
+  const z27 = last7.map(d => safeNum(d.zone2_minutes)).filter((x): x is number => x != null);
+
+  const wtDelta = weights14.length >= 2 ? weights14[weights14.length - 1] - weights14[0] : null;
+  const waistDelta = waist14.length >= 2 ? waist14[waist14.length - 1] - waist14[0] : null;
+
+  // Training window stats
+  const wSorted = [...workouts].sort((a, b) => (parseDate(a.day_date) ?? 0) - (parseDate(b.day_date) ?? 0));
+  const wLast6 = wSorted.slice(-6);
+  const sessionsRecent = wLast6.length;
+  const totalTonnage = wLast6.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const totalSets = wLast6.reduce((acc, s) => acc + (safeNum(s.set_count) ?? 0), 0);
+
+  // Spike estimate (compare last 3 sessions tonnage vs previous 3)
+  const last3 = wLast6.slice(-3);
+  const prev3 = wLast6.slice(0, Math.max(0, wLast6.length - 3));
+  const tonLast3 = last3.reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const tonPrev3 = prev3.slice(-3).reduce((acc, s) => acc + (safeNum(s.tonnage_lbs) ?? 0), 0);
+  const spikePct = tonPrev3 > 0 ? ((tonLast3 - tonPrev3) / tonPrev3) * 100 : null;
+
+  // Pain/fatigue flags from notes
+  const noteText = [body?.quick_log_today?.notes, ...qRecent.map((d: any) => d?.notes)]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  const flags = {
+    knee: /\bknee\b/.test(noteText),
+    back: /\bback\b/.test(noteText) || /\blower\s*back\b/.test(noteText),
+    shoulder: /\bshoulder\b/.test(noteText) || /\brotator\b/.test(noteText),
+    pain: /\bpain\b/.test(noteText) || /\bhurt\b/.test(noteText) || /\bsore\b/.test(noteText),
+  };
+
+  // Data confidence
+  let confidence: "HIGH" | "MEDIUM" | "LOW" = "LOW";
+  const hasWorkouts = wLast6.length > 0;
+  const hasTrends = qEntries14 >= 4;
+  const hasBasics = basicsDays >= 3;
+  if (hasWorkouts && hasTrends && hasBasics) confidence = "HIGH";
+  else if (hasWorkouts && (hasTrends || basicsDays >= 1)) confidence = "MEDIUM";
+
+  // Recovery budget (conservative heuristic)
+  const avgSleep = sleep7.length ? sleep7.reduce((a, b) => a + b, 0) / sleep7.length : null;
+  const budgetScore =
+    (spikePct != null ? (spikePct > 40 ? 2 : spikePct > 25 ? 1 : 0) : 1) +
+    (flags.pain ? 1 : 0) +
+    (avgSleep != null ? (avgSleep < 5.5 ? 2 : avgSleep < 6.5 ? 1 : 0) : 1);
+  const budget = budgetScore >= 4 ? "RED" : budgetScore >= 2 ? "YELLOW" : "GREEN";
+
+  const oneThing = (() => {
+    const sleepMissing = body?.quick_log_today?.sleep_hours == null;
+    const proteinMissing = body?.quick_log_today?.protein_g == null;
+    if (sleepMissing && proteinMissing) return "Sleep hours + protein grams.";
+    if (sleepMissing) return "Sleep hours.";
+    if (proteinMissing) return "Protein grams.";
+    if (body?.quick_log_today?.weight_lbs == null) return "Morning bodyweight.";
+    return "A 1-line note on joints/energy.";
+  })();
+
+  const spike = spikePct != null ? clamp(spikePct, -99, 300) : null;
+
+  return {
+    quickLog: {
+      entries7: qEntries7,
+      entries14: qEntries14,
+      basicsDays7: basicsDays,
+      wtDelta14: wtDelta,
+      waistDelta14: waistDelta,
+      avgSleep7: avgSleep,
+      avgProtein7: protein7.length ? protein7.reduce((a, b) => a + b, 0) / protein7.length : null,
+      totalZone2Min7: z27.reduce((a, b) => a + b, 0),
+    },
+    training: {
+      sessionsRecent,
+      totalTonnageRecent: totalTonnage,
+      totalSetsRecent: totalSets,
+      spikePctApprox: spike,
+    },
+    flags,
+    confidence,
+    recoveryBudget: budget,
+    oneThingToLogTomorrow: oneThing,
+  };
+}
+
 function pickSummary(body: any): string {
   if (!body) return "";
   // Accept multiple client payload shapes (to avoid front-end mismatch).
@@ -46,6 +200,7 @@ function buildPrompt(body: any): string {
   const qRecent = Array.isArray(body.quick_log_recent) ? body.quick_log_recent : [];
   const recentWorkouts = Array.isArray(body.recent_workouts) ? body.recent_workouts : [];
   const core = body.coach_core ?? body;
+  const signals = deriveSignals(body);
 
   const safeJson = (v: any) => {
     try {
@@ -113,6 +268,9 @@ function buildPrompt(body: any): string {
     "",
     "Coach Core (deterministic v2.6 summary object):",
     safeJson(core),
+    "",
+    "DERIVED SIGNALS (computed by the server; treat as ground truth):",
+    safeJson(signals),
   ].join("\n");
 }
 
@@ -156,18 +314,23 @@ export const handler: Handler = async (event) => {
     }
 
     const system = [
-      "You are Rev, a no-BS hybrid bodybuilding coach for a 60-year-old lifter using the offline-first Rebuild @ 60 Tracker.",
-      "Tone: practical, encouraging, slightly profane, old-school training mindset. No fluff.",
+      "You are Rev — a no-BS garage coach (old-school, practical, a little spicy) for a 60-year-old lifter using the offline-first Rebuild @ 60 Tracker.",
+      "The deterministic Coach v2.6 already computed the basics. You add context: pattern-spotting, priorities, and next actions.",
       "Hard rules:",
-      "- Use ONLY the numbers and facts provided in the payload. If data is missing, say it's missing.",
-      "- This is an AI add-on. Do NOT override deterministic Coach v2.6. Add context, pattern-spotting, and next actions.",
-      "- No medical claims. If warning symptoms are mentioned, advise clinician.",
-      "Output format (MUST follow):",
-      "1) HEADLINE: one line.",
-      "2) WHAT I'M SEEING: 3–6 bullets (training + quick log trends).",
-      "3) NEXT SESSION TARGETS: bullets. Include key compounds if present (bench/squat/deadlift) and 2–4 accessories. If bands are present, include band targets.",
-      "4) THIS WEEK'S FOCUS: 1–2 bullets.",
-      "5) RECOVERY CHECK: one line (sleep/protein/zone2) and a conservative option if fatigue is high.",
+      "- Use ONLY the numbers and facts provided in the payload (including DERIVED SIGNALS). If data is missing, say so — do NOT invent.",
+      "- Conservative progression for compounds (bench/squat/deadlift): only increase load when the last comparable work was clean (no grinders) and signals are Green/Yellow-safe.",
+      "- Keep it punchy. No long lectures. No endless 'Missing:' lists.",
+      "- No medical claims. If warning symptoms appear, advise clinician.",
+      "Output format (MUST follow exactly):",
+      "1) HEADLINE: one sentence.",
+      "2) QUICK LOG SNAPSHOT: exactly 3 bullets (entries, basics days, latest note or 'no note').",
+      "3) TRAINING SNAPSHOT: exactly 3 bullets (sessions/tonnage/sets, best lifts if present, and any spike/red flags).",
+      "4) DATA CONFIDENCE: one line (HIGH/MEDIUM/LOW + 5–12 word reason).",
+      "5) RECOVERY BUDGET: one line (GREEN/YELLOW/RED + what to do next 48h).",
+      "6) NEXT SESSION TARGETS: max 3 bullets, specific. Prefer: repeat load + add 1 rep, or hold load submax. If bands present, give band target.",
+      "7) DO NOT DO THIS: exactly 1 bullet.",
+      "8) ONE THING TO LOG TOMORROW: exactly 1 bullet.",
+      "Style: direct, encouraging, slightly profane. Traditional training mindset. No fluff.",
     ].join("\n");
 
     const userPrompt = [
@@ -242,6 +405,8 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
+
 
 
 
