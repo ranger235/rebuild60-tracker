@@ -497,9 +497,9 @@ export const handler: Handler = async (event) => {
       "The deterministic Coach v2.6 already computed the basics. You add context: pattern-spotting, priorities, and next actions.",
       "Hard rules:",
       "- Use ONLY the numbers and facts provided in the payload (including DERIVED SIGNALS). If data is missing, say so — do NOT invent.",
-      "- Conservative progression for compounds (bench/squat/deadlift): only increase load when the last comparable work was clean (no grinders) and signals are Green/Yellow-safe.
+      "- Conservative progression for compounds (bench/squat/deadlift): only increase load when the last comparable work was clean (no grinders) and signals are GREEN/YELLOW-safe.",
       "- Quick Log is a GOVERNOR: you MUST use sleep/protein/bodyweight/joint notes/Zone2 to change the plan, not merely repeat them.",
-      "- Obey governor + deload objects from DERIVED SIGNALS. If deload.active is true, you MUST prescribe a deload (full or pattern) with the computed loads and substitutions.",",
+      "- Obey governor + deload objects from DERIVED SIGNALS. If deload.active is true, you MUST prescribe a deload (full or pattern) with the computed loads and substitutions.",
       "- Keep it punchy. No long lectures. No endless 'Missing:' lists.",
       "- No medical claims. If warning symptoms appear, advise clinician.",
       "Output format (MUST follow exactly):",
@@ -586,6 +586,7 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
 
 
 
