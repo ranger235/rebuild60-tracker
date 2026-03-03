@@ -9,10 +9,9 @@ import {
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
-import { CoachBoundary } from "./CoachPanel";
 import DashboardView from "./components/DashboardView";
-import TemplatesView from "./components/TemplatesView";
 import QuickLogView from "./components/QuickLogView";
+import WorkoutLoggerView from "./components/WorkoutLoggerView";
 
 function todayISO(): string {
   const d = new Date();
@@ -1849,357 +1848,57 @@ setTonnageSeries(tonSeries);
           timerOn={timerOn}
           setTimerOn={setTimerOn}
         />
-      )}{tab === "workout" && (
-        <>
-          <h3>Workout Logger</h3>
-
-          {/* Templates block */}
-          <TemplatesView
-            templates={templates}
-            openTemplateId={openTemplateId}
-            templateExercises={templateExercises}
-            newTemplateName={newTemplateName}
-            setNewTemplateName={setNewTemplateName}
-            newTemplateDesc={newTemplateDesc}
-            setNewTemplateDesc={setNewTemplateDesc}
-            createTemplate={createTemplate}
-            openTemplate={openTemplate}
-            deleteTemplate={deleteTemplate}
-            newTemplateExerciseName={newTemplateExerciseName}
-            setNewTemplateExerciseName={setNewTemplateExerciseName}
-            addExerciseToTemplate={addExerciseToTemplate}
-            startSessionFromTemplate={startSessionFromTemplate}
-            displayExerciseName={displayExerciseName}
-          />
-
-          <hr />
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <h4 style={{ margin: 0 }}>Sessions Today</h4>
-            <button onClick={createWorkoutSession}>+ New Session</button>
-          </div>
-
-          {sessions.length === 0 ? (
-            <p style={{ marginTop: 10 }}>No sessions today yet. Create one or start from a template.</p>
-          ) : (
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              {sessions.map((s) => (
-                <div
-                  key={s.id}
-                  style={{
-                    border: s.id === openSessionId ? "2px solid black" : "1px solid #ccc",
-                    borderRadius: 8,
-                    padding: 12
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-                    <button
-                      onClick={() => openSession(s.id)}
-                      style={{ textAlign: "left", padding: 0, border: "none", background: "transparent", flex: 1 }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{s.title}</div>
-                      <div style={{ opacity: 0.8, fontSize: 12 }}>{new Date(s.started_at).toLocaleTimeString()}</div>
-                    </button>
-
-                    <button
-                      onClick={() => deleteSession(s.id)}
-                      title="Delete session (and all sets)"
-                      style={{ opacity: 0.9 }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {openSessionObj && (
-            <>
-              <hr />
-              <h4 style={{ marginBottom: 6 }}>{openSessionObj.title}</h4>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                <input
-                  placeholder="Add exercise (e.g., Leverage Squat)"
-                  value={newExerciseName}
-                  onChange={(e) => setNewExerciseName(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button onClick={addExercise}>Add</button>
-              </div>
-
-              <div style={{ marginTop: 12 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
-                  Advanced (RPE + Warmup)
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                  <input type="checkbox" checked={coachEnabled} onChange={(e) => setCoachEnabled(e.target.checked)} />
-                  Coach suggestions
-                </label>
-              </div>
-
-              {exercises.length === 0 ? (
-                <p style={{ marginTop: 12 }}>Add your first exercise and start logging sets.</p>
-              ) : (
-                <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
-                  {exercises.map((ex) => {
-                    const exSets = setsForExercise(ex.id);
-                    const lastSummary = lastByExerciseName[exerciseKey(ex.name)];
-                    const preview = lastSummary?.sets ? lastSummary.sets.slice(-3) : [];
-                    const d = draftByExerciseId[ex.id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
-
-                    const compound = isCompoundExercise(ex.name);
-                    const defaultLabel = compound ? "Default: 1st work" : "Default: top set";
-
-                    return (
-                      <div key={ex.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                          <div style={{ fontWeight: 800 }}>
-                            {displayExerciseName(ex.name)}{" "}
-                            <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 600 }}>
-                              ({defaultLabel})
-                            </span>
-                          </div>
-                          <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
-                            Refresh
-                          </button>
-                         
-                        </div>
-
-                        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
-                          {lastSummary ? (
-                            <>
-                              <div>
-                                <b>Last ({lastSummary.source}):</b>{" "}
-                                {preview.map((s, i) => (
-                                  <span key={i}>
-                                    {formatSet(s)}
-                                    {i < preview.length - 1 ? ", " : ""}
-                                  </span>
-                                ))}
-                              </div>
-                              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "last")}>Use Last Set</button>
-                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "top")}>Use Top Set</button>
-                                <button onClick={() => applyLastModeToDraft(ex.id, ex.name, "firstWork")}>Use First Work</button>
-                              </div>
-                            </>
-                          ) : (
-                            <div style={{ opacity: 0.7 }}>
-                              <b>Last:</b> (none yet){" "}
-                              <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ marginLeft: 8 }}>
-                                check
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-  <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 700 }}>Load:</div>
-  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-    <button
-      onClick={() => updateDraft(ex.id, { loadType: "weight" })}
-      style={{ fontWeight: d.loadType === "weight" ? 800 : 600 }}
-    >
-      Weight
-    </button>
-    <button
-      onClick={() => updateDraft(ex.id, { loadType: "band" })}
-      style={{ fontWeight: d.loadType === "band" ? 800 : 600 }}
-    >
-      Band
-    </button>
-    <button
-      onClick={() => updateDraft(ex.id, { loadType: "bodyweight" })}
-      style={{ fontWeight: d.loadType === "bodyweight" ? 800 : 600 }}
-    >
-      BW
-    </button>
-  </div>
-</div>
-
-{d.loadType === "weight" && (
-  <div
-    style={{
-      display: "grid",
-      gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
-      gap: 8,
-      marginTop: 10
-    }}
-  >
-    <input
-      placeholder="Weight"
-      value={d.weight}
-      onChange={(e) => updateDraft(ex.id, { weight: e.target.value })}
-    />
-    <input
-      placeholder="Reps"
-      value={d.reps}
-      onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
-    />
-    {advanced && (
-      <input
-        placeholder="RPE"
-        value={d.rpe}
-        onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
-      />
-    )}
-    <button onClick={() => addSet(ex.id)}>Save Set</button>
-  </div>
-)}
-
-{d.loadType === "band" && (
-  <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-      <input
-        placeholder="Level 1–5"
-        value={d.bandLevel}
-        onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
-      />
-      <select
-        value={d.bandMode}
-        onChange={(e) => updateDraft(ex.id, { bandMode: e.target.value as any })}
-      >
-        <option value="resist">Resist</option>
-        <option value="assist">Assist</option>
-      </select>
-      <select
-        value={d.bandConfig}
-        onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
-      >
-        <option value="single">Single</option>
-        <option value="doubled">Doubled</option>
-      </select>
-      <input
-        placeholder="Est lbs (optional)"
-        value={d.bandEst}
-        onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value })}
-      />
-    </div>
-
-    <div style={{ display: "grid", gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 8 }}>
-      <div style={{ fontSize: 12, opacity: 0.8, alignSelf: "center" }}>
-        Uses Dashboard band equiv if Est lbs blank
-      </div>
-      <input
-        placeholder="Reps"
-        value={d.reps}
-        onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
-      />
-      {advanced && (
-        <input
-          placeholder="RPE"
-          value={d.rpe}
-          onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
+      )}
+{tab === "workout" && (
+        <WorkoutLoggerView
+          templates={templates}
+          openTemplateId={openTemplateId}
+          templateExercises={templateExercises}
+          newTemplateName={newTemplateName}
+          setNewTemplateName={setNewTemplateName}
+          newTemplateDesc={newTemplateDesc}
+          setNewTemplateDesc={setNewTemplateDesc}
+          createTemplate={createTemplate}
+          openTemplate={openTemplate}
+          deleteTemplate={deleteTemplate}
+          newTemplateExerciseName={newTemplateExerciseName}
+          setNewTemplateExerciseName={setNewTemplateExerciseName}
+          addExerciseToTemplate={addExerciseToTemplate}
+          startSessionFromTemplate={startSessionFromTemplate}
+          displayExerciseName={displayExerciseName}
+          sessions={sessions}
+          openSessionId={openSessionId}
+          openSession={openSession}
+          deleteSession={deleteSession}
+          createWorkoutSession={createWorkoutSession}
+          exercises={exercises}
+          newExerciseName={newExerciseName}
+          setNewExerciseName={setNewExerciseName}
+          addExercise={addExercise}
+          draftByExerciseId={draftByExerciseId}
+          updateDraft={updateDraft}
+          addSet={addSet}
+          advanced={advanced}
+          setAdvanced={setAdvanced}
+          coachEnabled={coachEnabled}
+          setCoachEnabled={setCoachEnabled}
+          lastByExerciseName={lastByExerciseName}
+          ensureLastForExerciseName={ensureLastForExerciseName}
+          exerciseKey={exerciseKey}
+          oneRmEpley={oneRmEpley}
+          formatSet={formatSet}
+          timerOn={timerOn}
+          setTimerOn={setTimerOn}
+          secs={secs}
+          setSecs={setSecs}
         />
       )}
-      <button onClick={() => addSet(ex.id)}>Save Set</button>
-    </div>
-  </div>
-)}
-
-{d.loadType === "bodyweight" && (
-  <div
-    style={{
-      display: "grid",
-      gridTemplateColumns: advanced ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
-      gap: 8,
-      marginTop: 10
-    }}
-  >
-    <div style={{ fontSize: 12, opacity: 0.8, alignSelf: "center" }}>Bodyweight set</div>
-    <input
-      placeholder="Reps"
-      value={d.reps}
-      onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
-    />
-    {advanced && (
-      <input
-        placeholder="RPE"
-        value={d.rpe}
-        onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
-      />
-    )}
-    <button onClick={() => addSet(ex.id)}>Save Set</button>
-  </div>
-)}
-
-                        {advanced && (
-                          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                            <input
-                              type="checkbox"
-                              checked={d.warmup}
-                              onChange={(e) => updateDraft(ex.id, { warmup: e.target.checked })}
-                            />
-                            Warmup set
-                          </label>
-                        )}
-
-                        {exSets.length > 0 && (
-                          <div style={{ marginTop: 10 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Sets (today)</div>
-                            <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
-                              {exSets.map((s) => {
-                                const est =
-                                  s.weight_lbs != null && s.reps != null
-                                    ? oneRmEpley(Number(s.weight_lbs), Number(s.reps))
-                                    : null;
-
-                                return (
-                                  <div key={s.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                    <div>
-                                      <b>{s.set_number}.</b> {formatSet({
-                                          load_type: (s as any).load_type ?? null,
-                                          weight_lbs: s.weight_lbs ?? null,
-                                          band_level: (s as any).band_level ?? null,
-                                          band_mode: (s as any).band_mode ?? null,
-                                          band_config: (s as any).band_config ?? null,
-                                          band_est_lbs: (s as any).band_est_lbs ?? null,
-                                          reps: s.reps ?? null,
-                                          rpe: s.rpe ?? null,
-                                          is_warmup: !!s.is_warmup
-                                        })}
-                                      
-                                    </div>
-                                    <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {coachEnabled && (
-                          <CoachBoundary exerciseName={displayExerciseName(ex.name)} sets={exSets} compound={compound} />
-                        )}
-
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <hr />
-
-              <h3>Rest Timer</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <button onClick={() => { setSecs(90); setTimerOn(true); }}>Start 90s</button>
-                <button onClick={() => { setSecs(120); setTimerOn(true); }}>Start 120s</button>
-                <button onClick={() => setTimerOn((v) => !v)}>{timerOn ? "Pause" : "Resume"}</button>
-                <button onClick={() => { setTimerOn(false); setSecs(90); }}>Reset</button>
-                <div style={{ fontSize: 24, fontWeight: 700 }}>
-                  {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")}
-                </div>
-              </div>
-            </>
-          )}
         </>
       )}
     </div>
   );
 }
+
 
 
 
