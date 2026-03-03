@@ -10,7 +10,7 @@ import {
   type LocalWorkoutTemplateExercise
 } from "./localdb";
 import { CoachBoundary } from "./CoachPanel";
-import LineChart from "./components/LineChart";
+import DashboardView from "./components/DashboardView";
 
 function todayISO(): string {
   const d = new Date();
@@ -1771,174 +1771,53 @@ setTonnageSeries(tonSeries);
 
       <hr />
 
+      
       {tab === "dash" && (
-        <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-            <h3 style={{ margin: 0 }}>Dashboard</h3>
-            <button onClick={refreshDashboard} disabled={dashBusy}>
-              {dashBusy ? "Refreshing…" : "Refresh"}
-            </button>
-          </div>
-
-          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
-            Everything here is built from your <b>local</b> workout data (sessions/exercises/sets), so it works offline.
-            Delete your test sessions and refresh to clean the charts.
-          </div>
-
-          {/* Band equivalent lbs override (used for band set e1RM/tonnage approximations when band_est_lbs is blank) */}
-          <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fbfbfb", marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-              <div style={{ fontWeight: 800 }}>Band Equivalent Weights</div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Saved locally (Dexie) per user</div>
-            </div>
-
-            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
-              These are your default “equivalent lbs” for band levels <b>1–5</b>. Used only when a band set has no explicit “Est lbs”.
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(60px, 1fr))", gap: 8, marginTop: 10 }}>
-              {(["1","2","3","4","5"] as const).map((k) => (
-                <div key={k} style={{ display: "grid", gap: 6 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>L{k}</div>
-                  <input
-                    value={String(bandEquivMap[k] ?? "")}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const num = raw.trim() === "" ? 0 : Number(raw);
-                      const next = { ...bandEquivMap, [k]: Number.isFinite(num) ? num : bandEquivMap[k] };
-                      setBandEquivMap(next);
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button onClick={() => saveBandEquiv(bandEquivMap)}>Save</button>
-              <button
-                onClick={() =>
-                  saveBandEquiv({ "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 })
-                }
-                title="Reset to defaults"
-              >
-                Reset
-              </button>
-              <button onClick={loadBandEquiv} title="Reload saved values">
-                Reload
-              </button>
-            </div>
-          </div>
-
-          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
-          <div style={{ display: "grid", gap: 12 }}>
-            <LineChart title="Bodyweight (lbs)" points={weightSeries} />
-            <LineChart title="Waist (in)" points={waistSeries} />
-            <LineChart title="Sleep (hours)" points={sleepSeries} />
-            <LineChart title="Calories" points={calSeries} />
-            <LineChart title="Protein (g)" points={proteinSeries} />
-            <LineChart title="Zone 2 (minutes)" points={z2Series} />
-          </div>
-
-
-          
-          {weeklyCoach && (
-            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa", marginTop: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 800 }}>Weekly Coach Summary</div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>
-                  {weeklyCoach.thisWeekStart} → {weeklyCoach.thisWeekEnd}
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginTop: 10 }}>
-                <div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>Sessions</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.sessionsThis}</div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.sessionsPrev}</div>
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>Tonnage</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.tonnageThis.toLocaleString()}</div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.tonnagePrev.toLocaleString()}</div>
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>Work Sets</div>
-                  <div style={{ fontSize: 18, fontWeight: 800 }}>{weeklyCoach.setsThis.toLocaleString()}</div>
-                  <div style={{ fontSize: 12, opacity: 0.7 }}>Prev 7d: {weeklyCoach.setsPrev.toLocaleString()}</div>
-                </div>
-
-                <div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>Best e1RM (7d)</div>
-                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
-                    Bench: {weeklyCoach.benchBest ? Math.round(weeklyCoach.benchBest) : "—"}
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>
-                    Squat: {weeklyCoach.squatBest ? Math.round(weeklyCoach.squatBest) : "—"}
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>
-                    DL: {weeklyCoach.dlBest ? Math.round(weeklyCoach.dlBest) : "—"}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
-                <b>Coach says:</b>{" "}
-                {weeklyCoach.coachLine}
-              </div>
-
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.15)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ fontWeight: 800 }}>AI Coach Add-on (GPT-5.2)</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(false)}>
-                      {aiCoachBusy ? "Thinking…" : "Refresh AI Coach"}
-                    </button>
-                    <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(true)} style={{ opacity: 0.85 }}>
-                      Force Refresh
-                    </button>
-                  </div>
-                </div>
-
-                {aiCoachErr && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: "#b00020" }}>{aiCoachErr}</div>
-                )}
-
-                {aiCoach ? (
-                  <div style={{ marginTop: 8, fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.35 }}>
-                    <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>
-                      Last run: {new Date(aiCoach.ts).toLocaleString()} • Model: {aiCoach.model}
-                    </div>
-                    {aiCoach.text}
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-                    No AI coach yet for this week. Hit “Refresh AI Coach” to generate one.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-<div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            <LineChart title="Training Volume (Tonnage) — last 28 days" points={tonnageSeries} />
-            <LineChart title="Total Sets — last 28 days" points={setsSeries} />
-          </div>
-
-          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Strength Trend (Best e1RM per day)</h4>
-          <div style={{ display: "grid", gap: 12 }}>
-            <LineChart title="Bench (name includes 'bench')" points={benchSeries} />
-            <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
-            <LineChart title="Deadlift (name includes 'deadlift' or 'dl')" points={dlSeries} />
-          </div>
-
-          <div style={{ marginTop: 14, fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>
-            <b>Note:</b> These strength charts match by exercise name keywords. If you use names like “Flat BB Press”,
-            it won’t show in “bench” until we add that alias. Tell me your exact lift names and I’ll make the matcher
-            smarter (without making it slow).
-          </div>
-        </>
+        <DashboardView
+          dashBusy={dashBusy}
+          refreshDashboard={refreshDashboard}
+          exportBackup={exportBackup}
+          backupBusy={backupBusy}
+          importFileRef={importFileRef}
+          loadBandEquiv={loadBandEquiv}
+          bandEquiv={bandEquiv}
+          setBandEquiv={setBandEquiv}
+          weight={weight}
+          setWeight={setWeight}
+          waist={waist}
+          setWaist={setWaist}
+          sleepHours={sleepHours}
+          setSleepHours={setSleepHours}
+          calories={calories}
+          setCalories={setCalories}
+          protein={protein}
+          setProtein={setProtein}
+          z2Minutes={z2Minutes}
+          setZ2Minutes={setZ2Minutes}
+          notes={notes}
+          setNotes={setNotes}
+          saveQuickLog={saveQuickLog}
+          weeklyCoach={weeklyCoach}
+          tonnageSeries={tonnageSeries}
+          setsSeries={setsSeries}
+          benchSeries={benchSeries}
+          squatSeries={squatSeries}
+          dlSeries={dlSeries}
+          weightSeries={weightSeries}
+          waistSeries={waistSeries}
+          sleepSeries={sleepSeries}
+          calSeries={calSeries}
+          proteinSeries={proteinSeries}
+          z2Series={z2Series}
+          refreshAiCoach={refreshAiCoach}
+          aiCoachBusy={aiCoachBusy}
+          aiCoachErr={aiCoachErr}
+          aiCoach={aiCoach}
+          timerOn={timerOn}
+          setTimerOn={setTimerOn}
+          secs={secs}
+          setSecs={setSecs}
+        />
       )}
 
       {tab === "quick" && (
@@ -2440,6 +2319,8 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
+
 
 
 
