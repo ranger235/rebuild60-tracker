@@ -1893,11 +1893,10 @@ setTonnageSeries(tonSeries);
           setSecs={setSecs}
         />
       )}
-        </>
-      )}
     </div>
   );
 }
+
 
 
 
