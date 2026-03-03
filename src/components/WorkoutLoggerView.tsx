@@ -57,6 +57,7 @@ type Props = {
 
   // Exercises within open session
   exercises: any[];
+  setsForExercise: (exerciseId: string) => any[];
   newExerciseName: string;
   setNewExerciseName: (v: string) => void;
   addExercise: () => any;
@@ -111,6 +112,7 @@ export default function WorkoutLoggerView(props: Props) {
     deleteSession,
     createWorkoutSession,
     exercises,
+    setsForExercise,
     newExerciseName,
     setNewExerciseName,
     addExercise,
@@ -221,7 +223,7 @@ export default function WorkoutLoggerView(props: Props) {
                         const defaultLabel = displayExerciseName(ex.name);
                         const lastSummary = lastByExerciseName[exerciseKey(ex.name)];
                         const preview = lastSummary?.sets?.slice?.(0, 5) ?? [];
-                        const exSets = ex.sets_today ?? [];
+                        const exSets = setsForExercise(ex.id) ?? [];
                         const compound = !!ex.is_compound;
 
                         return (
@@ -459,3 +461,4 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
