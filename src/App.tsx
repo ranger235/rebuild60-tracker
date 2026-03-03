@@ -9,6 +9,7 @@ import {
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
+import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode } from "./utils/backup";
 import DashboardView from "./components/DashboardView";
 import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
@@ -246,12 +247,6 @@ function isCompoundExercise(name: string): boolean {
   return compoundKeywords.some((k) => n.includes(k));
 }
 
-type BackupEnvelope = {
-  app: "rebuild60";
-  schema: number;
-  exported_at: string;
-  tables: Record<string, any[]>;
-};
 
 // -----------------------------
 // Simple SVG sparkline / line chart
@@ -488,25 +483,11 @@ useEffect(() => {
   // -----------------------------
   // Backup / Restore
   // -----------------------------
-  async function exportBackup() {
+    async function exportBackup() {
     try {
       setBackupBusy(true);
 
-      const tables: Record<string, any[]> = {};
-      const dexieAny = localdb as any;
-      const tableList: any[] = dexieAny.tables ?? [];
-
-      for (const t of tableList) {
-        const name = t.name as string;
-        tables[name] = await t.toArray();
-      }
-
-      const envelope: BackupEnvelope = {
-        app: "rebuild60",
-        schema: 1,
-        exported_at: new Date().toISOString(),
-        tables
-      };
+      const envelope = await exportFullBackup(localdb);
 
       const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -528,38 +509,39 @@ useEffect(() => {
     }
   }
 
-  async function importBackupFile(file: File) {
+    async function importBackupFile(file: File) {
     try {
       setBackupBusy(true);
 
       const text = await file.text();
-      const parsed = JSON.parse(text) as BackupEnvelope;
+      const parsed = validateBackupEnvelope(JSON.parse(text));
 
-      if (!parsed || parsed.app !== "rebuild60" || !parsed.tables) {
-        alert("That file doesn't look like a Rebuild @ 60 backup JSON.");
+      const modeRaw = (prompt(
+        "Import mode:\n\n• Type MERGE (recommended) to safely merge into this device.\n• Type REPLACE to WIPE this device and restore from backup.\n\nMode:",
+        "MERGE"
+      ) || "MERGE").trim().toUpperCase();
+
+      if (modeRaw !== "MERGE" && modeRaw !== "REPLACE") {
+        alert("Import cancelled (invalid mode).");
         return;
       }
 
-      const ok = confirm(
-        "IMPORT will OVERWRITE your local data on this device.\n\nIf you're not 100% sure, hit Cancel and export a backup first.\n\nContinue?"
-      );
-      if (!ok) return;
+      const mode = modeRaw as ImportMode;
 
-      const dexieAny = localdb as any;
-      const tableList: any[] = dexieAny.tables ?? [];
-      const byName = new Map<string, any>();
-      for (const t of tableList) byName.set(t.name, t);
+      if (mode === "REPLACE") {
+        const ok = confirm(
+          "REPLACE will DELETE your local data on this device, then restore from the backup.\n\nIf you're not 100% sure, hit Cancel.\n\nContinue?"
+        );
+        if (!ok) return;
 
-      await localdb.transaction("rw", (localdb as any).tables, async () => {
-        for (const t of tableList) await t.clear();
-
-        for (const [tableName, rows] of Object.entries(parsed.tables)) {
-          const t = byName.get(tableName);
-          if (!t) continue;
-          if (!Array.isArray(rows) || rows.length === 0) continue;
-          await t.bulkPut(rows);
+        const typed = (prompt('Type REPLACE to confirm destructive restore:', '') || '').trim().toUpperCase();
+        if (typed !== "REPLACE") {
+          alert("Import cancelled.");
+          return;
         }
-      });
+      }
+
+      const result = await importBackup(localdb, parsed, mode);
 
       setLastByExerciseName({});
       setDraftByExerciseId({});
@@ -571,7 +553,9 @@ useEffect(() => {
         await loadTemplates();
       }
 
-      alert("Restore complete. If you have pending offline items, keep the app online to sync.");
+      alert(
+        `Restore complete (${mode}).\n\nInserted: ${result.inserted}\nUpdated: ${result.updated}\nSkipped: ${result.skipped}\n\nTip: Keep the app online to sync any pending offline items.`
+      );
     } catch (e: any) {
       console.error(e);
       alert(`Restore failed: ${e?.message ?? String(e)}`);
@@ -1906,6 +1890,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
