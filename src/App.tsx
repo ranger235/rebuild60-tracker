@@ -44,6 +44,17 @@ function isoToDay(iso: string): string {
   }
 }
 
+function addDays(day: string, delta: number): string {
+  // day: YYYY-MM-DD
+  const [y, m, d] = day.split("-").map((x) => Number(x));
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  dt.setDate(dt.getDate() + delta);
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 
 // -----------------------------
 // Exercise name normalization + aliases
@@ -587,12 +598,114 @@ useEffect(() => {
     setAiCoachBusy(true);
     try {
 
-      // Always pull latest Quick Log snapshot from Dexie (source of truth for offline-first)
-      const [qDaily, qNutr, qZ2] = await Promise.all([
-        localdb.dailyMetrics.get([userId, selectedDayDate]),
-        localdb.nutritionDaily.get([userId, selectedDayDate]),
-        localdb.zone2Daily.get([userId, selectedDayDate])
-      ]);
+      // Always pull latest Quick Log snapshot(s) from Dexie (source of truth for offline-first)
+      // Include a short recent window so the AI can see trends without hallucinating.
+      const recentDays = 14;
+      const startDay = addDays(selectedDayDate, -(recentDays - 1));
+      const dayList: string[] = [];
+      for (let i = 0; i < recentDays; i++) dayList.push(addDays(startDay, i));
+
+      const quickRecent = await Promise.all(
+        dayList.map(async (day) => {
+          const [d, n, z] = await Promise.all([
+            localdb.dailyMetrics.get([userId, day]),
+            localdb.nutritionDaily.get([userId, day]),
+            localdb.zone2Daily.get([userId, day])
+          ]);
+          return {
+            day_date: day,
+            weight_lbs: (d as any)?.weight_lbs ?? null,
+            waist_in: (d as any)?.waist_in ?? null,
+            sleep_hours: (d as any)?.sleep_hours ?? null,
+            calories: (n as any)?.calories ?? null,
+            protein_g: (n as any)?.protein_g ?? null,
+            zone2_minutes: (z as any)?.minutes ?? null,
+            notes: (d as any)?.notes ?? null
+          };
+        })
+      );
+
+      const qToday = quickRecent.find((x) => x.day_date === selectedDayDate) || {
+        day_date: selectedDayDate,
+        weight_lbs: null,
+        waist_in: null,
+        sleep_hours: null,
+        calories: null,
+        protein_g: null,
+        zone2_minutes: null,
+        notes: null
+      };
+
+      // Recent workout snapshots (compact): last up to 6 sessions.
+      // IMPORTANT: some sessions may not have day_date populated (or it may be inconsistent).
+      // Select by started_at primarily, and only use day_date as a best-effort filter.
+      const allSessions = await localdb.localSessions
+        .where("user_id")
+        .equals(userId)
+        .sortBy("started_at");
+
+      const inWindow = (allSessions || []).filter((s) => {
+        const dd = (s as any).day_date as string | undefined | null;
+        const started = (s as any).started_at as string | undefined | null;
+        const derived = (typeof dd === "string" && dd)
+          ? dd
+          : (typeof started === "string" && started.length >= 10 ? started.slice(0, 10) : "");
+        if (!derived) return true; // if we truly can't derive, keep it (better than 'no workouts')
+        return derived >= startDay && derived <= selectedDayDate;
+      });
+
+      const recentSessions = inWindow.slice(-6).reverse();
+
+      const recent_workouts = [] as any[];
+      for (const s of recentSessions) {
+        const ex = await localdb.localExercises.where({ session_id: s.id }).sortBy("sort_order");
+        const exSummaries: any[] = [];
+        for (const e of (ex || []).slice(0, 12)) {
+          const ss = await localdb.localSets.where({ exercise_id: e.id }).sortBy("set_number");
+          const work = (ss || []).filter((x) => !x.is_warmup && typeof x.reps === "number" && (x.reps as any) > 0);
+          // pick best set by Epley 1RM using est load
+          let best: any = null;
+          for (const st of work) {
+            const reps = Number((st as any).reps || 0);
+            let load = null as any;
+            const lt = ((st as any).load_type || "weight") as string;
+            if (lt === "band") load = (st as any).band_est_lbs ?? (st as any).weight_lbs ?? null;
+            else if (lt === "bodyweight") load = (st as any).weight_lbs ?? (st as any).band_est_lbs ?? null; // best-effort
+            else load = (st as any).weight_lbs ?? (st as any).band_est_lbs ?? null;
+            if (load == null || !isFinite(Number(load)) || Number(load) <= 0) continue;
+            const score = oneRmEpley(Number(load), reps);
+            if (!best || score > best.score) {
+              best = {
+                score,
+                load_type: lt,
+                weight_lbs: (st as any).weight_lbs ?? null,
+                band_level: (st as any).band_level ?? null,
+                band_mode: (st as any).band_mode ?? null,
+                band_config: (st as any).band_config ?? null,
+                band_est_lbs: (st as any).band_est_lbs ?? null,
+                reps,
+                rpe: (st as any).rpe ?? null
+              };
+            }
+          }
+          exSummaries.push({ name: e.name, best_set: best });
+        }
+
+        const dd = (s as any).day_date as any;
+        const started = (s as any).started_at as any;
+        const derivedDay = (typeof dd === "string" && dd)
+          ? dd
+          : (typeof started === "string" && started.length >= 10 ? started.slice(0, 10) : null);
+
+        recent_workouts.push({
+          id: s.id,
+          day_date: derivedDay,
+          started_at: s.started_at,
+          title: s.title,
+          notes: s.notes ?? null,
+          exercises: exSummaries
+        });
+      }
 
       const payload = {
         user_id: userId,
@@ -601,16 +714,9 @@ useEffect(() => {
           end: weeklyCoach.thisWeekEnd
         },
         coach_core: weeklyCoach,
-        quick_log_today: {
-          day_date: selectedDayDate,
-          weight_lbs: qDaily?.weight_lbs ?? null,
-          waist_in: qDaily?.waist_in ?? null,
-          sleep_hours: qDaily?.sleep_hours ?? null,
-          calories: qNutr?.calories ?? null,
-          protein_g: qNutr?.protein_g ?? null,
-          zone2_minutes: qZ2?.minutes ?? null,
-          notes: qDaily?.notes ?? null
-        }
+        quick_log_today: qToday,
+        quick_log_recent: quickRecent,
+        recent_workouts
       };
 
       const resp = await fetch("/.netlify/functions/coach-ai", {
@@ -1897,6 +2003,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
