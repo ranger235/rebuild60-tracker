@@ -610,13 +610,13 @@ useEffect(() => {
         coach_core: weeklyCoach,
         quick_log_today: {
           day_date: selectedDayDate,
-          weight_lbs: weight ? Number(weight) : null,
-          waist_in: waist ? Number(waist) : null,
-          sleep_hours: sleepHours ? Number(sleepHours) : null,
-          calories: calories ? Number(calories) : null,
-          protein_g: protein ? Number(protein) : null,
-          zone2_minutes: z2Minutes ? Number(z2Minutes) : null,
-          notes: notes || null
+          weight_lbs: qDaily?.weight_lbs ?? null,
+          waist_in: qDaily?.waist_in ?? null,
+          sleep_hours: qDaily?.sleep_hours ?? null,
+          calories: qNutr?.calories ?? null,
+          protein_g: qNutr?.protein_g ?? null,
+          zone2_minutes: qZ2?.minutes ?? null,
+          notes: qDaily?.notes ?? null
         }
       };
 
@@ -946,7 +946,8 @@ async function addSet(exerciseId: string) {
   const ex = exercises.find((e) => e.id === exerciseId);
   if (ex) {
     setLastByExerciseName((prev) => {
-      const prevSummary = prev[ex.name];
+      const k = exerciseKey(ex.name);
+      const prevSummary = prev[k];
       const appended: SetLite = {
         load_type: loadType,
         weight_lbs: weight_lbs ?? null,
@@ -960,7 +961,7 @@ async function addSet(exerciseId: string) {
       };
       return {
         ...prev,
-        [ex.name]: {
+        [k]: {
           source: "local",
           started_at: new Date().toISOString(),
           sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
@@ -1872,6 +1873,7 @@ setTonnageSeries(tonSeries);
           deleteSession={deleteSession}
           createWorkoutSession={createWorkoutSession}
           exercises={exercises}
+          setsForExercise={setsForExercise}
           newExerciseName={newExerciseName}
           setNewExerciseName={setNewExerciseName}
           addExercise={addExercise}
