@@ -15,6 +15,8 @@ type ProgressPhotoRow = {
   notes: string | null;
   is_anchor: boolean | null;
   created_at: string;
+  align_x?: number | null;
+  align_y?: number | null;
 };
 
 type MeasurementRow = {
@@ -620,6 +622,31 @@ async function handleUpload() {
           (r) => r.pose === pose && inRange(r.taken_on, weekStart, weekEnd) && (r.is_anchor ?? false)
         );
         is_anchor = already ? false : true;
+
+      // Auto-alignment inheritance: if this upload becomes the weekly anchor for this pose,
+      // copy alignment offsets from the most recent previous anchor for the same pose.
+      let inherit_align_x: number | null = null;
+      let inherit_align_y: number | null = null;
+      if (is_anchor === true && CORE_POSES.includes(pose)) {
+        try {
+          const { data: prevAnchors } = await supabase
+            .from("progress_photos")
+            .select("align_x, align_y, taken_on")
+            .eq("user_id", userId)
+            .eq("pose", pose)
+            .eq("is_anchor", true)
+            .lt("taken_on", dayDate)
+            .order("taken_on", { ascending: false })
+            .limit(1);
+          if (prevAnchors && prevAnchors.length > 0) {
+            inherit_align_x = (prevAnchors[0] as any).align_x ?? 0;
+            inherit_align_y = (prevAnchors[0] as any).align_y ?? 0;
+          }
+        } catch {
+          // ignore - alignment will default to 0/0
+        }
+      }
+
       }
 
       const { error: insErr } = await supabase.from("progress_photos").insert({
@@ -631,6 +658,8 @@ async function handleUpload() {
         waist_in: Number.isFinite(wi as any) ? wi : null,
         notes: notes.trim() ? notes.trim() : null,
         is_anchor
+        ,align_x: inherit_align_x
+        ,align_y: inherit_align_y
       });
 
       if (insErr) throw insErr;
@@ -1481,6 +1510,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
