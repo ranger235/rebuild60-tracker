@@ -522,7 +522,153 @@ function monthKey(ymd: string) {
   }, [anchorsByPose, dayDate]);
 
   
-  function updateLocalAlign(photoId: string, x: number, y: number) {
+  
+
+// Monthly report (Quick Log + Measurements + Anchors)
+const [monthReportBusy, setMonthReportBusy] = useState(false);
+const [monthDaily, setMonthDaily] = useState<any[]>([]);
+const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
+const [aiBusy, setAiBusy] = useState(false);
+const [aiInsight, setAiInsight] = useState<string>("");
+
+function monthStartEnd(ymd: string) {
+  const [y, m] = ymd.split("-").map(Number);
+  const start = new Date(Date.UTC(y, m - 1, 1));
+  const end = new Date(Date.UTC(y, m, 0)); // last day
+  const toYMD = (d: Date) => d.toISOString().slice(0, 10);
+  return { startYMD: toYMD(start), endYMD: toYMD(end) };
+}
+
+useEffect(() => {
+  (async () => {
+    if (!userId) return;
+    setMonthReportBusy(true);
+    try {
+      const { startYMD, endYMD } = monthStartEnd(dayDate);
+
+      // Quick Log from local Dexie (dailyMetrics)
+      const daily = await localdb.dailyMetrics
+        .where("[user_id+day_date]")
+        .between([userId, startYMD], [userId, endYMD], true, true)
+        .sortBy("day_date");
+      setMonthDaily(daily ?? []);
+
+      // Measurements from Supabase
+      const { data: mdata, error: merr } = await supabase
+        .from("body_measurements")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("taken_on", startYMD)
+        .lte("taken_on", endYMD)
+        .order("taken_on", { ascending: true });
+
+      if (merr && (merr as any).code !== "PGRST116") throw merr;
+      setMonthMeas((mdata as any) ?? []);
+    } catch (e: any) {
+      // Keep the rest of the page usable even if report fetch fails
+      console.error(e);
+    } finally {
+      setMonthReportBusy(false);
+    }
+  })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId, dayDate]);
+
+const monthStats = useMemo(() => {
+  const { startYMD, endYMD } = monthStartEnd(dayDate);
+
+  const firstLast = (arr: any[], key: string) => {
+    const vals = arr
+      .map((r) => r?.[key])
+      .filter((v) => v != null && v !== "" && !Number.isNaN(Number(v)))
+      .map((v) => Number(v));
+    if (!vals.length) return { first: null, last: null, delta: null };
+    return { first: vals[0], last: vals[vals.length - 1], delta: vals[vals.length - 1] - vals[0] };
+  };
+
+  const qWeight = firstLast(monthDaily, "weight_lbs");
+  const qWaist = firstLast(monthDaily, "waist_in");
+  const mWeight = firstLast(monthMeas, "weight_lbs");
+  const mWaist = firstLast(monthMeas, "waist_in");
+
+  const avg = (key: string) => {
+    const vals = monthDaily
+      .map((r) => r?.[key])
+      .filter((v) => v != null && v !== "" && !Number.isNaN(Number(v)))
+      .map((v) => Number(v));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+
+  return {
+    monthKey: monthKey(dayDate),
+    startYMD,
+    endYMD,
+    quicklogDays: monthDaily.length,
+    measDays: monthMeas.length,
+    qWeight,
+    qWaist,
+    mWeight,
+    mWaist,
+    avgSleep: avg("sleep_hours"),
+    avgCalories: avg("calories"),
+    avgProtein: avg("protein_g"),
+    avgZone2: avg("zone2_minutes"),
+  };
+}, [dayDate, monthDaily, monthMeas]);
+
+async function buildInsightPayload() {
+  const key = monthKey(dayDate);
+  const { startYMD, endYMD } = monthStartEnd(dayDate);
+
+  const images: { label: string; url: string }[] = [];
+  const addImg = async (label: string, row?: ProgressPhotoRow) => {
+    if (!row?.storage_path) return;
+    try {
+      const { data: s, error: se } = await supabase.storage.from("progress-photos").createSignedUrl(row.storage_path, 60 * 10);
+      if (!se && s?.signedUrl) images.push({ label, url: s.signedUrl });
+    } catch {
+      // ignore
+    }
+  };
+
+  // Use monthly highlights (first/last anchor in month) per pose
+  for (const p of CORE_POSES) {
+    const h = (monthlyHighlights.highlights as any)[p] as { first?: ProgressPhotoRow; last?: ProgressPhotoRow };
+    if (h?.first) await addImg(`${p.toUpperCase()} FIRST (${h.first.taken_on})`, h.first);
+    if (h?.last && h.last.id !== h.first?.id) await addImg(`${p.toUpperCase()} LAST (${h.last.taken_on})`, h.last);
+  }
+
+  return {
+    month: key,
+    startYMD,
+    endYMD,
+    stats: monthStats,
+    images,
+  };
+}
+
+async function generateAiPhysiqueInsight() {
+  if (aiBusy) return;
+  setAiBusy(true);
+  setAiInsight("");
+  try {
+    const payload = await buildInsightPayload();
+    const resp = await fetch("/.netlify/functions/progress-ai", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.message ?? "AI insight failed");
+    setAiInsight(data?.text ?? "");
+  } catch (e: any) {
+    alert(e?.message ?? String(e));
+  } finally {
+    setAiBusy(false);
+  }
+}
+function updateLocalAlign(photoId: string, x: number, y: number) {
     setRows((prev) =>
       prev.map((r) => (r.id === photoId ? { ...r, align_x: x, align_y: y } : r))
     );
@@ -1064,7 +1210,90 @@ async function handleUpload() {
                 </div>
               </div>
 
-              {flipList.length ? (
+              
+
+{/* Monthly Report */}
+<div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
+  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+    <div>
+      <strong>Monthly report</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
+      <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
+        Window: {monthStats.startYMD} → {monthStats.endYMD}
+        {monthReportBusy ? " • loading…" : ""}
+      </div>
+    </div>
+
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
+        {aiBusy ? "Generating AI…" : "AI physique insight"}
+      </button>
+      <button
+        onClick={() => {
+          const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `rebuild60-monthly-report-${monthStats.monthKey}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }}
+      >
+        Export JSON
+      </button>
+    </div>
+  </div>
+
+  <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+      <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
+        <strong>Quick Log</strong>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Days logged: {monthStats.quicklogDays}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Weight:{" "}
+          {monthStats.qWeight.first == null ? "—" : `${monthStats.qWeight.first.toFixed(1)} → ${monthStats.qWeight.last?.toFixed(1)} (${monthStats.qWeight.delta! >= 0 ? "+" : ""}${monthStats.qWeight.delta!.toFixed(1)})`}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Waist:{" "}
+          {monthStats.qWaist.first == null ? "—" : `${monthStats.qWaist.first.toFixed(1)} → ${monthStats.qWaist.last?.toFixed(1)} (${monthStats.qWaist.delta! >= 0 ? "+" : ""}${monthStats.qWaist.delta!.toFixed(1)})`}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
+          Avg sleep: {monthStats.avgSleep == null ? "—" : monthStats.avgSleep.toFixed(1)}h • Avg protein:{" "}
+          {monthStats.avgProtein == null ? "—" : Math.round(monthStats.avgProtein)}g • Avg Zone2:{" "}
+          {monthStats.avgZone2 == null ? "—" : Math.round(monthStats.avgZone2)}m
+        </div>
+      </div>
+
+      <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
+        <strong>Measurements</strong>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Entries: {monthStats.measDays}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Weight:{" "}
+          {monthStats.mWeight.first == null ? "—" : `${monthStats.mWeight.first.toFixed(1)} → ${monthStats.mWeight.last?.toFixed(1)} (${monthStats.mWeight.delta! >= 0 ? "+" : ""}${monthStats.mWeight.delta!.toFixed(1)})`}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.9 }}>
+          Waist:{" "}
+          {monthStats.mWaist.first == null ? "—" : `${monthStats.mWaist.first.toFixed(1)} → ${monthStats.mWaist.last?.toFixed(1)} (${monthStats.mWaist.delta! >= 0 ? "+" : ""}${monthStats.mWaist.delta!.toFixed(1)})`}
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
+          Tip: Quick Log is your “daily signal.” Measurements are your “official tape.”
+        </div>
+      </div>
+    </div>
+
+    {aiInsight ? (
+      <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)", whiteSpace: "pre-wrap" }}>
+        <strong>AI insight</strong>
+        <div style={{ marginTop: 8 }}>{aiInsight}</div>
+      </div>
+    ) : null}
+  </div>
+</div>
+
+{flipList.length ? (
                 <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
                   {/* Video-editor style scrubber */}
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
@@ -1530,6 +1759,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
