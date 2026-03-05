@@ -12,7 +12,7 @@ type ProgressPhotoRow = {
   storage_path: string;
   weight_lbs: number | null;
   waist_in: number | null;
-  notes: string | null;
+  notes: string | null;,
   is_anchor: boolean | null;
   created_at: string;
   align_x?: number | null;
@@ -870,42 +870,39 @@ async function handleUpload() {
       const wl = weightLbs.trim() ? Number(weightLbs) : null;
       const wi = waistIn.trim() ? Number(waistIn) : null;
 
-      // Anchor rule: For Front/Side/Back, mark the FIRST photo in the current week as is_anchor.
-      let is_anchor: boolean | null = null;
-      if (CORE_POSES.includes(pose)) {
-        const { weekStart, weekEnd } = getWeekWindowForDate(dayDate, checkinDow);
-        const already = rows.some(
-          (r) => r.pose === pose && inRange(r.taken_on, weekStart, weekEnd) && (r.is_anchor ?? false)
-        );
-        is_anchor = already ? false : true;
-
-      // Auto-alignment inheritance: if this upload becomes the weekly anchor for this pose,
-      // copy alignment offsets from the most recent previous anchor for the same pose.
       let inherit_align_x: number | null = null;
       let inherit_align_y: number | null = null;
-      if (is_anchor === true && CORE_POSES.includes(pose)) {
-        try {
-          const { data: prevAnchors } = await supabase
-            .from("progress_photos")
-            .select("align_x, align_y, taken_on")
-            .eq("user_id", userId)
-            .eq("pose", pose)
-            .eq("is_anchor", true)
-            .lt("taken_on", dayDate)
-            .order("taken_on", { ascending: false })
-            .limit(1);
-          if (prevAnchors && prevAnchors.length > 0) {
-            inherit_align_x = (prevAnchors[0] as any).align_x ?? 0;
-            inherit_align_y = (prevAnchors[0] as any).align_y ?? 0;
-          }
-        } catch {
-          // ignore - alignment will default to 0/0
-        }
-      }
 
-      }
+      // Anchor rule: For Front/Side/Back, mark the FIRST photo in the current week as is_anchor.
+let is_anchor: boolean | null = null;
 
-      const { error: insErr } = await supabase.from("progress_photos").insert({
+// Auto-alignment inheritance defaults (only used for core poses)
+// NOTE: values are stored per-photo (align_x/align_y) and inherited from the most recent prior anchor of same pose.
+if (CORE_POSES.includes(pose)) {
+  const { weekStart, weekEnd } = getWeekWindowForDate(dayDate, checkinDow);
+
+  const already = rows.some(
+    (r) => r.pose === pose && inRange(r.taken_on, weekStart, weekEnd) && (r.is_anchor ?? false)
+  );
+  is_anchor = already ? false : true;
+
+  if (is_anchor === true) {
+    try {
+      const priorAnchors = rows
+        .filter((r) => r.pose === pose && (r.is_anchor ?? false) && r.taken_on < takenOnIso)
+        .sort((a, b) => (a.taken_on > b.taken_on ? -1 : 1));
+
+      const last = priorAnchors[0];
+      if (last) {
+        inherit_align_x = (last.align_x ?? 0) as number;
+        inherit_align_y = (last.align_y ?? 0) as number;
+      }
+    } catch {
+      // ignore: alignment inheritance is a convenience only
+    }
+  }
+}
+const { error: insErr } = await supabase.from("progress_photos").insert({
         user_id: userId,
         taken_on: dayDate,
         pose,
@@ -913,9 +910,9 @@ async function handleUpload() {
         weight_lbs: Number.isFinite(wl as any) ? wl : null,
         waist_in: Number.isFinite(wi as any) ? wi : null,
         notes: notes.trim() ? notes.trim() : null,
-        is_anchor
-        ,align_x: inherit_align_x
-        ,align_y: inherit_align_y
+        is_anchor,
+        align_x: inherit_align_x,
+        align_y: inherit_align_y,
       });
 
       if (insErr) throw insErr;
