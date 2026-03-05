@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
-import { localdb, type LocalDailyMetrics } from "../localdb";
+import { localdb } from "../localdb";
 
 type Pose = "front" | "side" | "back" | "other";
 
 type ProgressPhotoRow = {
   id: string;
-  taken_on: string;
+  user_id: string;
+  taken_on: string; // YYYY-MM-DD
   pose: Pose;
   storage_path: string;
   weight_lbs: number | null;
@@ -31,8 +32,45 @@ type MeasurementRow = {
   created_at: string;
 };
 
+const CORE_POSES: Pose[] = ["front", "side", "back"];
+const DOW_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function ymdToDate(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function dateToYmd(dt: Date): string {
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function addDays(ymd: string, delta: number): string {
+  const dt = ymdToDate(ymd);
+  dt.setDate(dt.getDate() + delta);
+  return dateToYmd(dt);
+}
+
+function getWeekWindowForDate(day: string, checkinDow: number): { weekStart: string; weekEnd: string } {
+  // Define a week as: [Mon..Sun] by default if checkinDow=0 (Sunday).
+  // More generally: weekEnd is the NEXT check-in DOW on/after 'day'; weekStart = weekEnd - 6.
+  const dt = ymdToDate(day);
+  const dow = dt.getDay();
+  const deltaToEnd = (checkinDow - dow + 7) % 7;
+  const weekEndDt = new Date(dt);
+  weekEndDt.setDate(dt.getDate() + deltaToEnd);
+  const weekEnd = dateToYmd(weekEndDt);
+  const weekStart = addDays(weekEnd, -6);
+  return { weekStart, weekEnd };
+}
+
+function inRange(ymd: string, start: string, end: string): boolean {
+  return ymd >= start && ymd <= end;
+}
+
 async function compressImage(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
-  // Basic client-side compression to keep storage/bandwidth sane.
   const imgUrl = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -65,17 +103,25 @@ async function compressImage(file: File, maxDim = 1600, quality = 0.82): Promise
   }
 }
 
-function isoWeekStart(day: string, weekStartsOnSunday: boolean): string {
-  // day: YYYY-MM-DD
-  const [y, m, d] = day.split("-").map(Number);
-  const dt = new Date(y, (m || 1) - 1, d || 1);
-  const dow = dt.getDay(); // 0 Sun .. 6 Sat
-  const delta = weekStartsOnSunday ? -dow : -(dow === 0 ? 6 : dow - 1); // Monday start
-  dt.setDate(dt.getDate() + delta);
-  const yyyy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+function getCheckinDow(userId: string | null): number {
+  if (!userId) return 0;
+  const raw = localStorage.getItem(`rebuild60_checkin_dow_${userId}`);
+  const n = raw == null ? 0 : Number(raw);
+  return Number.isFinite(n) ? Math.max(0, Math.min(6, n)) : 0;
+}
+
+function setCheckinDow(userId: string | null, dow: number) {
+  if (!userId) return;
+  localStorage.setItem(`rebuild60_checkin_dow_${userId}`, String(dow));
+}
+
+function bannerStyle(kind: "info" | "warn") {
+  return {
+    border: `1px solid ${kind === "warn" ? "rgba(255,180,0,0.35)" : "rgba(255,255,255,0.18)"}`,
+    background: kind === "warn" ? "rgba(255,180,0,0.08)" : "rgba(255,255,255,0.06)",
+    padding: 10,
+    borderRadius: 12
+  } as const;
 }
 
 export default function ProgressView({
@@ -91,12 +137,19 @@ export default function ProgressView({
 
   const [mode, setMode] = useState<"photos" | "measures">("photos");
 
+  // Settings
+  const [checkinDow, setCheckinDowState] = useState<number>(() => getCheckinDow(userId));
+
   // Photo form state
   const [pose, setPose] = useState<Pose>("front");
   const [weightLbs, setWeightLbs] = useState<string>("");
   const [waistIn, setWaistIn] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [uploadBusy, setUploadBusy] = useState(false);
+
+  // Weekly check-in guided mode
+  const [checkinMode, setCheckinMode] = useState(false);
+  const [checkinStep, setCheckinStep] = useState<Pose>("front");
 
   // Gallery state
   const [rows, setRows] = useState<ProgressPhotoRow[]>([]);
@@ -107,7 +160,23 @@ export default function ProgressView({
   const [mBusy, setMBusy] = useState(false);
   const [mRow, setMRow] = useState<Partial<MeasurementRow>>({});
 
-  const weekStart = useMemo(() => isoWeekStart(dayDate, true), [dayDate]);
+  // Compare / Flipbook state
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareA, setCompareA] = useState<ProgressPhotoRow | null>(null);
+  const [compareB, setCompareB] = useState<ProgressPhotoRow | null>(null);
+  const [compareMix, setCompareMix] = useState(50);
+
+  const [flipPose, setFlipPose] = useState<Pose>("front");
+  const [flipPlaying, setFlipPlaying] = useState(false);
+  const [flipIdx, setFlipIdx] = useState(0);
+
+  // --- Derived windows ---
+  const weekWindow = useMemo(() => getWeekWindowForDate(dayDate, checkinDow), [dayDate, checkinDow]);
+
+  useEffect(() => {
+    // Persist settings per user
+    setCheckinDowState(getCheckinDow(userId));
+  }, [userId]);
 
   useEffect(() => {
     (async () => {
@@ -123,6 +192,13 @@ export default function ProgressView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, dayDate]);
 
+  async function ensureThumb(id: string, storage_path: string) {
+    if (thumbs[id]) return;
+    const { data: s, error: se } = await supabase.storage.from("progress-photos").createSignedUrl(storage_path, 60 * 60);
+    if (se) throw se;
+    if (s?.signedUrl) setThumbs((p) => ({ ...p, [id]: s.signedUrl }));
+  }
+
   async function refreshGallery() {
     if (!userId) return;
     setGalleryBusy(true);
@@ -130,21 +206,19 @@ export default function ProgressView({
       const { data, error } = await supabase
         .from("progress_photos")
         .select("*")
+        .eq("user_id", userId)
         .order("taken_on", { ascending: false })
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(400);
 
       if (error) throw error;
       const list = (data ?? []) as any as ProgressPhotoRow[];
       setRows(list);
 
-      // Refresh signed URLs
+      // sign a handful for snappy UX
       const next: Record<string, string> = {};
-      for (const r of list.slice(0, 60)) {
-        // Only sign a limited number for performance; rest sign on demand later.
-        const { data: s, error: se } = await supabase.storage
-          .from("progress-photos")
-          .createSignedUrl(r.storage_path, 60 * 60);
+      for (const r of list.slice(0, 80)) {
+        const { data: s, error: se } = await supabase.storage.from("progress-photos").createSignedUrl(r.storage_path, 60 * 60);
         if (!se && s?.signedUrl) next[r.id] = s.signedUrl;
       }
       setThumbs(next);
@@ -162,14 +236,14 @@ export default function ProgressView({
       const { data, error } = await supabase
         .from("body_measurements")
         .select("*")
+        .eq("user_id", userId)
         .eq("taken_on", dayDate)
         .limit(1)
         .maybeSingle();
 
-      if (error && error.code !== "PGRST116") throw error; // PGRST116: no rows
+      if (error && (error as any).code !== "PGRST116") throw error; // no rows
       if (data) setMRow(data as any);
       else {
-        // default from Quick Log for same day
         const daily = await localdb.dailyMetrics.get([userId, dayDate]);
         setMRow({
           taken_on: dayDate,
@@ -196,6 +270,90 @@ export default function ProgressView({
     loadMeasurementsForDay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayDate, userId]);
+
+  const weekPoseRows = useMemo(() => {
+    const byPose: Record<Pose, ProgressPhotoRow[]> = { front: [], side: [], back: [], other: [] };
+    for (const r of rows) {
+      if (!inRange(r.taken_on, weekWindow.weekStart, weekWindow.weekEnd)) continue;
+      byPose[r.pose]?.push(r);
+    }
+    return byPose;
+  }, [rows, weekWindow.weekStart, weekWindow.weekEnd]);
+
+  const weekLatestByPose = useMemo(() => {
+    const out: Partial<Record<Pose, ProgressPhotoRow>> = {};
+    for (const p of CORE_POSES) {
+      const list = weekPoseRows[p] ?? [];
+      out[p] = list.length ? list[0] : undefined; // rows already ordered desc
+    }
+    return out;
+  }, [weekPoseRows]);
+
+  const weekMissing = useMemo(() => {
+    const missing: Pose[] = [];
+    for (const p of CORE_POSES) {
+      if (!weekLatestByPose[p]) missing.push(p);
+    }
+    return missing;
+  }, [weekLatestByPose]);
+
+  const weekComplete = weekMissing.length === 0;
+
+  // Anchors for flipbook/highlights
+  const anchorsByPose = useMemo(() => {
+    const by: Record<Pose, ProgressPhotoRow[]> = { front: [], side: [], back: [], other: [] };
+    for (const r of rows) {
+      if (r.is_anchor) by[r.pose]?.push(r);
+    }
+    // anchorsByPose[*] currently in DESC order; flipbook wants ASC
+    return by;
+  }, [rows]);
+
+  const flipList = useMemo(() => {
+    const list = (anchorsByPose[flipPose] ?? []).slice().reverse();
+    return list;
+  }, [anchorsByPose, flipPose]);
+
+  useEffect(() => {
+    if (!flipPlaying) return;
+    if (!flipList.length) return;
+
+    const t = window.setInterval(() => {
+      setFlipIdx((i) => (i + 1) % flipList.length);
+    }, 900);
+
+    return () => window.clearInterval(t);
+  }, [flipPlaying, flipList.length]);
+
+  useEffect(() => {
+    // If user switches pose, reset index safely
+    setFlipIdx(0);
+    setFlipPlaying(false);
+  }, [flipPose]);
+
+  function monthKey(ymd: string) {
+    return ymd.slice(0, 7); // YYYY-MM
+  }
+
+  const monthlyHighlights = useMemo(() => {
+    const key = monthKey(dayDate);
+    const highlights: Record<Pose, { first?: ProgressPhotoRow; last?: ProgressPhotoRow }> = {
+      front: {},
+      side: {},
+      back: {},
+      other: {}
+    };
+
+    for (const p of CORE_POSES) {
+      const listAsc = (anchorsByPose[p] ?? []).slice().reverse();
+      const inMonth = listAsc.filter((r) => monthKey(r.taken_on) === key);
+      if (!inMonth.length) continue;
+      highlights[p].first = inMonth[0];
+      highlights[p].last = inMonth[inMonth.length - 1];
+    }
+
+    return { key, highlights };
+  }, [anchorsByPose, dayDate]);
 
   async function handleUpload() {
     if (!userId) {
@@ -224,6 +382,16 @@ export default function ProgressView({
       const wl = weightLbs.trim() ? Number(weightLbs) : null;
       const wi = waistIn.trim() ? Number(waistIn) : null;
 
+      // Anchor rule: For Front/Side/Back, mark the FIRST photo in the current week as is_anchor.
+      let is_anchor: boolean | null = null;
+      if (CORE_POSES.includes(pose)) {
+        const { weekStart, weekEnd } = getWeekWindowForDate(dayDate, checkinDow);
+        const already = rows.some(
+          (r) => r.pose === pose && inRange(r.taken_on, weekStart, weekEnd) && (r.is_anchor ?? false)
+        );
+        is_anchor = already ? false : true;
+      }
+
       const { error: insErr } = await supabase.from("progress_photos").insert({
         user_id: userId,
         taken_on: dayDate,
@@ -231,7 +399,8 @@ export default function ProgressView({
         storage_path: path,
         weight_lbs: Number.isFinite(wl as any) ? wl : null,
         waist_in: Number.isFinite(wi as any) ? wi : null,
-        notes: notes.trim() ? notes.trim() : null
+        notes: notes.trim() ? notes.trim() : null,
+        is_anchor
       });
 
       if (insErr) throw insErr;
@@ -239,6 +408,22 @@ export default function ProgressView({
       // cleanup
       if (fileRef.current) fileRef.current.value = "";
       await refreshGallery();
+
+      // Guided check-in stepper
+      if (checkinMode) {
+        const nextMissing = CORE_POSES.find((p) => {
+          if (p === pose) return false;
+          return !rows.some((r) => r.pose === p && inRange(r.taken_on, weekWindow.weekStart, weekWindow.weekEnd));
+        });
+        if (nextMissing) {
+          setCheckinStep(nextMissing);
+          setPose(nextMissing);
+          window.setTimeout(() => fileRef.current?.focus(), 50);
+        } else {
+          setCheckinMode(false);
+          alert("Weekly check-in complete. Front/Side/Back are all in the bag.");
+        }
+      }
     } catch (e: any) {
       alert(e?.message ?? String(e));
     } finally {
@@ -254,15 +439,13 @@ export default function ProgressView({
     if (!ok) return;
 
     try {
-      // 1) delete storage
       const { error: delErr } = await supabase.storage.from("progress-photos").remove([r.storage_path]);
       if (delErr) throw delErr;
 
-      // 2) delete metadata row
       const { error: rowErr } = await supabase.from("progress_photos").delete().eq("id", r.id);
       if (rowErr) throw rowErr;
 
-      // 3) delete AI reviews (future table) - ignore if not present
+      // optional AI reviews table (future)
       try {
         await supabase.from("photo_ai_reviews").delete().eq("photo_id", r.id);
       } catch {
@@ -303,6 +486,25 @@ export default function ProgressView({
     }
   }
 
+  async function openCompareForRow(r: ProgressPhotoRow) {
+    // Compare this photo (B) against previous anchor for same pose (A)
+    const prev = (anchorsByPose[r.pose] ?? []).find((x) => x.taken_on < r.taken_on);
+    if (!prev) {
+      alert("No previous anchor found for this pose yet. Upload at least 2 weekly anchors.");
+      return;
+    }
+    try {
+      await ensureThumb(prev.id, prev.storage_path);
+      await ensureThumb(r.id, r.storage_path);
+      setCompareA(prev);
+      setCompareB(r);
+      setCompareMix(50);
+      setCompareOpen(true);
+    } catch (e: any) {
+      alert(e?.message ?? String(e));
+    }
+  }
+
   if (!userId) {
     return (
       <div>
@@ -311,6 +513,11 @@ export default function ProgressView({
       </div>
     );
   }
+
+  const today = dateToYmd(new Date());
+  const isThisWeek = inRange(today, weekWindow.weekStart, weekWindow.weekEnd);
+  const promptKey = `rebuild60_week_prompt_${userId}_${weekWindow.weekEnd}`;
+  const promptDismissed = localStorage.getItem(promptKey) === "1";
 
   return (
     <div>
@@ -325,29 +532,145 @@ export default function ProgressView({
         </button>
       </div>
 
-      <div style={{ marginTop: 10 }}>
+      <div style={{ marginTop: 10, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
         <label>
           Date:{" "}
           <input type="date" value={dayDate} onChange={(e) => setDayDate(e.target.value)} style={{ padding: 6 }} />
         </label>
-        <span style={{ marginLeft: 10, opacity: 0.75 }}>Week starts: {weekStart} (Sun default)</span>
+
+        <label>
+          Weekly check-in day:{" "}
+          <select
+            value={checkinDow}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCheckinDow(userId, v);
+              setCheckinDowState(v);
+            }}
+            style={{ padding: 6 }}
+          >
+            {DOW_LABELS.map((lab, i) => (
+              <option key={lab} value={i}>
+                {lab}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <span style={{ opacity: 0.75 }}>
+          Week window: <strong>{weekWindow.weekStart}</strong> → <strong>{weekWindow.weekEnd}</strong>
+        </span>
       </div>
 
       <hr />
 
       {mode === "photos" && (
         <div>
+          {/* Weekly Check-in Meter */}
+          <div style={{ ...bannerStyle(weekComplete ? "info" : "warn"), marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <strong>Weekly Check-In</strong> (Front / Side / Back)
+                <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                  {CORE_POSES.map((p) => (
+                    <div key={p}>
+                      {p.toUpperCase()}: {weekLatestByPose[p] ? "✅" : "⏳"}
+                      {weekLatestByPose[p] ? (
+                        <span style={{ opacity: 0.75 }}> — {weekLatestByPose[p]!.taken_on}</span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                {!weekComplete ? (
+                  <div style={{ marginTop: 8, opacity: 0.9 }}>
+                    Upload all 3 poses to unlock: <strong>Compare mode</strong>, <strong>Flipbook</strong>, and <strong>Monthly highlights</strong>.
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 8, opacity: 0.9 }}>
+                    ✅ Week complete. Your future self is going to love this.
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {!checkinMode ? (
+                  <button
+                    onClick={() => {
+                      const next = weekMissing[0] ?? "front";
+                      setCheckinMode(true);
+                      setCheckinStep(next);
+                      setPose(next);
+                      window.setTimeout(() => fileRef.current?.focus(), 50);
+                    }}
+                  >
+                    Start Weekly Check-In
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setCheckinMode(false);
+                      alert("Check-in cancelled (nothing deleted). You can resume anytime.");
+                    }}
+                  >
+                    Cancel Check-In
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    // Jump date to the end of this week (the check-in day)
+                    setDayDate(weekWindow.weekEnd);
+                  }}
+                >
+                  Jump to Check-In Day
+                </button>
+              </div>
+            </div>
+
+            {/* Gentle weekly prompt */}
+            {isThisWeek && !weekComplete && !promptDismissed ? (
+              <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ opacity: 0.95 }}>
+                  Missing this week: <strong>{weekMissing.map((p) => p.toUpperCase()).join(" / ")}</strong>.
+                  {" "}One clean check-in per week, and you’ve got a movie by summer.
+                </div>
+                <button
+                  onClick={() => {
+                    localStorage.setItem(promptKey, "1");
+                    // force re-render
+                    setCheckinDowState((x) => x);
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          {checkinMode ? (
+            <div style={{ ...bannerStyle("info"), marginBottom: 12 }}>
+              <strong>Check-In Mode:</strong> Upload <strong>{checkinStep.toUpperCase()}</strong> next.
+              <span style={{ opacity: 0.8 }}> (After upload, it will auto-advance.)</span>
+            </div>
+          ) : null}
+
           <h3>Upload Photo</h3>
 
-          <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
+          <div style={{ display: "grid", gap: 8, maxWidth: 560 }}>
             <label>
-              Pose (required for weekly anchors later):{" "}
+              Pose:{" "}
               <select value={pose} onChange={(e) => setPose(e.target.value as Pose)} style={{ padding: 6 }}>
                 <option value="front">Front</option>
                 <option value="side">Side</option>
                 <option value="back">Back</option>
                 <option value="other">Other</option>
               </select>
+              <span style={{ marginLeft: 10, opacity: 0.75 }}>
+                {CORE_POSES.includes(pose)
+                  ? "Counts toward Weekly Check-In (and becomes an Anchor for that week if it's the first)"
+                  : "Not part of weekly anchor set"}
+              </span>
             </label>
 
             <label>
@@ -369,7 +692,7 @@ export default function ProgressView({
                   if (daily?.weight_lbs != null) setWeightLbs(String(daily.weight_lbs));
                   if (daily?.waist_in != null) setWaistIn(String(daily.waist_in));
                   if ((daily?.notes ?? "").trim()) setNotes(daily?.notes ?? "");
-                  alert("Auto-filled from Quick Log (local).");
+                  alert("Auto-filled from Quick Log (local). ");
                 }}
               >
                 Auto-fill from Quick Log
@@ -393,6 +716,93 @@ export default function ProgressView({
 
           <hr />
 
+          {/* Compare / Flipbook / Monthly */}
+          <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
+            <div style={{ ...bannerStyle("info") }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <strong>Flipbook</strong>
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <label>
+                      Pose:{" "}
+                      <select value={flipPose} onChange={(e) => setFlipPose(e.target.value as Pose)} style={{ padding: 6 }}>
+                        <option value="front">Front</option>
+                        <option value="side">Side</option>
+                        <option value="back">Back</option>
+                      </select>
+                    </label>
+                    <button onClick={() => setFlipPlaying((p) => !p)} disabled={!flipList.length}>
+                      {flipPlaying ? "Stop" : "Play"}
+                    </button>
+                    <span style={{ opacity: 0.75 }}>{flipList.length ? `${flipList.length} anchors` : "No anchors yet"}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <strong>Monthly highlights</strong>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>Month: {monthlyHighlights.key}</div>
+                  <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                    {CORE_POSES.map((p) => {
+                      const h = (monthlyHighlights.highlights as any)[p] as { first?: ProgressPhotoRow; last?: ProgressPhotoRow };
+                      if (!h?.first || !h?.last) {
+                        return (
+                          <div key={p} style={{ opacity: 0.75 }}>
+                            {p.toUpperCase()}: —
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={p}>
+                          {p.toUpperCase()}: {h.first.taken_on} → {h.last.taken_on}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {flipList.length ? (
+                <div style={{ marginTop: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    onClick={async () => {
+                      const r = flipList[flipIdx];
+                      try {
+                        await ensureThumb(r.id, r.storage_path);
+                      } catch {}
+                      setFlipIdx((i) => Math.max(0, Math.min(flipList.length - 1, i)));
+                    }}
+                    disabled={!flipList.length}
+                  >
+                    Load current frame
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, flipList.length - 1)}
+                    value={flipIdx}
+                    onChange={(e) => setFlipIdx(Number(e.target.value))}
+                    style={{ width: 260 }}
+                    disabled={!flipList.length}
+                  />
+                  <span style={{ opacity: 0.85 }}>
+                    {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
+                  </span>
+                </div>
+              ) : null}
+
+              {flipList[flipIdx] && thumbs[flipList[flipIdx].id] ? (
+                <div style={{ marginTop: 10 }}>
+                  <img
+                    src={thumbs[flipList[flipIdx].id]}
+                    alt={`Flipbook ${flipPose} ${flipList[flipIdx].taken_on}`}
+                    style={{ width: 320, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Gallery */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <h3 style={{ margin: 0 }}>Gallery</h3>
             <button onClick={refreshGallery} disabled={galleryBusy}>
@@ -419,6 +829,9 @@ export default function ProgressView({
                     {r.is_anchor ? <span style={{ marginLeft: 8 }}>(Anchor)</span> : null}
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {r.is_anchor && CORE_POSES.includes(r.pose) ? (
+                      <button onClick={() => openCompareForRow(r)}>Compare</button>
+                    ) : null}
                     <button onClick={() => handleDelete(r)}>Delete</button>
                   </div>
                 </div>
@@ -433,18 +846,18 @@ export default function ProgressView({
                   ) : (
                     <button
                       onClick={async () => {
-                        const { data: s, error: se } = await supabase.storage
-                          .from("progress-photos")
-                          .createSignedUrl(r.storage_path, 60 * 60);
-                        if (se) alert(se.message);
-                        else if (s?.signedUrl) setThumbs((p) => ({ ...p, [r.id]: s.signedUrl }));
+                        try {
+                          await ensureThumb(r.id, r.storage_path);
+                        } catch (e: any) {
+                          alert(e?.message ?? String(e));
+                        }
                       }}
                     >
                       Load preview
                     </button>
                   )}
 
-                  <div style={{ minWidth: 240 }}>
+                  <div style={{ minWidth: 260 }}>
                     <div>Weight: {r.weight_lbs ?? "—"} lbs</div>
                     <div>Waist: {r.waist_in ?? "—"} in</div>
                     {r.notes ? <div style={{ marginTop: 6, opacity: 0.9 }}>Notes: {r.notes}</div> : null}
@@ -453,15 +866,97 @@ export default function ProgressView({
               </div>
             ))}
           </div>
+
+          {/* Compare modal */}
+          {compareOpen && compareA && compareB ? (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.6)",
+                display: "grid",
+                placeItems: "center",
+                padding: 16,
+                zIndex: 9999
+              }}
+              onClick={() => setCompareOpen(false)}
+            >
+              <div
+                style={{
+                  width: "min(860px, 95vw)",
+                  background: "#111",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  borderRadius: 14,
+                  padding: 14
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <strong>Compare</strong> — {compareB.pose.toUpperCase()} ({compareA.taken_on} → {compareB.taken_on})
+                  </div>
+                  <button onClick={() => setCompareOpen(false)}>Close</button>
+                </div>
+
+                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                  <div style={{ position: "relative", width: "100%", aspectRatio: "16/10", overflow: "hidden", borderRadius: 12 }}>
+                    {/* Base (A) */}
+                    <img
+                      src={thumbs[compareA.id]}
+                      alt={`Before ${compareA.taken_on}`}
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                    />
+                    {/* Overlay (B), clipped */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: `${compareMix}%`,
+                        overflow: "hidden"
+                      }}
+                    >
+                      <img
+                        src={thumbs[compareB.id]}
+                        alt={`After ${compareB.taken_on}`}
+                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                      />
+                    </div>
+                    {/* Divider */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        bottom: 0,
+                        left: `${compareMix}%`,
+                        width: 2,
+                        background: "rgba(255,255,255,0.6)"
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ opacity: 0.85 }}>{compareA.taken_on}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={compareMix}
+                      onChange={(e) => setCompareMix(Number(e.target.value))}
+                      style={{ width: 320 }}
+                    />
+                    <span style={{ opacity: 0.85 }}>{compareB.taken_on}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 
       {mode === "measures" && (
         <div>
           <h3>Measurements</h3>
-          <p style={{ opacity: 0.8 }}>
-            One set per day. Auto-fills weight/waist from Quick Log when available.
-          </p>
+          <p style={{ opacity: 0.8 }}>One set per day. Auto-fills weight/waist from Quick Log when available.</p>
 
           <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
             <label>
@@ -494,7 +989,7 @@ export default function ProgressView({
                   ["forearm_in", "Forearm (in)"]
                 ].map(([key, label]) => (
                   <label key={key}>
-                    {label}:{" "}
+                    {label}: {" "}
                     <input
                       value={(mRow as any)[key] ?? ""}
                       onChange={(e) =>
@@ -516,3 +1011,4 @@ export default function ProgressView({
     </div>
   );
 }
+
