@@ -536,6 +536,24 @@ const [aiBusy, setAiBusy] = useState(false);
   const [aiAppendMode, setAiAppendMode] = useState<boolean>(false);
   const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
 
+  // Physique scorecard (monthly)
+  type Scorecard = {
+    monthKey: string;
+    ts: string;
+    conditioning: number;
+    muscularity: number;
+    symmetry: number;
+    waist_control: number;
+    consistency: number;
+    momentum: "up" | "down" | "flat";
+    notes?: string;
+  };
+
+  const [scoreBusy, setScoreBusy] = useState(false);
+  const [scorecard, setScorecard] = useState<Scorecard | null>(null);
+  const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
+  const [scoreShowHistory, setScoreShowHistory] = useState(false);
+
 function monthStartEnd(ymd: string) {
   const [y, m] = ymd.split("-").map(Number);
   const start = new Date(Date.UTC(y, m - 1, 1));
@@ -578,6 +596,32 @@ useEffect(() => {
   })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId, dayDate]);
+
+// Load/save scorecard history (local only)
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_scorecards_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setScoreHistory(parsed);
+    }
+  } catch {
+    // ignore
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_scorecards_${userId}`;
+    localStorage.setItem(key, JSON.stringify(scoreHistory.slice(0, 24)));
+  } catch {
+    // ignore
+  }
+}, [userId, scoreHistory]);
 
 const monthStats = useMemo(() => {
   const { startYMD, endYMD } = monthStartEnd(dayDate);
@@ -687,6 +731,51 @@ async function generateAiPhysiqueInsight() {
     alert(e?.message ?? String(e));
   } finally {
     setAiBusy(false);
+  }
+}
+
+async function generatePhysiqueScorecard() {
+  if (scoreBusy) return;
+  setScoreBusy(true);
+  try {
+    const payload = await buildInsightPayload();
+    const resp = await fetch("/.netlify/functions/progress-scorecard", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.message ?? "Scorecard failed");
+
+    const sc = data?.scorecard as any;
+    if (!sc) throw new Error("No scorecard returned");
+
+    const next: Scorecard = {
+      monthKey: monthStats.monthKey,
+      ts: new Date().toISOString(),
+      conditioning: Number(sc.conditioning ?? 0),
+      muscularity: Number(sc.muscularity ?? 0),
+      symmetry: Number(sc.symmetry ?? 0),
+      waist_control: Number(sc.waist_control ?? 0),
+      consistency: Number(sc.consistency ?? 0),
+      momentum: (sc.momentum === "up" || sc.momentum === "down" || sc.momentum === "flat") ? sc.momentum : "flat",
+      notes: String(sc.notes ?? "").trim() || undefined,
+    };
+
+    setScorecard(next);
+    setScoreHistory((prev) => {
+      // de-dupe same month+scores
+      const sig = `${next.monthKey}|${next.conditioning}|${next.muscularity}|${next.symmetry}|${next.waist_control}|${next.consistency}|${next.momentum}|${next.notes ?? ""}`;
+      const filtered = prev.filter((p) => {
+        const psig = `${p.monthKey}|${p.conditioning}|${p.muscularity}|${p.symmetry}|${p.waist_control}|${p.consistency}|${p.momentum}|${p.notes ?? ""}`;
+        return psig !== sig;
+      });
+      return [next, ...filtered].slice(0, 24);
+    });
+  } catch (e: any) {
+    alert(e?.message ?? String(e));
+  } finally {
+    setScoreBusy(false);
   }
 }
 function updateLocalAlign(photoId: string, x: number, y: number) {
@@ -1170,6 +1259,9 @@ async function handleUpload() {
               </div>
 
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button onClick={generatePhysiqueScorecard} disabled={scoreBusy} title="Generate a 1–10 monthly scorecard">
+                  {scoreBusy ? "Scoring…" : "Scorecard"}
+                </button>
                 <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
                   {aiBusy ? "Generating AI…" : "Run AI"}
                 </button>
@@ -1186,6 +1278,20 @@ async function handleUpload() {
                 </button>
                 <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
                   Clear
+                </button>
+                <button
+                  onClick={() => setScorecard(null)}
+                  disabled={!scorecard}
+                  title="Clear the current scorecard display"
+                >
+                  Clear score
+                </button>
+                <button
+                  onClick={() => setScoreShowHistory((s) => !s)}
+                  disabled={scoreHistory.length === 0}
+                  title="Show previous scorecards"
+                >
+                  {scoreShowHistory ? "Hide scores" : "Scores"}
                 </button>
                 <button
                   onClick={() => {
@@ -1245,6 +1351,69 @@ async function handleUpload() {
                   <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
                     Tip: Quick Log is your “daily signal.” Measurements are your “official tape.”
                   </div>
+                </div>
+
+                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
+                  <strong>Physique Scorecard</strong>
+                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
+                    1–10 ratings for this month. Use it to see trajectory, not perfection.
+                  </div>
+
+                  {scorecard ? (
+                    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ opacity: 0.9 }}>Month: <strong>{scorecard.monthKey}</strong></div>
+                        <div style={{ opacity: 0.75, fontSize: 12 }}>Generated: {scorecard.ts.replace("T", " ").slice(0, 19)}Z</div>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
+                        <div style={{ opacity: 0.9 }}>Conditioning</div><div><strong>{scorecard.conditioning.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Muscularity</div><div><strong>{scorecard.muscularity.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Symmetry</div><div><strong>{scorecard.symmetry.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Waist Control</div><div><strong>{scorecard.waist_control.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Consistency</div><div><strong>{scorecard.consistency.toFixed(1)}</strong></div>
+                      </div>
+
+                      <div style={{ opacity: 0.9 }}>
+                        Momentum: <strong>{scorecard.momentum === "up" ? "↑ Improving" : scorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong>
+                      </div>
+
+                      {scorecard.notes ? (
+                        <div style={{ opacity: 0.9, fontSize: 12, lineHeight: 1.35 }}>
+                          <strong>Notes:</strong> {scorecard.notes}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 8, opacity: 0.85 }}>
+                      No scorecard yet. Hit <strong>Scorecard</strong> above.
+                    </div>
+                  )}
+
+                  {scoreShowHistory && scoreHistory.length > 0 ? (
+                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
+                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous scorecards (click to load):</div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {scoreHistory.map((h) => (
+                          <button
+                            key={h.ts}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 10px",
+                              borderRadius: 10,
+                              background: "rgba(255,255,255,0.06)"
+                            }}
+                            onClick={() => setScorecard(h)}
+                            title="Load this scorecard"
+                          >
+                            <span style={{ fontSize: 12, opacity: 0.9 }}>
+                              {h.monthKey} • {h.ts.replace("T", " ").slice(0, 19)}Z • {h.momentum === "up" ? "↑" : h.momentum === "down" ? "↓" : "→"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -1836,6 +2005,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
