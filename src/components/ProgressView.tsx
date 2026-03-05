@@ -1158,7 +1158,146 @@ async function handleUpload() {
 
           <hr />
 
-          {/* Compare / Flipbook / Monthly */}
+          {/* AI Physique Insight (Monthly report + AI) */}
+          <div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div>
+                <strong>AI Physique Insight</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
+                <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
+                  Window: {monthStats.startYMD} → {monthStats.endYMD}
+                  {monthReportBusy ? " • loading…" : ""}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
+                  {aiBusy ? "Generating AI…" : "Run AI"}
+                </button>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                  <input type="checkbox" checked={aiAppendMode} onChange={(e) => setAiAppendMode(e.target.checked)} />
+                  Append
+                </label>
+                <button
+                  onClick={() => setAiShowHistory((s) => !s)}
+                  disabled={aiInsightHistory.length === 0}
+                  title="Show previous AI runs"
+                >
+                  {aiShowHistory ? "Hide history" : "History"}
+                </button>
+                <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
+                  Clear
+                </button>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `rebuild60-monthly-report-${monthStats.monthKey}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  Export JSON
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
+                  <strong>Quick Log</strong>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>Days logged: {monthStats.quicklogDays}</div>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>
+                    Weight:{" "}
+                    {monthStats.qWeight.first == null
+                      ? "—"
+                      : `${monthStats.qWeight.first.toFixed(1)} → ${monthStats.qWeight.last?.toFixed(1)} (${monthStats.qWeight.delta! >= 0 ? "+" : ""}${monthStats.qWeight.delta!.toFixed(1)})`}
+                  </div>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>
+                    Waist:{" "}
+                    {monthStats.qWaist.first == null
+                      ? "—"
+                      : `${monthStats.qWaist.first.toFixed(1)} → ${monthStats.qWaist.last?.toFixed(1)} (${monthStats.qWaist.delta! >= 0 ? "+" : ""}${monthStats.qWaist.delta!.toFixed(1)})`}
+                  </div>
+                  <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
+                    Avg sleep: {monthStats.avgSleep == null ? "—" : monthStats.avgSleep.toFixed(1)}h • Avg protein:{" "}
+                    {monthStats.avgProtein == null ? "—" : Math.round(monthStats.avgProtein)}g • Avg Zone2:{" "}
+                    {monthStats.avgZone2 == null ? "—" : Math.round(monthStats.avgZone2)}m
+                  </div>
+                </div>
+
+                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
+                  <strong>Measurements</strong>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>Entries: {monthStats.measDays}</div>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>
+                    Weight:{" "}
+                    {monthStats.mWeight.first == null
+                      ? "—"
+                      : `${monthStats.mWeight.first.toFixed(1)} → ${monthStats.mWeight.last?.toFixed(1)} (${monthStats.mWeight.delta! >= 0 ? "+" : ""}${monthStats.mWeight.delta!.toFixed(1)})`}
+                  </div>
+                  <div style={{ marginTop: 6, opacity: 0.9 }}>
+                    Waist:{" "}
+                    {monthStats.mWaist.first == null
+                      ? "—"
+                      : `${monthStats.mWaist.first.toFixed(1)} → ${monthStats.mWaist.last?.toFixed(1)} (${monthStats.mWaist.delta! >= 0 ? "+" : ""}${monthStats.mWaist.delta!.toFixed(1)})`}
+                  </div>
+                  <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
+                    Tip: Quick Log is your “daily signal.” Measurements are your “official tape.”
+                  </div>
+                </div>
+              </div>
+
+              {aiInsight ? (
+                <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <strong>AI output</strong>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
+                    </div>
+                  </div>
+                  <pre
+                    style={{
+                      marginTop: 8,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontFamily: "inherit",
+                      fontSize: 13,
+                      lineHeight: 1.35,
+                      opacity: 0.95
+                    }}
+                  >
+                    {aiInsight}
+                  </pre>
+
+                  {aiShowHistory && aiInsightHistory.length > 0 ? (
+                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
+                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous runs (click to load):</div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {aiInsightHistory.map((h) => (
+                          <button
+                            key={h.id}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 10px",
+                              borderRadius: 10,
+                              background: "rgba(255,255,255,0.06)"
+                            }}
+                            onClick={() => setAiInsight(h.text)}
+                            title="Load this run into the viewer"
+                          >
+                            <span style={{ fontSize: 12, opacity: 0.9 }}>{h.ts.replace("T", " ").slice(0, 19)}Z</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Flipbook + Monthly highlights (keep controls, image, and timeline contiguous) */}
           <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
             <div style={{ ...bannerStyle("info") }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -1230,147 +1369,6 @@ async function handleUpload() {
                   </div>
                 </div>
               </div>
-
-              
-
-{/* Monthly Report */}
-<div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
-  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-    <div>
-      <strong>Monthly report</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
-      <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
-        Window: {monthStats.startYMD} → {monthStats.endYMD}
-        {monthReportBusy ? " • loading…" : ""}
-      </div>
-    </div>
-
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
-        {aiBusy ? "Generating AI…" : "AI physique insight"}
-      </button>
-      <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
-        <input
-          type="checkbox"
-          checked={aiAppendMode}
-          onChange={(e) => setAiAppendMode(e.target.checked)}
-        />
-        Append
-      </label>
-      <button
-        onClick={() => setAiShowHistory((s) => !s)}
-        disabled={aiInsightHistory.length === 0}
-        title="Show previous AI runs"
-      >
-        {aiShowHistory ? "Hide history" : "History"}
-      </button>
-      <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
-        Clear
-      </button>
-      <button
-        onClick={() => {
-          const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `rebuild60-monthly-report-${monthStats.monthKey}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
-        }}
-      >
-        Export JSON
-      </button>
-    </div>
-  </div>
-
-  <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-      <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
-        <strong>Quick Log</strong>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Days logged: {monthStats.quicklogDays}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Weight:{" "}
-          {monthStats.qWeight.first == null ? "—" : `${monthStats.qWeight.first.toFixed(1)} → ${monthStats.qWeight.last?.toFixed(1)} (${monthStats.qWeight.delta! >= 0 ? "+" : ""}${monthStats.qWeight.delta!.toFixed(1)})`}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Waist:{" "}
-          {monthStats.qWaist.first == null ? "—" : `${monthStats.qWaist.first.toFixed(1)} → ${monthStats.qWaist.last?.toFixed(1)} (${monthStats.qWaist.delta! >= 0 ? "+" : ""}${monthStats.qWaist.delta!.toFixed(1)})`}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
-          Avg sleep: {monthStats.avgSleep == null ? "—" : monthStats.avgSleep.toFixed(1)}h • Avg protein:{" "}
-          {monthStats.avgProtein == null ? "—" : Math.round(monthStats.avgProtein)}g • Avg Zone2:{" "}
-          {monthStats.avgZone2 == null ? "—" : Math.round(monthStats.avgZone2)}m
-        </div>
-      </div>
-
-      <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
-        <strong>Measurements</strong>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Entries: {monthStats.measDays}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Weight:{" "}
-          {monthStats.mWeight.first == null ? "—" : `${monthStats.mWeight.first.toFixed(1)} → ${monthStats.mWeight.last?.toFixed(1)} (${monthStats.mWeight.delta! >= 0 ? "+" : ""}${monthStats.mWeight.delta!.toFixed(1)})`}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.9 }}>
-          Waist:{" "}
-          {monthStats.mWaist.first == null ? "—" : `${monthStats.mWaist.first.toFixed(1)} → ${monthStats.mWaist.last?.toFixed(1)} (${monthStats.mWaist.delta! >= 0 ? "+" : ""}${monthStats.mWaist.delta!.toFixed(1)})`}
-        </div>
-        <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
-          Tip: Quick Log is your “daily signal.” Measurements are your “official tape.”
-        </div>
-      </div>
-    </div>
-
-    {aiInsight ? (
-      <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <strong>AI insight</strong>
-          <div style={{ fontSize: 12, opacity: 0.75 }}>
-            {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
-          </div>
-        </div>
-        <pre
-          style={{
-            marginTop: 8,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            fontFamily: "inherit",
-            fontSize: 13,
-            lineHeight: 1.35,
-            opacity: 0.95,
-          }}
-        >
-          {aiInsight}
-        </pre>
-
-        {aiShowHistory && aiInsightHistory.length > 0 ? (
-          <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
-            <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous runs (click to load):</div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {aiInsightHistory.map((h) => (
-                <button
-                  key={h.id}
-                  style={{
-                    textAlign: "left",
-                    padding: "6px 10px",
-                    borderRadius: 10,
-                    background: "rgba(255,255,255,0.06)",
-                  }}
-                  onClick={() => setAiInsight(h.text)}
-                  title="Load this run into the viewer"
-                >
-                  <span style={{ fontSize: 12, opacity: 0.9 }}>{h.ts.replace("T", " ").slice(0, 19)}Z</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    ) : null}
-  </div>
-</div>
 
 {flipList.length ? (
                 <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
@@ -1838,6 +1836,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
