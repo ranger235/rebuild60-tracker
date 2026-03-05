@@ -165,6 +165,7 @@ export default function ProgressView({
   const [compareA, setCompareA] = useState<ProgressPhotoRow | null>(null);
   const [compareB, setCompareB] = useState<ProgressPhotoRow | null>(null);
   const [compareMix, setCompareMix] = useState(50);
+  const compareDragRef = useRef<{ active: boolean; sx: number; sy: number; ax: number; ay: number } | null>(null);
 
   const [flipPose, setFlipPose] = useState<Pose>("front");
   const [flipPlaying, setFlipPlaying] = useState(false);
@@ -555,6 +556,35 @@ function monthKey(ymd: string) {
     updateLocalAlign(cur.id, 0, 0);
     schedulePersistAlign(cur.id, 0, 0);
   }
+
+  function copyPrevAlignToCurrent() {
+    if (flipIdx <= 0) return;
+    const cur = flipList[flipIdx];
+    const prev = flipList[flipIdx - 1];
+    if (!cur || !prev) return;
+    const nx = (prev.align_x ?? 0) as number;
+    const ny = (prev.align_y ?? 0) as number;
+    setAlignX(nx);
+    setAlignY(ny);
+    updateLocalAlign(cur.id, nx, ny);
+    schedulePersistAlign(cur.id, nx, ny);
+  }
+
+  async function copyAlignBetweenPhotos(fromId: string, toId: string) {
+    const from = rows.find((r) => r.id === fromId);
+    const to = rows.find((r) => r.id === toId);
+    if (!from || !to) return;
+    const nx = (from.align_x ?? 0) as number;
+    const ny = (from.align_y ?? 0) as number;
+    // update local cache immediately
+    updateLocalAlign(toId, nx, ny);
+    await persistAlign(toId, nx, ny);
+
+    // If compare modal is open and we're copying into the active "after" photo, keep it in sync.
+    if (compareOpen && compareB && compareB.id === toId) {
+      setCompareB({ ...compareB, align_x: nx, align_y: ny });
+    }
+  }
 async function handleUpload() {
     if (!userId) {
       alert("Not signed in.");
@@ -703,6 +733,22 @@ async function handleUpload() {
     } catch (e: any) {
       alert(e?.message ?? String(e));
     }
+  }
+
+  function compareNudge(dx: number, dy: number) {
+    if (!compareB) return;
+    const nx = ((compareB.align_x ?? 0) as number) + dx;
+    const ny = ((compareB.align_y ?? 0) as number) + dy;
+    setCompareB({ ...compareB, align_x: nx, align_y: ny });
+    updateLocalAlign(compareB.id, nx, ny);
+    schedulePersistAlign(compareB.id, nx, ny);
+  }
+
+  function compareReset() {
+    if (!compareB) return;
+    setCompareB({ ...compareB, align_x: 0, align_y: 0 });
+    updateLocalAlign(compareB.id, 0, 0);
+    schedulePersistAlign(compareB.id, 0, 0);
   }
 
   if (!userId) {
@@ -1088,6 +1134,45 @@ async function handleUpload() {
                     ) : null}
                   </div>
 
+                  {/* Alignment controls (Flipbook) */}
+                  <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? -10 : -2)} title="Nudge up (Shift = 10px)">↑</button>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                        <button onClick={(e) => nudgeAlign(e.shiftKey ? -10 : -2, 0)} title="Nudge left (Shift = 10px)">←</button>
+                        <button onClick={resetAlign} title="Reset alignment">Reset</button>
+                        <button onClick={(e) => nudgeAlign(e.shiftKey ? 10 : 2, 0)} title="Nudge right (Shift = 10px)">→</button>
+                      </div>
+                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? 10 : 2)} title="Nudge down (Shift = 10px)">↓</button>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <input type="checkbox" checked={alignGrid} onChange={(e) => setAlignGrid(e.target.checked)} />
+                        Show grid
+                      </label>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <input type="checkbox" checked={flipKeysArmed} onChange={(e) => setFlipKeysArmed(e.target.checked)} />
+                        Keyboard nudges
+                      </label>
+                    </div>
+
+                    {flipIdx > 0 ? (
+                      <button onClick={copyPrevAlignToCurrent} title="Copy previous frame alignment to this frame">
+                        Copy prev alignment
+                      </button>
+                    ) : (
+                      <button disabled title="Log another week to copy alignment">Copy prev alignment</button>
+                    )}
+
+                    <div style={{ opacity: 0.8, fontSize: 12 }}>
+                      {flipKeysArmed ? "Keys: ← ↑ ↓ → (Shift=10px), R=reset" : "Enable keyboard nudges for arrow keys"}
+                      <div>
+                        Current offset: <strong>{alignX}</strong>, <strong>{alignY}</strong>
+                      </div>
+                    </div>
+                  </div>
+
                   {flipView !== "normal" && flipIdx > 0 ? (
                     <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
                       {flipView === "ghost" ? "Ghost" : "Heatmap"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
@@ -1197,30 +1282,99 @@ async function handleUpload() {
                   <div>
                     <strong>Compare</strong> — {compareB.pose.toUpperCase()} ({compareA.taken_on} → {compareB.taken_on})
                   </div>
-                  <button onClick={() => setCompareOpen(false)}>Close</button>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await copyAlignBetweenPhotos(compareA.id, compareB.id);
+                        } catch (e: any) {
+                          alert(e?.message ?? String(e));
+                        }
+                      }}
+                      title="Copy BEFORE alignment to AFTER"
+                    >
+                      Copy prev alignment
+                    </button>
+                    <button onClick={() => setCompareOpen(false)}>Close</button>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                  <div style={{ position: "relative", width: "100%", aspectRatio: "16/10", overflow: "hidden", borderRadius: 12 }}>
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      aspectRatio: "16/10",
+                      overflow: "hidden",
+                      borderRadius: 12,
+                      border: "1px solid #ccc",
+                      background: "#111",
+                      userSelect: "none"
+                    }}
+                  >
                     {/* Base (A) */}
                     <img
                       src={thumbs[compareA.id]}
                       alt={`Before ${compareA.taken_on}`}
-                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                        transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`
+                      }}
                     />
-                    {/* Overlay (B), clipped */}
+                    {/* Overlay (B), clipped (clipPath avoids "image shrinking" as the slider moves) */}
                     <div
                       style={{
                         position: "absolute",
                         inset: 0,
-                        width: `${compareMix}%`,
-                        overflow: "hidden"
+                        clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
+                        WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
                       }}
                     >
                       <img
                         src={thumbs[compareB.id]}
                         alt={`After ${compareB.taken_on}`}
-                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                        onPointerDown={(e) => {
+                          (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+                          compareDragRef.current = {
+                            active: true,
+                            sx: e.clientX,
+                            sy: e.clientY,
+                            ax: (((compareB.align_x ?? 0) as number) || 0) as number,
+                            ay: (((compareB.align_y ?? 0) as number) || 0) as number
+                          };
+                        }}
+                        onPointerMove={(e) => {
+                          const st = compareDragRef.current;
+                          if (!st?.active || !compareB) return;
+                          const dx = e.clientX - st.sx;
+                          const dy = e.clientY - st.sy;
+                          const nx = st.ax + dx;
+                          const ny = st.ay + dy;
+                          setCompareB({ ...compareB, align_x: nx, align_y: ny });
+                          updateLocalAlign(compareB.id, nx, ny);
+                          schedulePersistAlign(compareB.id, nx, ny);
+                        }}
+                        onPointerUp={() => {
+                          if (compareDragRef.current) compareDragRef.current.active = false;
+                        }}
+                        onPointerCancel={() => {
+                          if (compareDragRef.current) compareDragRef.current.active = false;
+                        }}
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "contain",
+                          transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
+                          transition: "transform 0.02s linear",
+                          cursor: "grab",
+                          touchAction: "none"
+                        }}
                       />
                     </div>
                     {/* Divider */}
@@ -1231,9 +1385,23 @@ async function handleUpload() {
                         bottom: 0,
                         left: `${compareMix}%`,
                         width: 2,
-                        background: "rgba(255,255,255,0.6)"
+                        background: "rgba(255,255,255,0.85)"
                       }}
                     />
+                  </div>
+
+                  {/* Alignment controls */}
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ fontSize: 12, opacity: 0.85 }}>
+                      <b>Align:</b> drag the top photo, or nudge with buttons (double‑click = bigger). “Reset” zeros alignment for the top photo.
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <button className="btn" onClick={() => compareNudge(0, -2)} onDoubleClick={() => compareNudge(0, -10)} title="Up">↑</button>
+                      <button className="btn" onClick={() => compareNudge(-2, 0)} onDoubleClick={() => compareNudge(-10, 0)} title="Left">←</button>
+                      <button className="btn" onClick={() => compareNudge(2, 0)} onDoubleClick={() => compareNudge(10, 0)} title="Right">→</button>
+                      <button className="btn" onClick={() => compareNudge(0, 2)} onDoubleClick={() => compareNudge(0, 10)} title="Down">↓</button>
+                      <button className="btn" onClick={compareReset} title="Reset alignment">Reset</button>
+                    </div>
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1313,6 +1481,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
