@@ -12,20 +12,34 @@ type OpenAIResponse = any;
 
 function extractOutputText(data: any): string {
   if (!data) return "";
+
   // Some wrappers provide this convenience field
   if (typeof data.output_text === "string" && data.output_text.trim()) return data.output_text;
 
-  // Official Responses API shape: { output: [{ content: [{ type: 'output_text', text: '...' }, ...] }, ...] }
+  // Official Responses API shape:
+  // { output: [{ content: [{ type: 'output_text', text: '...' }, ...] }, ...] }
   const chunks: string[] = [];
   const out = Array.isArray(data.output) ? data.output : [];
+
   for (const item of out) {
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const c of content) {
-      if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
-      // Fallbacks seen in some variants
-      if (typeof c?.text === "string" && c?.type && String(c.type).includes("text")) chunks.push(c.text);
+      // Only collect each text chunk ONCE.
+      if (typeof c?.text !== "string") continue;
+
+      if (c?.type === "output_text") {
+        chunks.push(c.text);
+        continue;
+      }
+
+      // Fallbacks seen in some variants (but avoid double-collecting output_text)
+      const t = String(c?.type ?? "");
+      if (t && t.includes("text")) {
+        chunks.push(c.text);
+      }
     }
   }
+
   const joined = chunks.join("\n").trim();
   if (joined) return joined;
 
@@ -89,7 +103,6 @@ export const handler: Handler = async (event) => {
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        // Keep in sync with Coach model so outputs feel consistent
         model: "gpt-5.2-2025-12-11",
         input: [
           { role: "system", content: [{ type: "input_text", text: system }] },
@@ -101,12 +114,14 @@ export const handler: Handler = async (event) => {
 
     const data: OpenAIResponse = await resp.json();
     if (!resp.ok) {
-      return { statusCode: resp.status, body: JSON.stringify({ message: data?.error?.message ?? "OpenAI error", raw: data }) };
+      return {
+        statusCode: resp.status,
+        body: JSON.stringify({ message: data?.error?.message ?? "OpenAI error", raw: data }),
+      };
     }
 
     const text = extractOutputText(data);
     if (!text.trim()) {
-      // Don't silently "succeed" with an empty string; it looks like the UI is broken.
       return {
         statusCode: 502,
         body: JSON.stringify({
@@ -115,6 +130,7 @@ export const handler: Handler = async (event) => {
         }),
       };
     }
+
     return { statusCode: 200, body: JSON.stringify({ text }) };
   } catch (e: any) {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
