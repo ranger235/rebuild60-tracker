@@ -170,6 +170,9 @@ export default function ProgressView({
   const [flipPlaying, setFlipPlaying] = useState(false);
   const [flipIdx, setFlipIdx] = useState(0);
 
+  const [flipGhost, setFlipGhost] = useState(false);
+  const [ghostOpacity, setGhostOpacity] = useState(35); // % overlay of previous frame
+
   // --- Derived windows ---
   const weekWindow = useMemo(() => getWeekWindowForDate(dayDate, checkinDow), [dayDate, checkinDow]);
 
@@ -330,6 +333,20 @@ export default function ProgressView({
     setFlipIdx(0);
     setFlipPlaying(false);
   }, [flipPose]);
+
+  useEffect(() => {
+    // Ensure current (and previous, for ghost) flipbook frames are loaded
+    const cur = flipList[flipIdx];
+    if (!cur) return;
+    ensureThumb(cur.id, cur.storage_path).catch(() => {});
+
+    if (flipGhost && flipList.length > 1) {
+      const prevIdx = Math.max(0, flipIdx - 1);
+      const prev = flipList[prevIdx];
+      if (prev) ensureThumb(prev.id, prev.storage_path).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipIdx, flipPose, flipGhost, flipList.length]);
 
   function monthKey(ymd: string) {
     return ymd.slice(0, 7); // YYYY-MM
@@ -731,10 +748,34 @@ export default function ProgressView({
                         <option value="back">Back</option>
                       </select>
                     </label>
-                    <button onClick={() => setFlipPlaying((p) => !p)} disabled={!flipList.length}>
+                    <button onClick={() => setFlipPlaying((p) => !p)} disabled={flipList.length < 2}>
                       {flipPlaying ? "Stop" : "Play"}
                     </button>
-                    <span style={{ opacity: 0.75 }}>{flipList.length ? `${flipList.length} anchors` : "No anchors yet"}</span>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <input type="checkbox" checked={flipGhost} onChange={(e) => setFlipGhost(e.target.checked)} />
+                      Ghost overlay
+                    </label>
+                    {flipGhost ? (
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
+                        Opacity
+                        <input
+                          type="range"
+                          min={5}
+                          max={85}
+                          value={ghostOpacity}
+                          onChange={(e) => setGhostOpacity(Number(e.target.value))}
+                          style={{ width: 140 }}
+                        />
+                        <span style={{ width: 34, textAlign: "right" }}>{ghostOpacity}%</span>
+                      </label>
+                    ) : null}
+                    <span style={{ opacity: 0.75 }}>
+                      {flipList.length
+                        ? flipList.length === 1
+                          ? "1 anchor (log one more week to play)"
+                          : `${flipList.length} anchors`
+                        : "No anchors yet"}
+                    </span>
                   </div>
                 </div>
 
@@ -790,13 +831,56 @@ export default function ProgressView({
                 </div>
               ) : null}
 
-              {flipList[flipIdx] && thumbs[flipList[flipIdx].id] ? (
+                            {flipList[flipIdx] && thumbs[flipList[flipIdx].id] ? (
                 <div style={{ marginTop: 10 }}>
-                  <img
-                    src={thumbs[flipList[flipIdx].id]}
-                    alt={`Flipbook ${flipPose} ${flipList[flipIdx].taken_on}`}
-                    style={{ width: 320, borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}
-                  />
+                  <div
+                    style={{
+                      width: 320,
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      overflow: "hidden",
+                      position: "relative",
+                      background: "rgba(0,0,0,0.25)"
+                    }}
+                  >
+                    /* Current frame */
+                    <img
+                      src={thumbs[flipList[flipIdx].id]}
+                      alt={`Flipbook  taken_on`}
+                      style={{ width: "100%", display: "block" }}
+                    />
+
+                    /* Ghost overlay of previous frame */
+                    {flipGhost && flipIdx > 0 ? (
+                      thumbs[flipList[flipIdx - 1]?.id] ? (
+                        <img
+                          src={thumbs[flipList[flipIdx - 1].id]}
+                          alt={`Ghost  taken_on`}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            opacity: ghostOpacity / 100,
+                            pointerEvents: "none"
+                          }}
+                        />
+                      ) : null
+                    ) : null}
+                  </div>
+
+                  {flipGhost && flipIdx > 0 ? (
+                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
+                      Ghost: {flipList[flipIdx - 1].taken_on} over {flipList[flipIdx].taken_on}
+                    </div>
+                  ) : null}
+
+                  {flipList.length < 2 ? (
+                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
+                      Flipbook needs <strong>2+</strong> anchor weeks for this pose. Log next week’s {flipPose.toUpperCase()} to unlock playback.
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1011,4 +1095,5 @@ export default function ProgressView({
     </div>
   );
 }
+
 
