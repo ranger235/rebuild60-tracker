@@ -10,6 +10,31 @@ type ReqBody = {
 
 type OpenAIResponse = any;
 
+function extractOutputText(data: any): string {
+  if (!data) return "";
+  // Some wrappers provide this convenience field
+  if (typeof data.output_text === "string" && data.output_text.trim()) return data.output_text;
+
+  // Official Responses API shape: { output: [{ content: [{ type: 'output_text', text: '...' }, ...] }, ...] }
+  const chunks: string[] = [];
+  const out = Array.isArray(data.output) ? data.output : [];
+  for (const item of out) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const c of content) {
+      if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
+      // Fallbacks seen in some variants
+      if (typeof c?.text === "string" && c?.type && String(c.type).includes("text")) chunks.push(c.text);
+    }
+  }
+  const joined = chunks.join("\n").trim();
+  if (joined) return joined;
+
+  // Last-ditch fallbacks
+  if (typeof data?.text === "string") return data.text;
+  if (typeof data?.output === "string") return data.output;
+  return "";
+}
+
 export const handler: Handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -53,7 +78,8 @@ export const handler: Handler = async (event) => {
     const content: any[] = [{ type: "input_text", text: userText }];
     for (const img of images) {
       content.push({ type: "input_text", text: `IMAGE: ${img.label}` });
-      content.push({ type: "input_image", image_url: img.url });
+      // Responses API expects an object: { image_url: { url: "..." } }
+      content.push({ type: "input_image", image_url: { url: img.url } });
     }
 
     const resp = await fetch("https://api.openai.com/v1/responses", {
@@ -63,7 +89,8 @@ export const handler: Handler = async (event) => {
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-5.2",
+        // Keep in sync with Coach model so outputs feel consistent
+        model: "gpt-5.2-2025-12-11",
         input: [
           { role: "system", content: [{ type: "input_text", text: system }] },
           { role: "user", content },
@@ -77,9 +104,20 @@ export const handler: Handler = async (event) => {
       return { statusCode: resp.status, body: JSON.stringify({ message: data?.error?.message ?? "OpenAI error", raw: data }) };
     }
 
-    const text = data?.output_text ?? "";
+    const text = extractOutputText(data);
+    if (!text.trim()) {
+      // Don't silently "succeed" with an empty string; it looks like the UI is broken.
+      return {
+        statusCode: 502,
+        body: JSON.stringify({
+          message: "OpenAI returned no text output.",
+          raw: data,
+        }),
+      };
+    }
     return { statusCode: 200, body: JSON.stringify({ text }) };
   } catch (e: any) {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
