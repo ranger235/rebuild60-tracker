@@ -78,8 +78,8 @@ export const handler: Handler = async (event) => {
     const content: any[] = [{ type: "input_text", text: userText }];
     for (const img of images) {
       content.push({ type: "input_text", text: `IMAGE: ${img.label}` });
-      // Responses API expects an object: { image_url: { url: "..." } }
-      content.push({ type: "input_image", image_url: { url: img.url } });
+      // Responses API expects the direct URL string for image_url.
+      content.push({ type: "input_image", image_url: img.url });
     }
 
     const resp = await fetch("https://api.openai.com/v1/responses", {
@@ -120,4 +120,5 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
 
