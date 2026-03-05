@@ -170,8 +170,10 @@ export default function ProgressView({
   const [flipPlaying, setFlipPlaying] = useState(false);
   const [flipIdx, setFlipIdx] = useState(0);
 
-  const [flipGhost, setFlipGhost] = useState(false);
-  const [ghostOpacity, setGhostOpacity] = useState(35); // % overlay of previous frame
+  const [flipView, setFlipView] = useState<"normal" | "ghost" | "diff">("normal");
+  const [ghostOpacity, setGhostOpacity] = useState(35); // % overlay OR heatmap intensity
+
+  const diffCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // --- Derived windows ---
   const weekWindow = useMemo(() => getWeekWindowForDate(dayDate, checkinDow), [dayDate, checkinDow]);
@@ -180,6 +182,98 @@ export default function ProgressView({
     // Persist settings per user
     setCheckinDowState(getCheckinDow(userId));
   }, [userId]);
+
+  // Difference-mode heatmap renderer
+  useEffect(() => {
+    if (flipView !== "diff") return;
+    if (flipIdx <= 0) return;
+    const cur = flipList[flipIdx];
+    const prev = flipList[flipIdx - 1];
+    if (!cur || !prev) return;
+    const curUrl = thumbs[cur.id];
+    const prevUrl = thumbs[prev.id];
+    const canvas = diffCanvasRef.current;
+    if (!canvas || !curUrl || !prevUrl) return;
+
+    let cancelled = false;
+    (async () => {
+      const loadImg = (src: string) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = src;
+        });
+
+      try {
+        const [imgA, imgB] = await Promise.all([loadImg(prevUrl), loadImg(curUrl)]);
+        if (cancelled) return;
+
+        const w = 320;
+        const h = Math.round((w * imgB.naturalHeight) / Math.max(1, imgB.naturalWidth));
+        canvas.width = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const offA = document.createElement("canvas");
+        const offB = document.createElement("canvas");
+        offA.width = w;
+        offA.height = h;
+        offB.width = w;
+        offB.height = h;
+        const ctxA = offA.getContext("2d");
+        const ctxB = offB.getContext("2d");
+        if (!ctxA || !ctxB) return;
+
+        // Draw both to the same output size (contain-style)
+        const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement) => {
+          c.clearRect(0, 0, w, h);
+          const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+          const dw = img.naturalWidth * scale;
+          const dh = img.naturalHeight * scale;
+          const dx = (w - dw) / 2;
+          const dy = (h - dh) / 2;
+          c.drawImage(img, dx, dy, dw, dh);
+        };
+
+        drawContain(ctxA, imgA);
+        drawContain(ctxB, imgB);
+
+        const a = ctxA.getImageData(0, 0, w, h);
+        const b = ctxB.getImageData(0, 0, w, h);
+        const out = ctx.createImageData(w, h);
+
+        const scale = Math.max(0.2, Math.min(2.0, ghostOpacity / 35));
+
+        for (let i = 0; i < out.data.length; i += 4) {
+          const dr = Math.abs(b.data[i] - a.data[i]);
+          const dg = Math.abs(b.data[i + 1] - a.data[i + 1]);
+          const db = Math.abs(b.data[i + 2] - a.data[i + 2]);
+          let d = (dr + dg + db) / 3;
+          d = Math.min(255, d * 3 * scale);
+
+          // Heatmap: red -> yellow based on intensity
+          out.data[i] = 255;
+          out.data[i + 1] = Math.min(255, Math.round(d));
+          out.data[i + 2] = 0;
+          out.data[i + 3] = Math.min(255, Math.round(d));
+        }
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.putImageData(out, 0, 0);
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipView, flipIdx, ghostOpacity, thumbs]);
 
   useEffect(() => {
     (async () => {
@@ -340,13 +434,13 @@ export default function ProgressView({
     if (!cur) return;
     ensureThumb(cur.id, cur.storage_path).catch(() => {});
 
-    if (flipGhost && flipList.length > 1) {
+    if (flipView !== "normal" && flipList.length > 1) {
       const prevIdx = Math.max(0, flipIdx - 1);
       const prev = flipList[prevIdx];
       if (prev) ensureThumb(prev.id, prev.storage_path).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipIdx, flipPose, flipGhost, flipList.length]);
+  }, [flipIdx, flipPose, flipView, flipList.length]);
 
   function monthKey(ymd: string) {
     return ymd.slice(0, 7); // YYYY-MM
@@ -751,13 +845,17 @@ export default function ProgressView({
                     <button onClick={() => setFlipPlaying((p) => !p)} disabled={flipList.length < 2}>
                       {flipPlaying ? "Stop" : "Play"}
                     </button>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <input type="checkbox" checked={flipGhost} onChange={(e) => setFlipGhost(e.target.checked)} />
-                      Ghost overlay
+                    <label>
+                      View:{" "}
+                      <select value={flipView} onChange={(e) => setFlipView(e.target.value as any)} style={{ padding: 6 }}>
+                        <option value="normal">Normal</option>
+                        <option value="ghost">Ghost overlay</option>
+                        <option value="diff">Difference heatmap</option>
+                      </select>
                     </label>
-                    {flipGhost ? (
+                    {flipView !== "normal" ? (
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
-                        Opacity
+                        {flipView === "ghost" ? "Opacity" : "Intensity"}
                         <input
                           type="range"
                           min={5}
@@ -850,8 +948,8 @@ export default function ProgressView({
                       style={{ width: "100%", display: "block" }}
                     />
 
-                    /* Ghost overlay of previous frame */
-                    {flipGhost && flipIdx > 0 ? (
+                    {/* Ghost overlay of previous frame */}
+                    {flipView === "ghost" && flipIdx > 0 ? (
                       thumbs[flipList[flipIdx - 1]?.id] ? (
                         <img
                           src={thumbs[flipList[flipIdx - 1].id]}
@@ -868,11 +966,27 @@ export default function ProgressView({
                         />
                       ) : null
                     ) : null}
+
+                    {/* Difference heatmap overlay */}
+                    {flipView === "diff" && flipIdx > 0 ? (
+                      <canvas
+                        ref={diffCanvasRef}
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0.85,
+                          pointerEvents: "none",
+                          mixBlendMode: "screen"
+                        }}
+                      />
+                    ) : null}
                   </div>
 
-                  {flipGhost && flipIdx > 0 ? (
+                  {flipView !== "normal" && flipIdx > 0 ? (
                     <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      Ghost: {flipList[flipIdx - 1].taken_on} over {flipList[flipIdx].taken_on}
+                      {flipView === "ghost" ? "Ghost" : "Heatmap"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
                     </div>
                   ) : null}
 
@@ -1095,5 +1209,6 @@ export default function ProgressView({
     </div>
   );
 }
+
 
 
