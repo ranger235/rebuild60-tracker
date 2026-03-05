@@ -1957,6 +1957,12 @@ setTonnageSeries(tonSeries);
         />
         </ErrorBoundary>
       )}
+
+      {tab === "progress" && (
+        <ErrorBoundary scope="Progress" onEmergencyExport={exportBackup}>
+          <ProgressView userId={userId} dayDate={selectedDayDate} setDayDate={setSelectedDayDate} />
+        </ErrorBoundary>
+      )}
 {tab === "workout" && (
         <ErrorBoundary scope="Workout" onEmergencyExport={exportBackup}>
           <WorkoutLoggerView
@@ -2007,6 +2013,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
