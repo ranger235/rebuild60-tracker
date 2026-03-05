@@ -175,6 +175,13 @@ export default function ProgressView({
 
   const diffCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Alignment (per-anchor) for flipbook/compare
+  const [alignX, setAlignX] = useState(0);
+  const [alignY, setAlignY] = useState(0);
+  const [alignGrid, setAlignGrid] = useState(false);
+  const [flipKeysArmed, setFlipKeysArmed] = useState(false);
+  const alignSaveTimer = useRef<number | null>(null);
+
   // --- Derived windows ---
   const weekWindow = useMemo(() => getWeekWindowForDate(dayDate, checkinDow), [dayDate, checkinDow]);
 
@@ -229,18 +236,18 @@ export default function ProgressView({
         if (!ctxA || !ctxB) return;
 
         // Draw both to the same output size (contain-style)
-        const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement) => {
+        const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement, ox: number, oy: number) => {
           c.clearRect(0, 0, w, h);
           const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
           const dw = img.naturalWidth * scale;
           const dh = img.naturalHeight * scale;
           const dx = (w - dw) / 2;
           const dy = (h - dh) / 2;
-          c.drawImage(img, dx, dy, dw, dh);
+          c.drawImage(img, dx + ox, dy + oy, dw, dh);
         };
 
-        drawContain(ctxA, imgA);
-        drawContain(ctxB, imgB);
+        drawContain(ctxA, imgA, (prev.align_x ?? 0) as number, (prev.align_y ?? 0) as number);
+        drawContain(ctxB, imgB, (cur.align_x ?? 0) as number, (cur.align_y ?? 0) as number);
 
         const a = ctxA.getImageData(0, 0, w, h);
         const b = ctxB.getImageData(0, 0, w, h);
@@ -428,7 +435,16 @@ export default function ProgressView({
     setFlipPlaying(false);
   }, [flipPose]);
 
+  
+  // Sync alignment state to the current flipbook frame
   useEffect(() => {
+    const cur = flipList[flipIdx];
+    if (!cur) return;
+    setAlignX((cur.align_x ?? 0) as number);
+    setAlignY((cur.align_y ?? 0) as number);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipIdx, flipPose, flipList.length]);
+useEffect(() => {
     // Ensure current (and previous, for ghost) flipbook frames are loaded
     const cur = flipList[flipIdx];
     if (!cur) return;
@@ -442,7 +458,43 @@ export default function ProgressView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flipIdx, flipPose, flipView, flipList.length]);
 
-  function monthKey(ymd: string) {
+  
+  useEffect(() => {
+    if (!flipKeysArmed) return;
+    const cur = flipList[flipIdx];
+    if (!cur) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Don't steal keys when typing
+      const t = e.target as any;
+      const tag = (t?.tagName ?? "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+      const step = e.shiftKey ? 10 : 2;
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        nudgeAlign(0, -step);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        nudgeAlign(0, step);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        nudgeAlign(-step, 0);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        nudgeAlign(step, 0);
+      } else if (e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        resetAlign();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipKeysArmed, flipIdx, flipPose, flipList.length, alignX, alignY]);
+function monthKey(ymd: string) {
     return ymd.slice(0, 7); // YYYY-MM
   }
 
@@ -466,7 +518,44 @@ export default function ProgressView({
     return { key, highlights };
   }, [anchorsByPose, dayDate]);
 
-  async function handleUpload() {
+  
+  function updateLocalAlign(photoId: string, x: number, y: number) {
+    setRows((prev) =>
+      prev.map((r) => (r.id === photoId ? { ...r, align_x: x, align_y: y } : r))
+    );
+  }
+
+  async function persistAlign(photoId: string, x: number, y: number) {
+    await supabase.from("progress_photos").update({ align_x: x, align_y: y }).eq("id", photoId);
+  }
+
+  function schedulePersistAlign(photoId: string, x: number, y: number) {
+    if (alignSaveTimer.current) window.clearTimeout(alignSaveTimer.current);
+    alignSaveTimer.current = window.setTimeout(() => {
+      persistAlign(photoId, x, y).catch(() => {});
+    }, 180);
+  }
+
+  function nudgeAlign(dx: number, dy: number) {
+    const cur = flipList[flipIdx];
+    if (!cur) return;
+    const nx = (alignX ?? 0) + dx;
+    const ny = (alignY ?? 0) + dy;
+    setAlignX(nx);
+    setAlignY(ny);
+    updateLocalAlign(cur.id, nx, ny);
+    schedulePersistAlign(cur.id, nx, ny);
+  }
+
+  function resetAlign() {
+    const cur = flipList[flipIdx];
+    if (!cur) return;
+    setAlignX(0);
+    setAlignY(0);
+    updateLocalAlign(cur.id, 0, 0);
+    schedulePersistAlign(cur.id, 0, 0);
+  }
+async function handleUpload() {
     if (!userId) {
       alert("Not signed in.");
       return;
@@ -941,11 +1030,25 @@ export default function ProgressView({
                       background: "rgba(0,0,0,0.25)"
                     }}
                   >
-                    /* Current frame */
+                    {alignGrid ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          pointerEvents: "none",
+                          backgroundImage:
+                            "linear-gradient(rgba(255,255,255,0.10) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.10) 1px, transparent 1px)",
+                          backgroundSize: "50px 50px",
+                          opacity: 0.35
+                        }}
+                      />
+                    ) : null}
+
+                    {/* Current frame */}
                     <img
                       src={thumbs[flipList[flipIdx].id]}
                       alt={`Flipbook  taken_on`}
-                      style={{ width: "100%", display: "block" }}
+                      style={{ width: "100%", display: "block", objectFit: "contain", transform: `translate(${alignX}px, ${alignY}px)` }}
                     />
 
                     {/* Ghost overlay of previous frame */}
@@ -961,6 +1064,7 @@ export default function ProgressView({
                             height: "100%",
                             objectFit: "contain",
                             opacity: ghostOpacity / 100,
+                            transform: `translate(${(flipList[flipIdx - 1].align_x ?? 0) as number}px, ${(flipList[flipIdx - 1].align_y ?? 0) as number}px)`,
                             pointerEvents: "none"
                           }}
                         />
@@ -1209,6 +1313,7 @@ export default function ProgressView({
     </div>
   );
 }
+
 
 
 
