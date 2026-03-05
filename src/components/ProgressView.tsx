@@ -1065,31 +1065,51 @@ async function handleUpload() {
               </div>
 
               {flipList.length ? (
-                <div style={{ marginTop: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <button
-                    onClick={async () => {
-                      const r = flipList[flipIdx];
-                      try {
-                        await ensureThumb(r.id, r.storage_path);
-                      } catch {}
-                      setFlipIdx((i) => Math.max(0, Math.min(flipList.length - 1, i)));
-                    }}
-                    disabled={!flipList.length}
-                  >
-                    Load current frame
-                  </button>
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  {/* Video-editor style scrubber */}
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+                    <div style={{ opacity: 0.9 }}>
+                      <strong>Timeline</strong> — {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
+                    </div>
+                    <div style={{ opacity: 0.75, fontSize: 12 }}>
+                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
+                    </div>
+                  </div>
+
                   <input
                     type="range"
                     min={0}
                     max={Math.max(0, flipList.length - 1)}
                     value={flipIdx}
                     onChange={(e) => setFlipIdx(Number(e.target.value))}
-                    style={{ width: 260 }}
+                    style={{ width: "100%" }}
                     disabled={!flipList.length}
                   />
-                  <span style={{ opacity: 0.85 }}>
-                    {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
-                  </span>
+
+                  {/* Clickable markers */}
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto", paddingBottom: 4 }}>
+                    {flipList.map((r, idx) => (
+                      <button
+                        key={r.id}
+                        onClick={() => setFlipIdx(idx)}
+                        title={r.taken_on}
+                        style={{
+                          minWidth: 10,
+                          height: 10,
+                          borderRadius: 999,
+                          border: "1px solid rgba(255,255,255,0.35)",
+                          background: idx === flipIdx ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.15)",
+                          cursor: "pointer"
+                        }}
+                        aria-label={`Jump to ${r.taken_on}`}
+                      />
+                    ))}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.65, fontSize: 12 }}>
+                    <span>{flipList[0]?.taken_on ?? ""}</span>
+                    <span>{flipList[flipList.length - 1]?.taken_on ?? ""}</span>
+                  </div>
                 </div>
               ) : null}
 
@@ -1510,6 +1530,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
