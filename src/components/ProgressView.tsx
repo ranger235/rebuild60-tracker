@@ -529,7 +529,12 @@ const [monthReportBusy, setMonthReportBusy] = useState(false);
 const [monthDaily, setMonthDaily] = useState<any[]>([]);
 const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
 const [aiBusy, setAiBusy] = useState(false);
-const [aiInsight, setAiInsight] = useState<string>("");
+  const [aiInsight, setAiInsight] = useState<string>("");
+  const [aiInsightHistory, setAiInsightHistory] = useState<
+    { id: string; ts: string; text: string }[]
+  >([]);
+  const [aiAppendMode, setAiAppendMode] = useState<boolean>(false);
+  const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
 
 function monthStartEnd(ymd: string) {
   const [y, m] = ymd.split("-").map(Number);
@@ -651,7 +656,7 @@ async function buildInsightPayload() {
 async function generateAiPhysiqueInsight() {
   if (aiBusy) return;
   setAiBusy(true);
-  setAiInsight("");
+  if (!aiAppendMode) setAiInsight("");
   try {
     const payload = await buildInsightPayload();
     const resp = await fetch("/.netlify/functions/progress-ai", {
@@ -661,7 +666,23 @@ async function generateAiPhysiqueInsight() {
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data?.message ?? "AI insight failed");
-    setAiInsight(data?.text ?? "");
+    const nextText = (data?.text ?? "").trim();
+    const ts = new Date().toISOString();
+    const id = `${ts}-${Math.random().toString(16).slice(2)}`;
+
+    // Always keep a small history of runs.
+    if (nextText) {
+      setAiInsightHistory((prev) => [{ id, ts, text: nextText }, ...prev].slice(0, 12));
+    }
+
+    // Prevent accidental duplicates (double-click, rerender, etc.)
+    setAiInsight((prev) => {
+      const prevTrim = (prev || "").trim();
+      if (!nextText) return prev;
+      if (prevTrim === nextText) return prev;
+      if (aiAppendMode) return prev ? `${prev}\n\n---\n\n${nextText}` : nextText;
+      return nextText;
+    });
   } catch (e: any) {
     alert(e?.message ?? String(e));
   } finally {
@@ -1227,6 +1248,24 @@ async function handleUpload() {
       <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
         {aiBusy ? "Generating AI…" : "AI physique insight"}
       </button>
+      <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+        <input
+          type="checkbox"
+          checked={aiAppendMode}
+          onChange={(e) => setAiAppendMode(e.target.checked)}
+        />
+        Append
+      </label>
+      <button
+        onClick={() => setAiShowHistory((s) => !s)}
+        disabled={aiInsightHistory.length === 0}
+        title="Show previous AI runs"
+      >
+        {aiShowHistory ? "Hide history" : "History"}
+      </button>
+      <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
+        Clear
+      </button>
       <button
         onClick={() => {
           const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
@@ -1285,9 +1324,49 @@ async function handleUpload() {
     </div>
 
     {aiInsight ? (
-      <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)", whiteSpace: "pre-wrap" }}>
-        <strong>AI insight</strong>
-        <div style={{ marginTop: 8 }}>{aiInsight}</div>
+      <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <strong>AI insight</strong>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
+          </div>
+        </div>
+        <pre
+          style={{
+            marginTop: 8,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontFamily: "inherit",
+            fontSize: 13,
+            lineHeight: 1.35,
+            opacity: 0.95,
+          }}
+        >
+          {aiInsight}
+        </pre>
+
+        {aiShowHistory && aiInsightHistory.length > 0 ? (
+          <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
+            <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous runs (click to load):</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {aiInsightHistory.map((h) => (
+                <button
+                  key={h.id}
+                  style={{
+                    textAlign: "left",
+                    padding: "6px 10px",
+                    borderRadius: 10,
+                    background: "rgba(255,255,255,0.06)",
+                  }}
+                  onClick={() => setAiInsight(h.text)}
+                  title="Load this run into the viewer"
+                >
+                  <span style={{ fontSize: 12, opacity: 0.9 }}>{h.ts.replace("T", " ").slice(0, 19)}Z</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     ) : null}
   </div>
@@ -1759,6 +1838,7 @@ async function handleUpload() {
     </div>
   );
 }
+
 
 
 
