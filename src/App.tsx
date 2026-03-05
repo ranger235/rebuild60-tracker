@@ -13,6 +13,7 @@ import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode
 import DashboardView from "./components/DashboardView";
 import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
+import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 function todayISO(): string {
@@ -265,7 +266,7 @@ function isCompoundExercise(name: string): boolean {
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
-  const [tab, setTab] = useState<"quick" | "workout" | "dash">("quick");
+  const [tab, setTab] = useState<"quick" | "workout" | "dash" | "progress">("quick");
 
   // Auth
   const [email, setEmail] = useState("");
@@ -1861,6 +1862,9 @@ setTonnageSeries(tonSeries);
         >
           Workout
         </button>
+        <button onClick={() => setTab("progress")} disabled={tab === "progress"}>
+          Progress
+        </button>
         <button
           onClick={() => setTab("dash")}
           disabled={tab === "dash"}
@@ -2003,6 +2007,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
