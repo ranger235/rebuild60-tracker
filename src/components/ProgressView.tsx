@@ -12,7 +12,7 @@ type ProgressPhotoRow = {
   storage_path: string;
   weight_lbs: number | null;
   waist_in: number | null;
-  notes: string | null;,
+  notes: string | null;
   is_anchor: boolean | null;
   created_at: string;
   align_x?: number | null;
