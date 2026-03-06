@@ -12,7 +12,7 @@ type ProgressPhotoRow = {
   storage_path: string;
   weight_lbs: number | null;
   waist_in: number | null;
-  notes: string | null;
+  notes: string | null;,
   is_anchor: boolean | null;
   created_at: string;
   align_x?: number | null;
@@ -554,6 +554,17 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
 
+  // Vision AI (photo-to-photo) analysis
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionPose, setVisionPose] = useState<Pose>("front");
+  const [visionScope, setVisionScope] = useState<"last2" | "month">("month");
+  const [visionText, setVisionText] = useState<string>("");
+  const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
+  const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
+  const [visionHistory, setVisionHistory] = useState<
+    { id: string; ts: string; pose: Pose; scope: string; text: string }[]
+  >([]);
+
 function monthStartEnd(ymd: string) {
   const [y, m] = ymd.split("-").map(Number);
   const start = new Date(Date.UTC(y, m - 1, 1));
@@ -622,6 +633,32 @@ useEffect(() => {
     // ignore
   }
 }, [userId, scoreHistory]);
+
+// Load/save Vision history (local only)
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_vision_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setVisionHistory(parsed);
+    }
+  } catch {
+    // ignore
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_vision_${userId}`;
+    localStorage.setItem(key, JSON.stringify(visionHistory.slice(0, 24)));
+  } catch {
+    // ignore
+  }
+}, [userId, visionHistory]);
 
 const monthStats = useMemo(() => {
   const { startYMD, endYMD } = monthStartEnd(dayDate);
@@ -776,6 +813,105 @@ async function generatePhysiqueScorecard() {
     alert(e?.message ?? String(e));
   } finally {
     setScoreBusy(false);
+  }
+}
+
+async function runVisionPhysiqueAnalysis() {
+  if (visionBusy) return;
+  if (!userId) return;
+
+  // Pick a pair of anchor photos for the selected pose
+  const pose = visionPose;
+  const anchorsDesc = (anchorsByPose[pose] ?? []); // DESC order
+
+  let a: ProgressPhotoRow | undefined;
+  let b: ProgressPhotoRow | undefined;
+  let labelA = "BEFORE";
+  let labelB = "AFTER";
+
+  if (visionScope === "month") {
+    const hl = monthlyHighlights?.highlights?.[pose];
+    if (hl?.first && hl?.last && hl.first.id !== hl.last.id) {
+      a = hl.first;
+      b = hl.last;
+      labelA = `MONTH START (${hl.first.taken_on})`;
+      labelB = `MONTH END (${hl.last.taken_on})`;
+    } else {
+      // fallback to last2 if not enough anchors this month
+      if (anchorsDesc.length >= 2) {
+        b = anchorsDesc[0];
+        a = anchorsDesc[1];
+        labelA = `PREV (${a.taken_on})`;
+        labelB = `LATEST (${b.taken_on})`;
+      }
+    }
+  } else {
+    if (anchorsDesc.length >= 2) {
+      b = anchorsDesc[0];
+      a = anchorsDesc[1];
+      labelA = `PREV (${a.taken_on})`;
+      labelB = `LATEST (${b.taken_on})`;
+    }
+  }
+
+  if (!a || !b) {
+    alert("Need at least two anchor photos for that pose (or two anchors in the current month).");
+    return;
+  }
+
+  setVisionBusy(true);
+  try {
+    // Ensure we have signed URLs
+    // (Don't rely on React state here; fetch signed URLs directly to avoid race conditions.)
+    const { data: sa, error: sea } = await supabase.storage.from("progress-photos").createSignedUrl(a.storage_path, 60 * 60);
+    if (sea) throw sea;
+    const { data: sb, error: seb } = await supabase.storage.from("progress-photos").createSignedUrl(b.storage_path, 60 * 60);
+    if (seb) throw seb;
+    const imageA = sa?.signedUrl;
+    const imageB = sb?.signedUrl;
+    if (!imageA || !imageB) throw new Error("Could not load signed photo URLs.");
+
+    // still populate thumbs cache for the UI
+    try {
+      setThumbs((p) => ({ ...p, [a!.id]: imageA!, [b!.id]: imageB! }));
+    } catch {
+      // ignore
+    }
+
+    const resp = await fetch("/.netlify/functions/physique-vision", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        pose,
+        labelA,
+        labelB,
+        imageA,
+        imageB,
+      }),
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data?.message ?? "Vision analysis failed");
+
+    const nextText = String(data?.text ?? "").trim();
+    if (!nextText) throw new Error("No text returned from Vision analysis");
+
+    const ts = new Date().toISOString();
+    const id = `${ts}-${Math.random().toString(16).slice(2)}`;
+
+    // Keep a small local history
+    setVisionHistory((prev) => [{ id, ts, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
+
+    setVisionText((prev) => {
+      const prevTrim = (prev || "").trim();
+      if (prevTrim === nextText) return prev;
+      if (visionAppendMode) return prev ? `${prev}\n\n---\n\n${nextText}` : nextText;
+      return nextText;
+    });
+  } catch (e: any) {
+    alert(e?.message ?? String(e));
+  } finally {
+    setVisionBusy(false);
   }
 }
 function updateLocalAlign(photoId: string, x: number, y: number) {
@@ -1303,6 +1439,45 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                 >
                   Export JSON
                 </button>
+
+                <span style={{ width: 1, height: 18, background: "rgba(255,255,255,0.15)", display: "inline-block" }} />
+
+                <label style={{ fontSize: 12, opacity: 0.9 }}>
+                  Vision pose:{" "}
+                  <select value={visionPose} onChange={(e) => setVisionPose(e.target.value as Pose)} style={{ padding: 6 }}>
+                    <option value="front">Front</option>
+                    <option value="side">Side</option>
+                    <option value="back">Back</option>
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 12, opacity: 0.9 }}>
+                  Scope:{" "}
+                  <select value={visionScope} onChange={(e) => setVisionScope(e.target.value as any)} style={{ padding: 6 }}>
+                    <option value="month">This month (first → last)</option>
+                    <option value="last2">Last 2 anchors</option>
+                  </select>
+                </label>
+
+                <button onClick={runVisionPhysiqueAnalysis} disabled={visionBusy} title="Compare two photos with Vision AI">
+                  {visionBusy ? "Vision…" : "Run Vision"}
+                </button>
+
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                  <input type="checkbox" checked={visionAppendMode} onChange={(e) => setVisionAppendMode(e.target.checked)} />
+                  Append
+                </label>
+
+                <button
+                  onClick={() => setVisionShowHistory((s) => !s)}
+                  disabled={visionHistory.length === 0}
+                  title="Show previous Vision runs"
+                >
+                  {visionShowHistory ? "Hide vision" : "Vision history"}
+                </button>
+                <button onClick={() => setVisionText("")} disabled={!visionText} title="Clear the current Vision output">
+                  Clear vision
+                </button>
               </div>
             </div>
 
@@ -1453,6 +1628,56 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                             title="Load this run into the viewer"
                           >
                             <span style={{ fontSize: 12, opacity: 0.9 }}>{h.ts.replace("T", " ").slice(0, 19)}Z</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {visionText ? (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
+                    <strong>Vision Physique Change Detection</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"})
+                  </div>
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      padding: 10,
+                      borderRadius: 12,
+                      background: "rgba(255,255,255,0.06)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      margin: 0,
+                      opacity: 0.95,
+                    }}
+                  >
+                    {visionText}
+                  </pre>
+
+                  {visionShowHistory && visionHistory.length > 0 ? (
+                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
+                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous Vision runs (click to load):</div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {visionHistory.map((h) => (
+                          <button
+                            key={h.id}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 10px",
+                              borderRadius: 10,
+                              background: "rgba(255,255,255,0.06)",
+                            }}
+                            onClick={() => {
+                              setVisionPose(h.pose);
+                              setVisionScope(h.scope as any);
+                              setVisionText(h.text);
+                            }}
+                            title="Load this Vision run into the viewer"
+                          >
+                            <span style={{ fontSize: 12, opacity: 0.9 }}>
+                              {h.ts.replace("T", " ").slice(0, 19)}Z • {h.pose.toUpperCase()} • {h.scope}
+                            </span>
                           </button>
                         ))}
                       </div>
