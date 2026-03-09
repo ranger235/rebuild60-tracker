@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
 import { localdb } from "../localdb";
 
-type Pose = "front" | "side" | "back" | "other";
+type Pose = "front" | "quarter" | "side" | "back" | "other";
 
 type ProgressPhotoRow = {
   id: string;
@@ -34,7 +34,9 @@ type MeasurementRow = {
   created_at: string;
 };
 
-const CORE_POSES: Pose[] = ["front", "side", "back"];
+const CORE_POSES: Pose[] = ["front", "side", "back"]
+const BONUS_POSES: Pose[] = ["quarter"]
+const ALL_POSES: Pose[] = ["front", "quarter", "side", "back", "other"];
 const DOW_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 function ymdToDate(ymd: string): Date {
@@ -379,7 +381,7 @@ export default function ProgressView({
   }, [dayDate, userId]);
 
   const weekPoseRows = useMemo(() => {
-    const byPose: Record<Pose, ProgressPhotoRow[]> = { front: [], side: [], back: [], other: [] };
+    const byPose: Record<Pose, ProgressPhotoRow[]> = { front: [], quarter: [], side: [], back: [], other: [] };
     for (const r of rows) {
       if (!inRange(r.taken_on, weekWindow.weekStart, weekWindow.weekEnd)) continue;
       byPose[r.pose]?.push(r);
@@ -408,7 +410,7 @@ export default function ProgressView({
 
   // Anchors for flipbook/highlights
   const anchorsByPose = useMemo(() => {
-    const by: Record<Pose, ProgressPhotoRow[]> = { front: [], side: [], back: [], other: [] };
+    const by: Record<Pose, ProgressPhotoRow[]> = { front: [], quarter: [], side: [], back: [], other: [] };
     for (const r of rows) {
       if (r.is_anchor) by[r.pose]?.push(r);
     }
@@ -558,6 +560,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [visionBusy, setVisionBusy] = useState(false);
   const [visionPose, setVisionPose] = useState<Pose>("front");
   const [visionScope, setVisionScope] = useState<"last2" | "month">("month");
+  const [visionFocus, setVisionFocus] = useState<"balanced" | "lower" | "upper">("balanced");
   const [visionText, setVisionText] = useState<string>("");
   const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
   const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
@@ -887,6 +890,7 @@ async function runVisionPhysiqueAnalysis() {
         labelB,
         imageA,
         imageB,
+        focus: visionFocus,
       }),
     });
 
@@ -1326,6 +1330,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               Pose:{" "}
               <select value={pose} onChange={(e) => setPose(e.target.value as Pose)} style={{ padding: 6 }}>
                 <option value="front">Front</option>
+                <option value="quarter">Quarter Turn</option>
                 <option value="side">Side</option>
                 <option value="back">Back</option>
                 <option value="other">Other</option>
@@ -1333,7 +1338,9 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               <span style={{ marginLeft: 10, opacity: 0.75 }}>
                 {CORE_POSES.includes(pose)
                   ? "Counts toward Weekly Check-In (and becomes an Anchor for that week if it's the first)"
-                  : "Not part of weekly anchor set"}
+                  : BONUS_POSES.includes(pose)
+                    ? "Bonus pose: boosts Vision confidence and lower-body read quality"
+                    : "Not part of weekly anchor set"}
               </span>
             </label>
 
@@ -1446,6 +1453,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                   Vision pose:{" "}
                   <select value={visionPose} onChange={(e) => setVisionPose(e.target.value as Pose)} style={{ padding: 6 }}>
                     <option value="front">Front</option>
+                    <option value="quarter">Quarter Turn</option>
                     <option value="side">Side</option>
                     <option value="back">Back</option>
                   </select>
@@ -1456,6 +1464,15 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                   <select value={visionScope} onChange={(e) => setVisionScope(e.target.value as any)} style={{ padding: 6 }}>
                     <option value="month">This month (first → last)</option>
                     <option value="last2">Last 2 anchors</option>
+                  </select>
+                </label>
+
+                <label style={{ fontSize: 12, opacity: 0.9 }}>
+                  Focus:{" "}
+                  <select value={visionFocus} onChange={(e) => setVisionFocus(e.target.value as any)} style={{ padding: 6 }}>
+                    <option value="balanced">Balanced</option>
+                    <option value="lower">Lower Body Priority</option>
+                    <option value="upper">Upper Body Priority</option>
                   </select>
                 </label>
 
@@ -1639,7 +1656,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               {visionText ? (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
-                    <strong>Vision Physique Change Detection</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"})
+                    <strong>Vision Physique Change Detection</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"}, {visionFocus})
                   </div>
                   <pre
                     style={{
@@ -1699,6 +1716,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                       Pose:{" "}
                       <select value={flipPose} onChange={(e) => setFlipPose(e.target.value as Pose)} style={{ padding: 6 }}>
                         <option value="front">Front</option>
+                        <option value="quarter">Quarter Turn</option>
                         <option value="side">Side</option>
                         <option value="back">Back</option>
                       </select>
