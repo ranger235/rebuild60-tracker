@@ -128,98 +128,6 @@ function bannerStyle(kind: "info" | "warn") {
   } as const;
 }
 
-
-
-type DrawPair = {
-  beforeUrl: string;
-  afterUrl: string;
-  beforeAlignX?: number;
-  beforeAlignY?: number;
-  afterAlignX?: number;
-  afterAlignY?: number;
-};
-
-async function drawChangeMap(canvas: HTMLCanvasElement, pair: DrawPair, intensityPct = 35) {
-  const loadImg = (src: string) =>
-    new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = src;
-    });
-
-  const [imgA, imgB] = await Promise.all([loadImg(pair.beforeUrl), loadImg(pair.afterUrl)]);
-  const w = 320;
-  const h = Math.round((w * imgB.naturalHeight) / Math.max(1, imgB.naturalWidth));
-  canvas.width = w;
-  canvas.height = h;
-
-  const mk = () => {
-    const c = document.createElement("canvas");
-    c.width = w;
-    c.height = h;
-    return c;
-  };
-
-  const offA = mk();
-  const offB = mk();
-  const ctxA = offA.getContext("2d");
-  const ctxB = offB.getContext("2d");
-  const ctx = canvas.getContext("2d");
-  if (!ctxA || !ctxB || !ctx) return;
-
-  const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement, ox: number, oy: number) => {
-    c.clearRect(0, 0, w, h);
-    const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-    const dw = img.naturalWidth * scale;
-    const dh = img.naturalHeight * scale;
-    const dx = (w - dw) / 2;
-    const dy = (h - dh) / 2;
-    c.drawImage(img, dx + ox, dy + oy, dw, dh);
-  };
-
-  drawContain(ctxA, imgA, Number(pair.beforeAlignX ?? 0), Number(pair.beforeAlignY ?? 0));
-  drawContain(ctxB, imgB, Number(pair.afterAlignX ?? 0), Number(pair.afterAlignY ?? 0));
-
-  const a = ctxA.getImageData(0, 0, w, h).data;
-  const b = ctxB.getImageData(0, 0, w, h).data;
-  const out = ctx.createImageData(w, h);
-  const scale = Math.max(0.4, Math.min(2.5, intensityPct / 35));
-
-  const lum = (data: Uint8ClampedArray, i: number) => data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = (y * w + x) * 4;
-      const la = lum(a, i);
-      const lb = lum(b, i);
-      const ra = lum(a, i + 4);
-      const rb = lum(b, i + 4);
-      const da = Math.abs(la - ra);
-      const db = Math.abs(lb - rb);
-      const oa = Math.min(255, Math.round(da * 3.2 * scale));
-      const ob = Math.min(255, Math.round(db * 3.2 * scale));
-      if (oa < 24 && ob < 24) continue;
-
-      if (oa >= ob) {
-        out.data[i] = 255;
-        out.data[i + 1] = Math.max(0, 120 - Math.round(oa / 3));
-        out.data[i + 2] = Math.max(0, 120 - Math.round(oa / 3));
-        out.data[i + 3] = oa;
-      } else {
-        out.data[i] = Math.max(0, 120 - Math.round(ob / 3));
-        out.data[i + 1] = 255;
-        out.data[i + 2] = Math.max(0, 120 - Math.round(ob / 3));
-        out.data[i + 3] = ob;
-      }
-    }
-  }
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.putImageData(out, 0, 0);
-}
-
 export default function ProgressView({
   userId,
   dayDate,
@@ -261,19 +169,16 @@ export default function ProgressView({
   const [compareA, setCompareA] = useState<ProgressPhotoRow | null>(null);
   const [compareB, setCompareB] = useState<ProgressPhotoRow | null>(null);
   const [compareMix, setCompareMix] = useState(50);
-  const [compareView, setCompareView] = useState<"wipe" | "ghost" | "map">("wipe");
   const compareDragRef = useRef<{ active: boolean; sx: number; sy: number; ax: number; ay: number } | null>(null);
-  const compareMapRef = useRef<HTMLCanvasElement | null>(null);
 
   const [flipPose, setFlipPose] = useState<Pose>("front");
   const [flipPlaying, setFlipPlaying] = useState(false);
   const [flipIdx, setFlipIdx] = useState(0);
 
-  const [flipView, setFlipView] = useState<"normal" | "ghost" | "diff" | "map">("normal");
+  const [flipView, setFlipView] = useState<"normal" | "ghost" | "diff">("normal");
   const [ghostOpacity, setGhostOpacity] = useState(35); // % overlay OR heatmap intensity
 
   const diffCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Alignment (per-anchor) for flipbook/compare
   const [alignX, setAlignX] = useState(0);
@@ -381,73 +286,6 @@ export default function ProgressView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flipView, flipIdx, ghostOpacity, thumbs]);
-
-
-  useEffect(() => {
-    if (flipView !== "map") return;
-    if (flipIdx <= 0) return;
-    const cur = flipList[flipIdx];
-    const prev = flipList[flipIdx - 1];
-    const canvas = mapCanvasRef.current;
-    const curUrl = cur ? thumbs[cur.id] : undefined;
-    const prevUrl = prev ? thumbs[prev.id] : undefined;
-    if (!canvas || !cur || !prev || !curUrl || !prevUrl) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        await drawChangeMap(canvas, {
-          beforeUrl: prevUrl,
-          afterUrl: curUrl,
-          beforeAlignX: Number(prev.align_x ?? 0),
-          beforeAlignY: Number(prev.align_y ?? 0),
-          afterAlignX: Number(cur.align_x ?? 0),
-          afterAlignY: Number(cur.align_y ?? 0),
-        }, ghostOpacity);
-      } catch {
-        if (!cancelled) {
-          const ctx = canvas.getContext("2d");
-          ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [flipView, flipIdx, ghostOpacity, thumbs, flipList]);
-
-  useEffect(() => {
-    if (!compareOpen || compareView !== "map") return;
-    if (!compareA || !compareB) return;
-    const canvas = compareMapRef.current;
-    const aUrl = thumbs[compareA.id];
-    const bUrl = thumbs[compareB.id];
-    if (!canvas || !aUrl || !bUrl) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        await drawChangeMap(canvas, {
-          beforeUrl: aUrl,
-          afterUrl: bUrl,
-          beforeAlignX: Number(compareA.align_x ?? 0),
-          beforeAlignY: Number(compareA.align_y ?? 0),
-          afterAlignX: Number(compareB.align_x ?? 0),
-          afterAlignY: Number(compareB.align_y ?? 0),
-        }, ghostOpacity);
-      } catch {
-        if (!cancelled) {
-          const ctx = canvas.getContext("2d");
-          ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [compareOpen, compareView, compareA, compareB, thumbs, ghostOpacity]);
 
   useEffect(() => {
     (async () => {
@@ -1319,35 +1157,6 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     }
   }
 
-
-  function startCompareDrag(e: any) {
-    if (!compareB) return;
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    compareDragRef.current = {
-      active: true,
-      sx: e.clientX,
-      sy: e.clientY,
-      ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-      ay: (((compareB.align_y ?? 0) as number) || 0) as number
-    };
-  }
-
-  function moveCompareDrag(e: any) {
-    const st = compareDragRef.current;
-    if (!st?.active || !compareB) return;
-    const dx = e.clientX - st.sx;
-    const dy = e.clientY - st.sy;
-    const nx = st.ax + dx;
-    const ny = st.ay + dy;
-    setCompareB({ ...compareB, align_x: nx, align_y: ny });
-    updateLocalAlign(compareB.id, nx, ny);
-    schedulePersistAlign(compareB.id, nx, ny);
-  }
-
-  function endCompareDrag() {
-    if (compareDragRef.current) compareDragRef.current.active = false;
-  }
-
   function compareNudge(dx: number, dy: number) {
     if (!compareB) return;
     const nx = ((compareB.align_x ?? 0) as number) + dx;
@@ -1921,12 +1730,11 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         <option value="normal">Normal</option>
                         <option value="ghost">Ghost overlay</option>
                         <option value="diff">Difference heatmap</option>
-                        <option value="map">Physique change map</option>
                       </select>
                     </label>
                     {flipView !== "normal" ? (
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
-                        {flipView === "ghost" ? "Opacity" : flipView === "diff" ? "Intensity" : "Map intensity"}
+                        {flipView === "ghost" ? "Opacity" : "Intensity"}
                         <input
                           type="range"
                           min={5}
@@ -2088,21 +1896,6 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         }}
                       />
                     ) : null}
-
-                    {flipView === "map" && flipIdx > 0 ? (
-                      <canvas
-                        ref={mapCanvasRef}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          opacity: 0.95,
-                          pointerEvents: "none",
-                          mixBlendMode: "screen"
-                        }}
-                      />
-                    ) : null}
                   </div>
 
                   {/* Alignment controls (Flipbook) */}
@@ -2146,7 +1939,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
                   {flipView !== "normal" && flipIdx > 0 ? (
                     <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      {flipView === "ghost" ? "Ghost" : flipView === "diff" ? "Heatmap" : "Change map"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
+                      {flipView === "ghost" ? "Ghost" : "Heatmap"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
                     </div>
                   ) : null}
 
@@ -2266,14 +2059,6 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                     >
                       Copy prev alignment
                     </button>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      View:{" "}
-                      <select value={compareView} onChange={(e) => setCompareView(e.target.value as any)} style={{ padding: 6 }}>
-                        <option value="wipe">Slider wipe</option>
-                        <option value="ghost">Ghost overlay</option>
-                        <option value="map">Change map</option>
-                      </select>
-                    </label>
                     <button onClick={() => setCompareOpen(false)}>Close</button>
                   </div>
                 </div>
@@ -2304,90 +2089,75 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`
                       }}
                     />
-                    {/* Overlay (B) */}
-                    {compareView === "wipe" ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
-                          WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
-                        }}
-                      >
-                        <img
-                          src={thumbs[compareB.id]}
-                          alt={`After ${compareB.taken_on}`}
-                          onPointerDown={startCompareDrag}
-                          onPointerMove={moveCompareDrag}
-                          onPointerUp={endCompareDrag}
-                          onPointerCancel={endCompareDrag}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                            transition: "transform 0.02s linear",
-                            cursor: "grab",
-                            touchAction: "none"
-                          }}
-                        />
-                      </div>
-                    ) : compareView === "ghost" ? (
+                    {/* Overlay (B), clipped (clipPath avoids "image shrinking" as the slider moves) */}
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
+                        WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
+                      }}
+                    >
                       <img
                         src={thumbs[compareB.id]}
                         alt={`After ${compareB.taken_on}`}
-                        onPointerDown={startCompareDrag}
-                        onPointerMove={moveCompareDrag}
-                        onPointerUp={endCompareDrag}
-                        onPointerCancel={endCompareDrag}
+                        onPointerDown={(e) => {
+                          (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+                          compareDragRef.current = {
+                            active: true,
+                            sx: e.clientX,
+                            sy: e.clientY,
+                            ax: (((compareB.align_x ?? 0) as number) || 0) as number,
+                            ay: (((compareB.align_y ?? 0) as number) || 0) as number
+                          };
+                        }}
+                        onPointerMove={(e) => {
+                          const st = compareDragRef.current;
+                          if (!st?.active || !compareB) return;
+                          const dx = e.clientX - st.sx;
+                          const dy = e.clientY - st.sy;
+                          const nx = st.ax + dx;
+                          const ny = st.ay + dy;
+                          setCompareB({ ...compareB, align_x: nx, align_y: ny });
+                          updateLocalAlign(compareB.id, nx, ny);
+                          schedulePersistAlign(compareB.id, nx, ny);
+                        }}
+                        onPointerUp={() => {
+                          if (compareDragRef.current) compareDragRef.current.active = false;
+                        }}
+                        onPointerCancel={() => {
+                          if (compareDragRef.current) compareDragRef.current.active = false;
+                        }}
                         style={{
                           position: "absolute",
                           inset: 0,
                           width: "100%",
                           height: "100%",
                           objectFit: "contain",
-                          opacity: compareMix / 100,
                           transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
                           transition: "transform 0.02s linear",
                           cursor: "grab",
                           touchAction: "none"
                         }}
                       />
-                    ) : (
-                      <canvas
-                        ref={compareMapRef}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          opacity: 0.95,
-                          pointerEvents: "none",
-                          mixBlendMode: "screen"
-                        }}
-                      />
-                    )}
+                    </div>
                     {/* Divider */}
-                    {compareView === "wipe" ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          bottom: 0,
-                          left: `${compareMix}%`,
-                          width: 2,
-                          background: "rgba(255,255,255,0.85)"
-                        }}
-                      />
-                    ) : null}
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        bottom: 0,
+                        left: `${compareMix}%`,
+                        width: 2,
+                        background: "rgba(255,255,255,0.85)"
+                      }}
+                    />
                   </div>
 
                   {/* Alignment controls */}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div style={{ fontSize: 12, opacity: 0.85 }}>
-                      <b>Align:</b> drag the top photo, or nudge with buttons (double‑click = bigger). Wipe = slider reveal, Ghost = transparency overlay, Map = red/green change outline.
+                      <b>Align:</b> drag the top photo, or nudge with buttons (double‑click = bigger). “Reset” zeros alignment for the top photo.
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       <button className="btn" onClick={() => compareNudge(0, -2)} onDoubleClick={() => compareNudge(0, -10)} title="Up">↑</button>
@@ -2409,9 +2179,6 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                       style={{ width: 320 }}
                     />
                     <span style={{ opacity: 0.85 }}>{compareB.taken_on}</span>
-                    <span style={{ opacity: 0.75, fontSize: 12 }}>
-                      {compareView === "wipe" ? `Wipe ${compareMix}%` : compareView === "ghost" ? `Ghost ${compareMix}%` : `Map ${compareMix}%`}
-                    </span>
                   </div>
                 </div>
               </div>
