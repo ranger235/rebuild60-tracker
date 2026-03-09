@@ -169,13 +169,16 @@ export default function ProgressView({
   const [compareA, setCompareA] = useState<ProgressPhotoRow | null>(null);
   const [compareB, setCompareB] = useState<ProgressPhotoRow | null>(null);
   const [compareMix, setCompareMix] = useState(50);
+  const [compareView, setCompareView] = useState<"slider" | "ghost" | "map">("slider");
+  const [compareOpacity, setCompareOpacity] = useState(50);
+  const compareMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const compareDragRef = useRef<{ active: boolean; sx: number; sy: number; ax: number; ay: number } | null>(null);
 
   const [flipPose, setFlipPose] = useState<Pose>("front");
   const [flipPlaying, setFlipPlaying] = useState(false);
   const [flipIdx, setFlipIdx] = useState(0);
 
-  const [flipView, setFlipView] = useState<"normal" | "ghost" | "diff">("normal");
+  const [flipView, setFlipView] = useState<"normal" | "ghost" | "diff" | "map">("normal");
   const [ghostOpacity, setGhostOpacity] = useState(35); // % overlay OR heatmap intensity
 
   const diffCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -195,97 +198,32 @@ export default function ProgressView({
     setCheckinDowState(getCheckinDow(userId));
   }, [userId]);
 
-  // Difference-mode heatmap renderer
+  // Difference/Change-map overlay renderer
   useEffect(() => {
-    if (flipView !== "diff") return;
+    if (flipView !== "diff" && flipView !== "map") return;
     if (flipIdx <= 0) return;
     const cur = flipList[flipIdx];
     const prev = flipList[flipIdx - 1];
-    if (!cur || !prev) return;
+    const canvas = diffCanvasRef.current;
+    if (!cur || !prev || !canvas) return;
     const curUrl = thumbs[cur.id];
     const prevUrl = thumbs[prev.id];
-    const canvas = diffCanvasRef.current;
-    if (!canvas || !curUrl || !prevUrl) return;
-
     let cancelled = false;
     (async () => {
-      const loadImg = (src: string) =>
-        new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = () => resolve(img);
-          img.onerror = reject;
-          img.src = src;
-        });
-
       try {
-        const [imgA, imgB] = await Promise.all([loadImg(prevUrl), loadImg(curUrl)]);
-        if (cancelled) return;
-
-        const w = 320;
-        const h = Math.round((w * imgB.naturalHeight) / Math.max(1, imgB.naturalWidth));
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const offA = document.createElement("canvas");
-        const offB = document.createElement("canvas");
-        offA.width = w;
-        offA.height = h;
-        offB.width = w;
-        offB.height = h;
-        const ctxA = offA.getContext("2d");
-        const ctxB = offB.getContext("2d");
-        if (!ctxA || !ctxB) return;
-
-        // Draw both to the same output size (contain-style)
-        const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement, ox: number, oy: number) => {
-          c.clearRect(0, 0, w, h);
-          const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
-          const dw = img.naturalWidth * scale;
-          const dh = img.naturalHeight * scale;
-          const dx = (w - dw) / 2;
-          const dy = (h - dh) / 2;
-          c.drawImage(img, dx + ox, dy + oy, dw, dh);
-        };
-
-        drawContain(ctxA, imgA, (prev.align_x ?? 0) as number, (prev.align_y ?? 0) as number);
-        drawContain(ctxB, imgB, (cur.align_x ?? 0) as number, (cur.align_y ?? 0) as number);
-
-        const a = ctxA.getImageData(0, 0, w, h);
-        const b = ctxB.getImageData(0, 0, w, h);
-        const out = ctx.createImageData(w, h);
-
-        const scale = Math.max(0.2, Math.min(2.0, ghostOpacity / 35));
-
-        for (let i = 0; i < out.data.length; i += 4) {
-          const dr = Math.abs(b.data[i] - a.data[i]);
-          const dg = Math.abs(b.data[i + 1] - a.data[i + 1]);
-          const db = Math.abs(b.data[i + 2] - a.data[i + 2]);
-          let d = (dr + dg + db) / 3;
-          d = Math.min(255, d * 3 * scale);
-
-          // Heatmap: red -> yellow based on intensity
-          out.data[i] = 255;
-          out.data[i + 1] = Math.min(255, Math.round(d));
-          out.data[i + 2] = 0;
-          out.data[i + 3] = Math.min(255, Math.round(d));
-        }
-
-        ctx.clearRect(0, 0, w, h);
-        ctx.putImageData(out, 0, 0);
-      } catch {
-        // ignore
-      }
+        await drawOverlayCanvas(
+          flipView === "map" ? "map" : "diff",
+          canvas,
+          prevUrl,
+          curUrl,
+          { x: (prev.align_x ?? 0) as number, y: (prev.align_y ?? 0) as number },
+          { x: (cur.align_x ?? 0) as number, y: (cur.align_y ?? 0) as number },
+          ghostOpacity
+        );
+      } catch {}
     })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipView, flipIdx, ghostOpacity, thumbs]);
+    return () => { cancelled = true; };
+  }, [flipView, flipIdx, ghostOpacity, thumbs, alignX, alignY]);
 
   useEffect(() => {
     (async () => {
@@ -1174,7 +1112,124 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
   }
 
   if (!userId) {
-    return (
+  
+
+  async function drawOverlayCanvas(
+    mode: "diff" | "map",
+    canvas: HTMLCanvasElement | null,
+    prevUrl: string | undefined,
+    curUrl: string | undefined,
+    prevAlign: { x: number; y: number },
+    curAlign: { x: number; y: number },
+    intensityPct = 35
+  ) {
+    if (!canvas || !prevUrl || !curUrl) return;
+    const loadImg = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+      });
+
+    const [imgA, imgB] = await Promise.all([loadImg(prevUrl), loadImg(curUrl)]);
+    const w = 320;
+    const h = Math.round((w * imgB.naturalHeight) / Math.max(1, imgB.naturalWidth));
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const offA = document.createElement("canvas");
+    const offB = document.createElement("canvas");
+    offA.width = w; offA.height = h; offB.width = w; offB.height = h;
+    const ctxA = offA.getContext("2d");
+    const ctxB = offB.getContext("2d");
+    if (!ctxA || !ctxB) return;
+
+    const drawContain = (c: CanvasRenderingContext2D, img: HTMLImageElement, ox: number, oy: number) => {
+      c.clearRect(0, 0, w, h);
+      const scale = Math.min(w / img.naturalWidth, h / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      const dx = (w - dw) / 2;
+      const dy = (h - dh) / 2;
+      c.drawImage(img, dx + ox, dy + oy, dw, dh);
+    };
+
+    drawContain(ctxA, imgA, prevAlign.x, prevAlign.y);
+    drawContain(ctxB, imgB, curAlign.x, curAlign.y);
+
+    if (mode === "diff") {
+      const a = ctxA.getImageData(0, 0, w, h);
+      const b = ctxB.getImageData(0, 0, w, h);
+      const out = ctx.createImageData(w, h);
+      const threshold = 18 + Math.round((intensityPct / 100) * 24);
+      for (let i = 0; i < a.data.length; i += 4) {
+        const dr = Math.abs(a.data[i] - b.data[i]);
+        const dg = Math.abs(a.data[i + 1] - b.data[i + 1]);
+        const db = Math.abs(a.data[i + 2] - b.data[i + 2]);
+        const d = (dr + dg + db) / 3;
+        const alpha = d > threshold ? Math.min(255, (d - threshold) * 6) : 0;
+        out.data[i] = Math.min(255, alpha);
+        out.data[i + 1] = Math.min(255, Math.round(alpha * 0.65));
+        out.data[i + 2] = 0;
+        out.data[i + 3] = alpha;
+      }
+      ctx.clearRect(0, 0, w, h);
+      ctx.putImageData(out, 0, 0);
+      return;
+    }
+
+    const makeOutline = (source: CanvasRenderingContext2D, color: [number, number, number], alphaMul = 1) => {
+      const src = source.getImageData(0, 0, w, h);
+      const out = ctx.createImageData(w, h);
+      const px = src.data;
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = (y * w + x) * 4;
+          const lum = (px[i] + px[i + 1] + px[i + 2]) / 3;
+          const right = (px[i + 4] + px[i + 5] + px[i + 6]) / 3;
+          const down = (px[i + w * 4] + px[i + w * 4 + 1] + px[i + w * 4 + 2]) / 3;
+          const edge = Math.max(Math.abs(lum - right), Math.abs(lum - down));
+          if (edge > 40) {
+            out.data[i] = color[0];
+            out.data[i + 1] = color[1];
+            out.data[i + 2] = color[2];
+            out.data[i + 3] = Math.round(200 * alphaMul);
+          }
+        }
+      }
+      return out;
+    };
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.putImageData(makeOutline(ctxA, [255, 70, 70], 0.9), 0, 0);
+    ctx.putImageData(makeOutline(ctxB, [80, 255, 120], 0.95), 0, 0);
+  }
+
+  useEffect(() => {
+    if (!compareOpen || compareView !== "map" || !compareA || !compareB) return;
+    const canvas = compareMapCanvasRef.current;
+    const prevUrl = thumbs[compareA.id];
+    const curUrl = thumbs[compareB.id];
+    (async () => {
+      try {
+        await drawOverlayCanvas(
+          "map",
+          canvas,
+          prevUrl,
+          curUrl,
+          { x: (compareA.align_x ?? 0) as number, y: (compareA.align_y ?? 0) as number },
+          { x: (compareB.align_x ?? 0) as number, y: (compareB.align_y ?? 0) as number },
+          compareOpacity
+        );
+      } catch {}
+    })();
+  }, [compareOpen, compareView, compareA, compareB, thumbs, compareOpacity]);
+
+  return (
       <div>
         <h3>Progress</h3>
         <p>Please sign in to use Progress Photos and Measurements.</p>
@@ -1730,11 +1785,12 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         <option value="normal">Normal</option>
                         <option value="ghost">Ghost overlay</option>
                         <option value="diff">Difference heatmap</option>
+                        <option value="map">Physique change map</option>
                       </select>
                     </label>
                     {flipView !== "normal" ? (
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
-                        {flipView === "ghost" ? "Opacity" : "Intensity"}
+                        {flipView === "ghost" ? "Opacity" : flipView === "diff" ? "Intensity" : "Map strength"}
                         <input
                           type="range"
                           min={5}
@@ -1882,7 +1938,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                     ) : null}
 
                     {/* Difference heatmap overlay */}
-                    {flipView === "diff" && flipIdx > 0 ? (
+                    {(flipView === "diff" || flipView === "map") && flipIdx > 0 ? (
                       <canvas
                         ref={diffCanvasRef}
                         style={{
@@ -1939,7 +1995,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
                   {flipView !== "normal" && flipIdx > 0 ? (
                     <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      {flipView === "ghost" ? "Ghost" : "Heatmap"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
+                      {flipView === "ghost" ? "Ghost" : flipView === "diff" ? "Heatmap" : "Change map"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
                     </div>
                   ) : null}
 
@@ -2046,7 +2102,15 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                   <div>
                     <strong>Compare</strong> — {compareB.pose.toUpperCase()} ({compareA.taken_on} → {compareB.taken_on})
                   </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <label style={{ fontSize: 12, opacity: 0.9 }}>
+                      View:{" "}
+                      <select value={compareView} onChange={(e) => setCompareView(e.target.value as any)} style={{ padding: 6 }}>
+                        <option value="slider">Slider wipe</option>
+                        <option value="ghost">Ghost overlay</option>
+                        <option value="map">Change map</option>
+                      </select>
+                    </label>
                     <button
                       onClick={async () => {
                         try {
@@ -2086,18 +2150,76 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         width: "100%",
                         height: "100%",
                         objectFit: "contain",
-                        transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`
+                        transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`,
+                        opacity: compareView === "map" ? 0.08 : 1
                       }}
                     />
-                    {/* Overlay (B), clipped (clipPath avoids "image shrinking" as the slider moves) */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
-                        WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
-                      }}
-                    >
+
+                    {compareView === "slider" ? (
+                      <>
+                        <div
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
+                            WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
+                          }}
+                        >
+                          <img
+                            src={thumbs[compareB.id]}
+                            alt={`After ${compareB.taken_on}`}
+                            onPointerDown={(e) => {
+                              (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+                              compareDragRef.current = {
+                                active: true,
+                                sx: e.clientX,
+                                sy: e.clientY,
+                                ax: (((compareB.align_x ?? 0) as number) || 0) as number,
+                                ay: (((compareB.align_y ?? 0) as number) || 0) as number
+                              };
+                            }}
+                            onPointerMove={(e) => {
+                              const st = compareDragRef.current;
+                              if (!st?.active || !compareB) return;
+                              const dx = e.clientX - st.sx;
+                              const dy = e.clientY - st.sy;
+                              const nx = st.ax + dx;
+                              const ny = st.ay + dy;
+                              setCompareB({ ...compareB, align_x: nx, align_y: ny });
+                              updateLocalAlign(compareB.id, nx, ny);
+                              schedulePersistAlign(compareB.id, nx, ny);
+                            }}
+                            onPointerUp={() => {
+                              if (compareDragRef.current) compareDragRef.current.active = false;
+                            }}
+                            onPointerCancel={() => {
+                              if (compareDragRef.current) compareDragRef.current.active = false;
+                            }}
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "contain",
+                              transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
+                              transition: "transform 0.02s linear",
+                              cursor: "grab",
+                              touchAction: "none"
+                            }}
+                          />
+                        </div>
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            bottom: 0,
+                            left: `${compareMix}%`,
+                            width: 2,
+                            background: "rgba(255,255,255,0.85)"
+                          }}
+                        />
+                      </>
+                    ) : compareView === "ghost" ? (
                       <img
                         src={thumbs[compareB.id]}
                         alt={`After ${compareB.taken_on}`}
@@ -2134,24 +2256,72 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                           width: "100%",
                           height: "100%",
                           objectFit: "contain",
+                          opacity: compareOpacity / 100,
                           transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
                           transition: "transform 0.02s linear",
                           cursor: "grab",
                           touchAction: "none"
                         }}
                       />
-                    </div>
-                    {/* Divider */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        bottom: 0,
-                        left: `${compareMix}%`,
-                        width: 2,
-                        background: "rgba(255,255,255,0.85)"
-                      }}
-                    />
+                    ) : (
+                      <>
+                        <img
+                          src={thumbs[compareB.id]}
+                          alt={`After ${compareB.taken_on}`}
+                          onPointerDown={(e) => {
+                            (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+                            compareDragRef.current = {
+                              active: true,
+                              sx: e.clientX,
+                              sy: e.clientY,
+                              ax: (((compareB.align_x ?? 0) as number) || 0) as number,
+                              ay: (((compareB.align_y ?? 0) as number) || 0) as number
+                            };
+                          }}
+                          onPointerMove={(e) => {
+                            const st = compareDragRef.current;
+                            if (!st?.active || !compareB) return;
+                            const dx = e.clientX - st.sx;
+                            const dy = e.clientY - st.sy;
+                            const nx = st.ax + dx;
+                            const ny = st.ay + dy;
+                            setCompareB({ ...compareB, align_x: nx, align_y: ny });
+                            updateLocalAlign(compareB.id, nx, ny);
+                            schedulePersistAlign(compareB.id, nx, ny);
+                          }}
+                          onPointerUp={() => {
+                            if (compareDragRef.current) compareDragRef.current.active = false;
+                          }}
+                          onPointerCancel={() => {
+                            if (compareDragRef.current) compareDragRef.current.active = false;
+                          }}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "contain",
+                            opacity: 0.06,
+                            transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
+                            transition: "transform 0.02s linear",
+                            cursor: "grab",
+                            touchAction: "none"
+                          }}
+                        />
+                        <canvas
+                          ref={compareMapCanvasRef}
+                          style={{
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            opacity: 0.96,
+                            pointerEvents: "none",
+                            mixBlendMode: "screen"
+                          }}
+                        />
+                      </>
+                    )}
                   </div>
 
                   {/* Alignment controls */}
@@ -2174,10 +2344,11 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                       type="range"
                       min={0}
                       max={100}
-                      value={compareMix}
-                      onChange={(e) => setCompareMix(Number(e.target.value))}
+                      value={compareView === "slider" ? compareMix : compareOpacity}
+                      onChange={(e) => compareView === "slider" ? setCompareMix(Number(e.target.value)) : setCompareOpacity(Number(e.target.value))}
                       style={{ width: 320 }}
                     />
+                    <span style={{ opacity: 0.85 }}>{compareView === "slider" ? `Wipe ${compareMix}%` : compareView === "ghost" ? `Opacity ${compareOpacity}%` : `Map ${compareOpacity}%`}</span>
                     <span style={{ opacity: 0.85 }}>{compareB.taken_on}</span>
                   </div>
                 </div>
@@ -2245,6 +2416,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
