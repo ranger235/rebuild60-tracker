@@ -473,6 +473,17 @@ useEffect(() => {
     return () => window.clearInterval(t);
   }, [timerOn]);
 
+
+  async function resetPassword() {
+    if (!email.trim()) {
+      alert("Enter your email first, then click Reset Password.");
+      return;
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+    if (error) alert(error.message);
+    else alert("Password reset email sent if that account exists.");
+  }
+
   async function signUp() {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) alert(error.message);
@@ -1807,9 +1818,10 @@ setTonnageSeries(tonSeries);
           style={{ width: "100%", padding: 10, marginBottom: 10 }}
         />
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button onClick={signIn}>Sign In</button>
           <button onClick={signUp}>Sign Up</button>
+          <button type="button" onClick={resetPassword}>Reset Password</button>
         </div>
       </div>
     );
@@ -2027,6 +2039,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
