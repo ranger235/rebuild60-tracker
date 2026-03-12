@@ -473,15 +473,6 @@ useEffect(() => {
     return () => window.clearInterval(t);
   }, [timerOn]);
 
-
-  const TEST_ACCOUNT_EMAIL = "test@example.com";
-  const TEST_ACCOUNT_PASSWORD = "password123";
-
-  function fillTestAccount() {
-    setEmail(TEST_ACCOUNT_EMAIL);
-    setPassword(TEST_ACCOUNT_PASSWORD);
-  }
-
   async function signUp() {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) alert(error.message);
@@ -1816,10 +1807,9 @@ setTonnageSeries(tonSeries);
           style={{ width: "100%", padding: 10, marginBottom: 10 }}
         />
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10 }}>
           <button onClick={signIn}>Sign In</button>
           <button onClick={signUp}>Sign Up</button>
-          <button type="button" onClick={fillTestAccount}>Use Test Account</button>
         </div>
       </div>
     );
@@ -2037,6 +2027,8 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
+
 
 
 
