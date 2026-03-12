@@ -272,6 +272,9 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
+  const [isRecoveryMode, setIsRecoveryMode] = useState<boolean>(() => window.location.pathname === "/reset-password");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   // Date
   const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
@@ -425,11 +428,19 @@ useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
       setUserId(data.user?.id ?? null);
+      setEmail(data.user?.email ?? "");
       setLoading(false);
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((evt, session) => {
       setUserId(session?.user?.id ?? null);
+      setEmail(session?.user?.email ?? "");
+      if (evt === "PASSWORD_RECOVERY") {
+        setIsRecoveryMode(true);
+      }
+      if (evt === "SIGNED_OUT") {
+        setIsRecoveryMode(window.location.pathname === "/reset-password");
+      }
     });
 
     return () => sub.subscription.unsubscribe();
@@ -475,13 +486,44 @@ useEffect(() => {
 
 
   async function resetPassword() {
-    if (!email.trim()) {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
       alert("Enter your email first, then click Reset Password.");
       return;
     }
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo });
+
     if (error) alert(error.message);
-    else alert("Password reset email sent if that account exists.");
+    else alert(`Password reset email sent if that account exists. It should return to: ${redirectTo}`);
+  }
+
+  async function finishPasswordReset() {
+    if (!newPassword.trim()) {
+      alert("Enter a new password.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      alert("Use at least 8 characters for the new password.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      alert("Passwords do not match.");
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setNewPassword("");
+    setConfirmPassword("");
+    setIsRecoveryMode(false);
+    window.history.replaceState({}, "", "/");
+    alert("Password updated. You can now sign in with the new password.");
   }
 
   async function signUp() {
@@ -497,6 +539,8 @@ useEffect(() => {
 
   async function signOut() {
     await supabase.auth.signOut();
+    setIsRecoveryMode(false);
+    window.history.replaceState({}, "", "/");
     setTab("quick");
     setOpenSessionId(null);
     setOpenTemplateId(null);
@@ -1792,6 +1836,55 @@ setTonnageSeries(tonSeries);
   // -----------------------------
   if (loading) return <div style={{ padding: 20 }}>Loading…</div>;
 
+  if (isRecoveryMode && window.location.pathname === "/reset-password") {
+    return (
+      <div style={{ padding: 20, maxWidth: 520 }}>
+        <h2>Reset Password</h2>
+        <p>Enter your new password below. This screen should be opened from the reset link emailed to you.</p>
+
+        {!userId ? (
+          <div style={{ marginBottom: 14, padding: 12, border: "1px solid #ccc", borderRadius: 8 }}>
+            Waiting for recovery session from the email link. If this page was opened directly, go back and use the reset email again.
+          </div>
+        ) : null}
+
+        <input
+          placeholder="New password"
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          style={{ width: "100%", padding: 10, marginBottom: 10 }}
+        />
+        <input
+          placeholder="Confirm new password"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void finishPasswordReset();
+            }
+          }}
+          style={{ width: "100%", padding: 10, marginBottom: 10 }}
+        />
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button type="button" onClick={finishPasswordReset} disabled={!userId}>Save New Password</button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsRecoveryMode(false);
+              window.history.replaceState({}, "", "/");
+            }}
+          >
+            Back to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!userId) {
     return (
       <div style={{ padding: 20, maxWidth: 520 }}>
@@ -2039,6 +2132,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
