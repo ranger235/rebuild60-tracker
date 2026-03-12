@@ -1820,13 +1820,16 @@ setTonnageSeries(tonSeries);
   return (
     <div style={{ padding: 20, maxWidth: 950 }}>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 600 }}>
+          {email} <span style={{ marginLeft: 6 }}>●</span>
+        </div>
         <button onClick={signOut}>Logout</button>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>Rebuild @ 60 Tracker</h2>
-        <button onClick={signOut}>Sign Out</button>
+        
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -2024,6 +2027,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
