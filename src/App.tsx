@@ -1819,6 +1819,11 @@ setTonnageSeries(tonSeries);
 
   return (
     <div style={{ padding: 20, maxWidth: 950 }}>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+        <button onClick={signOut}>Logout</button>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2>Rebuild @ 60 Tracker</h2>
         <button onClick={signOut}>Sign Out</button>
@@ -2019,6 +2024,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
