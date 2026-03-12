@@ -1798,6 +1798,12 @@ setTonnageSeries(tonSeries);
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void signIn();
+            }
+          }}
           style={{ width: "100%", padding: 10, marginBottom: 10 }}
         />
 
@@ -2013,6 +2019,8 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
+
 
 
 
