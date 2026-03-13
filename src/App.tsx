@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
 import { enqueue, startAutoSync } from "./sync";
+import { pullSync } from "./pullSync";
 import {
   localdb,
   type LocalWorkoutExercise,
@@ -1799,6 +1800,22 @@ setTonnageSeries(tonSeries);
     }
   }
 
+
+async function refreshLocalUiFromDexie() {
+  if (!userId) return;
+
+  await loadSessionsForDay(selectedDayDate);
+  await loadTemplates();
+
+  if (openSessionId) {
+    await openSession(openSessionId);
+  }
+
+  if (tab === "dash") {
+    await refreshDashboard();
+  }
+}
+
   // -----------------------------
   // Effects
   // -----------------------------
@@ -2132,6 +2149,7 @@ setTonnageSeries(tonSeries);
     </div>
   );
 }
+
 
 
 
