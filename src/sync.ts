@@ -1,6 +1,5 @@
 import { supabase } from "./supabase";
 import { localdb, type PendingOp } from "./localdb";
-import { pullSync } from "./pullSync";
 
 /**
  * Offline-first sync:
@@ -18,58 +17,68 @@ export async function enqueue(op: PendingOp["op"], payload: any) {
   });
 }
 
+async function must<T>(promise: Promise<{ data?: T; error: any }>, context: string): Promise<T | null | undefined> {
+  const { data, error } = await promise;
+  if (error) {
+    console.error(`Sync error [${context}]`, error);
+    throw new Error(error.message || context);
+  }
+  return data;
+}
+
+
 async function processOp(op: PendingOp["op"], payload: any) {
   switch (op) {
     case "upsert_daily":
-      await supabase.from("daily_logs").upsert(payload, { onConflict: "user_id,day_date" });
+      await must(supabase.from("daily_logs").upsert(payload, { onConflict: "user_id,day_date" }), "upsert_daily");
       return;
 
     case "upsert_nutrition":
-      await supabase.from("nutrition_logs").upsert(payload, { onConflict: "user_id,day_date" });
+      await must(supabase.from("nutrition_logs").upsert(payload, { onConflict: "user_id,day_date" }), "upsert_nutrition");
       return;
 
     case "insert_zone2":
-      await supabase.from("zone2_sessions").insert(payload);
+      await must(supabase.from("zone2_sessions").insert(payload), "insert_zone2");
       return;
 
     case "create_workout":
-      await supabase.from("workout_sessions").insert(payload);
+      await must(supabase.from("workout_sessions").insert(payload), "create_workout");
       return;
 
     case "insert_exercise":
-      await supabase.from("workout_exercises").insert(payload);
+      await must(supabase.from("workout_exercises").insert(payload), "insert_exercise");
       return;
 
     case "insert_set":
-      await supabase.from("workout_sets").insert(payload);
+      await must(supabase.from("workout_sets").insert(payload), "insert_set");
       return;
 
     case "create_template":
-      await supabase.from("workout_templates").insert(payload);
+      await must(supabase.from("workout_templates").insert(payload), "create_template");
       return;
 
     case "delete_template": {
       const template_id = payload?.template_id;
       if (!template_id) throw new Error("delete_template missing template_id");
       // delete template exercises then template
-      await supabase.from("workout_template_exercises").delete().eq("template_id", template_id);
-      await supabase.from("workout_templates").delete().eq("id", template_id);
+      await must(supabase.from("workout_template_exercises").delete().eq("template_id", template_id), "delete_template_exercises");
+      await must(supabase.from("workout_templates").delete().eq("id", template_id), "delete_template");
       return;
     }
 
     case "insert_template_exercise":
-      await supabase.from("workout_template_exercises").insert(payload);
+      await must(supabase.from("workout_template_exercises").insert(payload), "insert_template_exercise");
       return;
 
     case "update_template_exercise":
       // upsert by primary key (id)
-      await supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" });
+      await must(supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" }), "update_template_exercise");
       return;
 
     case "delete_set": {
       const set_id = payload?.set_id;
       if (!set_id) throw new Error("delete_set missing set_id");
-      await supabase.from("workout_sets").delete().eq("id", set_id);
+      await must(supabase.from("workout_sets").delete().eq("id", set_id), "delete_set");
       return;
     }
 
@@ -79,7 +88,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       // Renumbering requires updates; do it client-side in a loop (small N)
       for (let i = 0; i < ordered_set_ids.length; i++) {
         const id = ordered_set_ids[i];
-        await supabase.from("workout_sets").update({ set_number: i + 1 }).eq("id", id);
+        await must(supabase.from("workout_sets").update({ set_number: i + 1 }).eq("id", id), "renumber_sets");
       }
       return;
     }
@@ -88,8 +97,8 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const exercise_id = payload?.exercise_id;
       if (!exercise_id) throw new Error("delete_exercise missing exercise_id");
       // delete sets then exercise
-      await supabase.from("workout_sets").delete().eq("exercise_id", exercise_id);
-      await supabase.from("workout_exercises").delete().eq("id", exercise_id);
+      await must(supabase.from("workout_sets").delete().eq("exercise_id", exercise_id), "delete_exercise_sets");
+      await must(supabase.from("workout_exercises").delete().eq("id", exercise_id), "delete_exercise");
       return;
     }
 
@@ -98,7 +107,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       if (!Array.isArray(ordered_exercise_ids)) throw new Error("reorder_exercises ordered_exercise_ids must be array");
       for (let i = 0; i < ordered_exercise_ids.length; i++) {
         const id = ordered_exercise_ids[i];
-        await supabase.from("workout_exercises").update({ sort_order: i }).eq("id", id);
+        await must(supabase.from("workout_exercises").update({ sort_order: i }).eq("id", id), "reorder_exercises");
       }
       return;
     }
@@ -107,25 +116,20 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const session_id = payload?.session_id;
       if (!session_id) throw new Error("delete_session missing session_id");
 
-      const { data: exRows, error: exErr } = await supabase
+      const exRows = await must(supabase
         .from("workout_exercises")
         .select("id")
-        .eq("session_id", session_id);
+        .eq("session_id", session_id), "delete_session:list_exercises");
 
-      if (exErr) throw exErr;
-
-      const exIds = (exRows ?? []).map((r: any) => r.id);
+      const exIds = ((exRows ?? []) as any[]).map((r: any) => r.id);
 
       if (exIds.length > 0) {
-        const { error: setErr } = await supabase.from("workout_sets").delete().in("exercise_id", exIds);
-        if (setErr) throw setErr;
+        await must(supabase.from("workout_sets").delete().in("exercise_id", exIds), "delete_session:delete_sets");
       }
 
-      const { error: delExErr } = await supabase.from("workout_exercises").delete().eq("session_id", session_id);
-      if (delExErr) throw delExErr;
+      await must(supabase.from("workout_exercises").delete().eq("session_id", session_id), "delete_session:delete_exercises");
 
-      const { error: delSessErr } = await supabase.from("workout_sessions").delete().eq("id", session_id);
-      if (delSessErr) throw delSessErr;
+      await must(supabase.from("workout_sessions").delete().eq("id", session_id), "delete_session");
 
       return;
     }
@@ -136,7 +140,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
   }
 }
 
-export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
+export function startAutoSync(setStatus: (s: string) => void) {
   let stopped = false;
 
   async function tick() {
@@ -191,6 +195,7 @@ export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () =
     window.clearInterval(h);
   };
 }
+
 
 
 
