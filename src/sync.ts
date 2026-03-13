@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { localdb, type PendingOp } from "./localdb";
+import { pullSync } from "./pullSync";
 
 /**
  * Offline-first sync:
@@ -135,7 +136,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
   }
 }
 
-export function startAutoSync(setStatus: (s: string) => void) {
+export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
   let stopped = false;
 
   async function tick() {
@@ -190,6 +191,8 @@ export function startAutoSync(setStatus: (s: string) => void) {
     window.clearInterval(h);
   };
 }
+
+
 
 
 
