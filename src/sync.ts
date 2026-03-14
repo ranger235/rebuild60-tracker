@@ -133,10 +133,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
   }
 }
 
-export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
-  let stopped = false;
-
-  async function tick() {
+export async function runSyncPass(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
     if (stopped) return;
 
     if (!navigator.onLine) {
@@ -194,6 +191,14 @@ export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () =
       console.error(e);
       setStatus("Offline/retrying");
     }
+}
+
+export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
+  let stopped = false;
+
+  async function tick() {
+    if (stopped) return;
+    await runSyncPass(setStatus, onAfterSync);
   }
 
   tick();
@@ -204,6 +209,7 @@ export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () =
     window.clearInterval(h);
   };
 }
+
 
 
 
