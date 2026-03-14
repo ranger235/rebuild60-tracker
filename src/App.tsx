@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
-import { enqueue, startAutoSync } from "./sync";
+import { enqueue, runSyncPass, startAutoSync } from "./sync";
 import { pullSync } from "./pullSync";
 import {
   localdb,
@@ -267,6 +267,7 @@ function isCompoundExercise(name: string): boolean {
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>("");
   const [tab, setTab] = useState<"quick" | "workout" | "dash" | "progress">("quick");
 
   // Auth
@@ -449,9 +450,23 @@ useEffect(() => {
 
   useEffect(() => {
     if (!userId) return;
-    const stop = startAutoSync(setStatus);
+    const stop = startAutoSync(setStatus, async () => {
+      await refreshLocalUiFromDexie();
+      setLastSyncedAt(new Date().toLocaleTimeString());
+    });
     return stop;
-  }, [userId]);
+  }, [userId, selectedDayDate, openSessionId, tab]);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    void (async () => {
+      await runSyncPass(setStatus, async () => {
+        await refreshLocalUiFromDexie();
+        setLastSyncedAt(new Date().toLocaleTimeString());
+      });
+    })();
+  }, [userId, selectedDayDate]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1555,6 +1570,24 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
     });
   }
 
+async function loadQuickLogForDay(day: string) {
+  if (!userId) return;
+
+  const [d, n, z] = await Promise.all([
+    localdb.dailyMetrics.get([userId, day]),
+    localdb.nutritionDaily.get([userId, day]),
+    localdb.zone2Daily.get([userId, day])
+  ]);
+
+  setWeight(d?.weight_lbs != null ? String(d.weight_lbs) : "");
+  setWaist(d?.waist_in != null ? String(d.waist_in) : "");
+  setSleepHours(d?.sleep_hours != null ? String(d.sleep_hours) : "");
+  setCalories(n?.calories != null ? String(n.calories) : "");
+  setProtein(n?.protein_g != null ? String(n.protein_g) : "");
+  setZ2Minutes(z?.minutes != null ? String(z.minutes) : "");
+  setNotes(d?.notes ?? "");
+}
+
   // -----------------------------
   // Dashboard computations (local, offline)
   // -----------------------------
@@ -1804,6 +1837,7 @@ setTonnageSeries(tonSeries);
 async function refreshLocalUiFromDexie() {
   if (!userId) return;
 
+  await loadQuickLogForDay(selectedDayDate);
   await loadSessionsForDay(selectedDayDate);
   await loadTemplates();
 
@@ -1816,17 +1850,25 @@ async function refreshLocalUiFromDexie() {
   }
 }
 
+async function syncNow() {
+  await runSyncPass(setStatus, async () => {
+    await refreshLocalUiFromDexie();
+    setLastSyncedAt(new Date().toLocaleTimeString());
+  });
+}
+
   // -----------------------------
   // Effects
   // -----------------------------
   useEffect(() => {
     if (!userId) return;
-    // Reload sessions whenever the selected log date changes
+    // Reload local state whenever the selected log date changes
     setOpenSessionId(null);
     setExercises([]);
     setSets([]);
-    loadSessionsForDay(selectedDayDate);
-    loadTemplates();
+    void loadQuickLogForDay(selectedDayDate);
+    void loadSessionsForDay(selectedDayDate);
+    void loadTemplates();
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -1979,8 +2021,14 @@ async function refreshLocalUiFromDexie() {
             Yesterday
           </button>
         </div>
-        <div>
-          <b>Status:</b> {navigator.onLine ? status : "Offline (logging still works)"}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div>
+            <b>Status:</b> {navigator.onLine ? status : "Offline (logging still works)"}
+            {lastSyncedAt ? <span style={{ marginLeft: 8, opacity: 0.8 }}>Last synced: {lastSyncedAt}</span> : null}
+          </div>
+          <button type="button" onClick={() => void syncNow()} disabled={!userId}>
+            Sync Now
+          </button>
         </div>
       </div>
 
@@ -2149,6 +2197,7 @@ async function refreshLocalUiFromDexie() {
     </div>
   );
 }
+
 
 
 
