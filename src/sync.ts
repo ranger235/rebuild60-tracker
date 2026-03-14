@@ -133,32 +133,21 @@ async function processOp(op: PendingOp["op"], payload: any) {
   }
 }
 
-export async function runSyncPass(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
-    if (stopped) return;
+export async function runSyncPass(
+  setStatus: (s: string) => void,
+  onAfterSync?: () => Promise<void> | void
+) {
+  if (!navigator.onLine) {
+    setStatus("Offline/retrying");
+    return;
+  }
 
-    if (!navigator.onLine) {
-      setStatus("Offline/retrying");
-      return;
-    }
+  try {
+    setStatus("Syncing…");
 
-    try {
-      setStatus("Syncing…");
+    const items = await localdb.pendingOps.orderBy("createdAt").toArray();
 
-      const items = await localdb.pendingOps.orderBy("createdAt").toArray();
-
-      if (items.length === 0) {
-        const auth = await supabase.auth.getUser();
-        const currentUserId = auth.data.user?.id ?? null;
-        if (currentUserId) {
-          await pullSync(currentUserId);
-        }
-        if (onAfterSync) {
-          await onAfterSync();
-        }
-        setStatus("Synced");
-        return;
-      }
-
+    if (items.length > 0) {
       let failed = 0;
 
       for (const item of items) {
@@ -187,13 +176,28 @@ export async function runSyncPass(setStatus: (s: string) => void, onAfterSync?: 
       }
 
       setStatus(failed === 0 ? "Synced" : `Synced (with ${failed} retrying)`);
-    } catch (e: any) {
-      console.error(e);
-      setStatus("Offline/retrying");
+      return;
     }
+
+    const auth = await supabase.auth.getUser();
+    const currentUserId = auth.data.user?.id ?? null;
+    if (currentUserId) {
+      await pullSync(currentUserId);
+    }
+    if (onAfterSync) {
+      await onAfterSync();
+    }
+    setStatus("Synced");
+  } catch (e: any) {
+    console.error(e);
+    setStatus("Offline/retrying");
+  }
 }
 
-export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () => Promise<void> | void) {
+export function startAutoSync(
+  setStatus: (s: string) => void,
+  onAfterSync?: () => Promise<void> | void
+) {
   let stopped = false;
 
   async function tick() {
@@ -209,6 +213,7 @@ export function startAutoSync(setStatus: (s: string) => void, onAfterSync?: () =
     window.clearInterval(h);
   };
 }
+
 
 
 
