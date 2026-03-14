@@ -267,7 +267,7 @@ function isCompoundExercise(name: string): boolean {
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
-  const [lastSyncedAt, setLastSyncedAt] = useState<string>("");
+  const [lastSyncedAt, setLastSyncedAt] = useState("");
   const [tab, setTab] = useState<"quick" | "workout" | "dash" | "progress">("quick");
 
   // Auth
@@ -459,13 +459,10 @@ useEffect(() => {
 
   useEffect(() => {
     if (!userId) return;
-
-    void (async () => {
-      await runSyncPass(setStatus, async () => {
-        await refreshLocalUiFromDexie();
-        setLastSyncedAt(new Date().toLocaleTimeString());
-      });
-    })();
+    void runSyncPass(setStatus, async () => {
+      await refreshLocalUiFromDexie();
+      setLastSyncedAt(new Date().toLocaleTimeString());
+    });
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -2197,6 +2194,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
