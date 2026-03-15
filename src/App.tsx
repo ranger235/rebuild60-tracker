@@ -71,83 +71,172 @@ function normalizeExerciseName(raw: string): string {
     .trim();
 }
 
-// Compact key used for lookups (Last numbers, analytics buckets, etc.)
+const CANONICAL_DISPLAY: Record<string, string> = {
+  bench_press: "Bench Press",
+  incline_bench_press: "Incline Bench Press",
+  dumbbell_bench_press: "DB Bench Press",
+  overhead_press: "Overhead Press",
+  deadlift: "Deadlift",
+  romanian_deadlift: "Romanian Deadlift",
+  barbell_row: "Barbell Row",
+  chest_supported_row: "Chest Supported Row",
+  seated_cable_row: "Seated Cable Row",
+  lat_pulldown: "Lat Pulldown",
+  pull_up: "Pull-Up",
+  chin_up: "Chin-Up",
+  squat: "Squat",
+  ssb_squat: "SSB Squat",
+  split_squat: "Split Squat",
+  leg_press: "Leg Press",
+  hack_squat: "Hack Squat",
+  leg_extension: "Leg Extension",
+  hamstring_curl: "Hamstring Curl",
+  calf_raise: "Calf Raise",
+  dip: "Dip",
+  lateral_raise: "Lateral Raise",
+  rear_delt_fly: "Rear Delt Fly",
+  chest_fly: "Chest Fly",
+  face_pull: "Face Pull",
+  shrug: "Shrug",
+  curl: "Curl",
+  preacher_curl: "Preacher Curl",
+  hammer_curl: "Hammer Curl",
+  triceps_pressdown: "Triceps Pressdown",
+  overhead_triceps_extension: "Overhead Triceps Extension",
+  plank: "Plank",
+  crunch: "Crunch"
+};
+
+const CANONICAL_ALIAS_KEYS: Record<string, string> = {
+  // Bench / press family
+  bp: "bench_press",
+  bench: "bench_press",
+  benchpress: "bench_press",
+  barbellbench: "bench_press",
+  barbellbenchpress: "bench_press",
+  flatbench: "bench_press",
+  flatbenchpress: "bench_press",
+  bbbench: "bench_press",
+  inclinebench: "incline_bench_press",
+  inclinebenchpress: "incline_bench_press",
+  inclinebarbellbench: "incline_bench_press",
+  dbbench: "dumbbell_bench_press",
+  dbbenchpress: "dumbbell_bench_press",
+  dumbbellbench: "dumbbell_bench_press",
+  dumbbellbenchpress: "dumbbell_bench_press",
+  dbbp: "dumbbell_bench_press",
+  ohp: "overhead_press",
+  overheadpress: "overhead_press",
+  militarypress: "overhead_press",
+
+  // Pull / row family
+  bentoverrow: "barbell_row",
+  barbellrow: "barbell_row",
+  bbrow: "barbell_row",
+  chestsupportedrow: "chest_supported_row",
+  chestsupportedrows: "chest_supported_row",
+  seatedcablerow: "seated_cable_row",
+  cablerow: "seated_cable_row",
+  rowmachine: "seated_cable_row",
+  pulldown: "lat_pulldown",
+  latpulldown: "lat_pulldown",
+  latpull: "lat_pulldown",
+  pullup: "pull_up",
+  pullups: "pull_up",
+  chinup: "chin_up",
+  chinups: "chin_up",
+
+  // Deadlift / hinge family
+  dl: "deadlift",
+  deadlift: "deadlift",
+  rdl: "romanian_deadlift",
+  romaniandeadlift: "romanian_deadlift",
+
+  // Squat / leg family
+  squat: "squat",
+  squats: "squat",
+  ssbsquat: "ssb_squat",
+  ssbsquats: "ssb_squat",
+  safetysquatbar: "ssb_squat",
+  safetysquatbarsquat: "ssb_squat",
+  safetysquatbarsquats: "ssb_squat",
+  splitsquat: "split_squat",
+  splitsquats: "split_squat",
+  bulgariansplitsquat: "split_squat",
+  legpress: "leg_press",
+  hacksquat: "hack_squat",
+  legrxtension: "leg_extension",
+  legextension: "leg_extension",
+  hamstringcurl: "hamstring_curl",
+  legcurl: "hamstring_curl",
+  calfraise: "calf_raise",
+  standingcalfraise: "calf_raise",
+  seatedcalfraise: "calf_raise",
+
+  // Isolation / accessory family
+  dip: "dip",
+  dips: "dip",
+  lateralraise: "lateral_raise",
+  lateralraises: "lateral_raise",
+  reardeltfly: "rear_delt_fly",
+  reardeltflyes: "rear_delt_fly",
+  reardeltraise: "rear_delt_fly",
+  fly: "chest_fly",
+  flyes: "chest_fly",
+  chestfly: "chest_fly",
+  pecdeck: "chest_fly",
+  facepull: "face_pull",
+  shrug: "shrug",
+  shrugs: "shrug",
+  curl: "curl",
+  curls: "curl",
+  bicepcurl: "curl",
+  preachersurl: "preacher_curl",
+  preachercurl: "preacher_curl",
+  hammercurl: "hammer_curl",
+  tricepspressdown: "triceps_pressdown",
+  pressdown: "triceps_pressdown",
+  pushdown: "triceps_pressdown",
+  overheadtricepsextension: "overhead_triceps_extension",
+  overheadtricepextension: "overhead_triceps_extension",
+  tricepsextension: "overhead_triceps_extension",
+  plank: "plank",
+  crunch: "crunch",
+  crunches: "crunch"
+};
+
+// Stable canonical movement key used for history, trends, milestones, etc.
 function exerciseKey(raw: string): string {
-  const n = normalizeExerciseName(raw).replace(/\s+/g, "");
-  // Common shorthands / aliases first (canonical keys)
-  if (n === "rdl") return "romaniandeadlift";
-  if (n === "dl") return "deadlift";
-  if (n === "bp") return "benchpress";
-  if (n === "ohp") return "overheadpress";
-
-  // Bench variations
-  if (n === "flatbench" || n === "flatbenchpress" || n === "barbellbench" || n === "barbellbenchpress")
-    return "benchpress";
-  if (n === "dbbench" || n === "dbbenchpress" || n === "dumbbellbench" || n === "dumbbellbenchpress" || n === "dbbp")
-    return "dumbbellbenchpress";
-
-  // Squat variations
-  if (
-    n === "ssbsquat" ||
-    n === "ssbsquats" ||
-    n === "safetysquatbar" ||
-    n === "safetysquatbarsquat" ||
-    n === "safetysquatbarsquats"
-  )
-    return "ssbsquat";
-  if (n === "splitsquat" || n === "splitsquats") return "splitsquat";
-
-  return n;
+  const compact = normalizeExerciseName(raw).replace(/\s+/g, "");
+  return CANONICAL_ALIAS_KEYS[compact] ?? compact;
 }
 
 // Display name (what the UI shows)
 function displayExerciseName(raw: string): string {
   const k = exerciseKey(raw);
-  if (k === "romaniandeadlift") return "Romanian Deadlift";
-  if (k === "deadlift") return "Deadlift";
-  if (k === "benchpress") return "Bench Press";
-  if (k === "dumbbellbenchpress") return "DB Bench Press";
-  if (k === "overheadpress") return "Overhead Press";
-  if (k === "ssbsquat") return "SSB Squat";
-  if (k === "splitsquat") return "Split Squat";
-  // Keep user's original casing if it's not a known alias
-  return raw;
+  return CANONICAL_DISPLAY[k] ?? raw;
 }
 
-// When the user types a known alias as the full name, store the expanded canonical name.
-// (Prevents separate histories like "RDL" vs "Romanian Deadlift".)
+// When the user types a known alias as the full exercise name, store the canonical display name.
+// This prevents split histories like "RDL" vs "Romanian Deadlift".
 function canonicalizeExerciseInput(raw: string): string {
   const trimmed = (raw || "").trim();
   if (!trimmed) return trimmed;
   const k = exerciseKey(trimmed);
-
-  // If user typed only an alias as the full exercise name, store the canonical display name.
-  // This prevents split histories like "RDL" vs "Romanian Deadlift".
-  if (k === "romaniandeadlift") return "Romanian Deadlift";
-  if (k === "deadlift") return "Deadlift";
-  if (k === "benchpress") return "Bench Press";
-  if (k === "dumbbellbenchpress") return "DB Bench Press";
-  if (k === "overheadpress") return "Overhead Press";
-  if (k === "ssbsquat") return "SSB Squat";
-  if (k === "splitsquat") return "Split Squat";
-
-  return trimmed;
+  return CANONICAL_DISPLAY[k] ?? trimmed;
 }
 
 function isBenchName(name: string): boolean {
   const k = exerciseKey(name);
-  const n = normalizeExerciseName(name);
-  return k === "benchpress" || k === "dumbbellbenchpress" || n.includes("bench");
+  return k === "bench_press" || k === "incline_bench_press" || k === "dumbbell_bench_press";
 }
 function isSquatName(name: string): boolean {
-  const n = normalizeExerciseName(name);
-  return n.includes("squat");
+  const k = exerciseKey(name);
+  return k === "squat" || k === "ssb_squat" || k === "split_squat" || k === "hack_squat" || k === "leg_press";
 }
 function isDeadliftName(name: string): boolean {
   const k = exerciseKey(name);
-  const n = normalizeExerciseName(name);
-  // include RDL as a deadlift-family movement for the DL trend line
-  return k === "deadlift" || k === "romaniandeadlift" || n.includes("deadlift") || n === "dl" || n === "rdl";
+  return k === "deadlift" || k === "romanian_deadlift";
 }
 
 type SetLite = {
@@ -1345,7 +1434,7 @@ async function addSet(exerciseId: string) {
 
   async function addExerciseToTemplate() {
     if (!openTemplateId) return;
-    const name = newTemplateExerciseName.trim();
+    const name = canonicalizeExerciseInput(newTemplateExerciseName);
     if (!name) return;
 
     const id = uuid();
@@ -1417,10 +1506,12 @@ async function addSet(exerciseId: string) {
       const te = ex[i];
       const exerciseId = uuid();
 
+      const canonicalName = canonicalizeExerciseInput(te.name);
+
       const localExercise: LocalWorkoutExercise = {
         id: exerciseId,
         session_id: sessionId,
-        name: te.name,
+        name: canonicalName,
         sort_order: i
       };
 
@@ -1429,7 +1520,7 @@ async function addSet(exerciseId: string) {
       await enqueue("insert_exercise", {
         id: exerciseId,
         session_id: sessionId,
-        name: te.name,
+        name: canonicalName,
         sort_order: i
       });
 
@@ -2280,6 +2371,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
