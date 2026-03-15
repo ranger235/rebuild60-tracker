@@ -52,6 +52,15 @@ export type LocalExerciseAlias = {
   updatedAt: number;
 };
 
+export type LocalMilestone = {
+  id: string; // deterministic key per milestone
+  user_id: string;
+  milestone_type: "pr" | "threshold" | "consistency" | "volume" | "body_metric";
+  code: string; // stable dedupe code
+  label: string;
+  achieved_on: string; // YYYY-MM-DD
+  createdAt: number;
+};
 
 export type ExerciseTags = {
   muscle_groups?: string[]; // e.g. ["chest","triceps"]
@@ -144,7 +153,7 @@ export class RebuildDB extends Dexie {
 
   localSettings!: Table<LocalSetting, [string, string]>; // [user_id, key]
   localExerciseAliases!: Table<LocalExerciseAlias, [string, string]>; // [user_id, alias_norm]
-
+  localMilestones!: Table<LocalMilestone, string>;
 
   localSessions!: Table<LocalWorkoutSession, string>;
   localExercises!: Table<LocalWorkoutExercise, string>;
@@ -212,10 +221,28 @@ export class RebuildDB extends Dexie {
       zone2Daily: "[user_id+day_date], user_id, day_date, updatedAt"
     });
 
+    // v6: persistent milestone records
+    this.version(6).stores({
+      pendingOps: "++id, createdAt, op, status",
+      localSettings: "[user_id+key], user_id, key, updatedAt",
+      localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
+      localMilestones: "id, user_id, milestone_type, achieved_on, createdAt",
+      localSessions: "id, user_id, day_date, started_at",
+      localExercises: "id, session_id, sort_order",
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order",
+      dailyMetrics: "[user_id+day_date], user_id, day_date, updatedAt",
+      nutritionDaily: "[user_id+day_date], user_id, day_date, updatedAt",
+      zone2Daily: "[user_id+day_date], user_id, day_date, updatedAt"
+    });
+
 }
 }
 
 export const localdb = new RebuildDB();
+
+
 
 
 
