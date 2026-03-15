@@ -55,6 +55,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
       await must(supabase.from("workout_templates").insert(payload));
       return;
 
+    case "update_template":
+      await must(supabase.from("workout_templates").upsert(payload, { onConflict: "id" }));
+      return;
+
     case "delete_template": {
       const template_id = payload?.template_id;
       if (!template_id) throw new Error("delete_template missing template_id");
@@ -70,6 +74,23 @@ async function processOp(op: PendingOp["op"], payload: any) {
     case "update_template_exercise":
       await must(supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" }));
       return;
+
+    case "delete_template_exercise": {
+      const template_exercise_id = payload?.template_exercise_id;
+      if (!template_exercise_id) throw new Error("delete_template_exercise missing template_exercise_id");
+      await must(supabase.from("workout_template_exercises").delete().eq("id", template_exercise_id));
+      return;
+    }
+
+    case "reorder_template_exercises": {
+      const ordered_template_exercise_ids: string[] = payload?.ordered_template_exercise_ids ?? [];
+      if (!Array.isArray(ordered_template_exercise_ids)) throw new Error("reorder_template_exercises ordered_template_exercise_ids must be array");
+      for (let i = 0; i < ordered_template_exercise_ids.length; i++) {
+        const id = ordered_template_exercise_ids[i];
+        await must(supabase.from("workout_template_exercises").update({ sort_order: i }).eq("id", id));
+      }
+      return;
+    }
 
     case "delete_set": {
       const set_id = payload?.set_id;
@@ -213,6 +234,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
