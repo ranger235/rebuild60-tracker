@@ -74,6 +74,12 @@ type Props = {
   aiCoachBusy: boolean;
   aiCoachErr: string;
   aiCoach: AiCoachResult | null;
+  milestones: Array<{
+    id: string;
+    milestone_type: string;
+    label: string;
+    achieved_on: string;
+  }>;
 
   timerOn: boolean;
   setTimerOn: (updater: (prev: boolean) => boolean) => void;
@@ -125,6 +131,7 @@ export default function DashboardView(props: Props) {
     aiCoachBusy,
     aiCoachErr,
     aiCoach,
+    milestones,
     timerOn,
     setTimerOn,
     secs,
@@ -158,42 +165,6 @@ export default function DashboardView(props: Props) {
     if (!points || points.length === 0) return null;
     return Math.max(...points.map((p) => Number(p.y) || 0));
   }
-
-  
-  function detectMilestones() {
-    const milestones: string[] = [];
-
-    const lifts = [
-      { name: "Bench Press", series: benchSeries, thresholds: [135,185,225,275,315] },
-      { name: "Squat", series: squatSeries, thresholds: [185,225,275,315,365,405] },
-      { name: "Deadlift", series: dlSeries, thresholds: [225,275,315,365,405,455] },
-    ];
-
-    lifts.forEach(l=>{
-      if(!l.series || l.series.length===0) return;
-      const best=Math.max(...l.series.map(p=>Number(p.y)||0));
-      const latest=l.series[l.series.length-1]?.y ?? 0;
-
-      if(latest===best && best>0){
-        milestones.push(`New ${l.name} PR — ${Math.round(best)} e1RM`);
-      }
-
-      l.thresholds.forEach(t=>{
-        const hit=l.series.find(p=>Number(p.y)>=t);
-        if(hit && latest>=t){
-          milestones.push(`Crossed ${t} ${l.name}`);
-        }
-      });
-    });
-
-    if(trainingDays28>=20){
-      milestones.push("20 Training Days in 28 Days");
-    }
-
-    return milestones.slice(0,5);
-  }
-
-  const milestoneList = detectMilestones();
 const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
     { label: "Squat", points: squatSeries },
@@ -354,15 +325,18 @@ const keyLiftCards = [
           <h4 style={{ marginTop: 18, marginBottom: 8 }}>
           <h4 style={{ marginTop: 18, marginBottom: 8 }}>Recent Milestones</h4>
 
-          {milestoneList.length===0 && (
-            <div style={{fontSize:13,opacity:.75}}>No new milestones detected yet.</div>
+          {milestones.length === 0 && (
+            <div style={{ fontSize: 13, opacity: 0.75 }}>No milestone records yet.</div>
           )}
 
-          {milestoneList.length>0 && (
-            <div style={{display:"grid",gap:6}}>
-              {milestoneList.map((m,i)=>(
-                <div key={i} style={{border:"1px solid #ddd",borderRadius:10,padding:10,background:"#fafafa"}}>
-                  {m}
+          {milestones.length > 0 && (
+            <div style={{ display: "grid", gap: 6 }}>
+              {milestones.map((m) => (
+                <div key={m.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 10, background: "#fafafa" }}>
+                  <div style={{ fontWeight: 700 }}>{m.label}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
+                    {m.achieved_on} · {m.milestone_type}
+                  </div>
                 </div>
               ))}
             </div>
@@ -481,6 +455,8 @@ Quick Log Trends (last 28 days)</h4>
     </>
   );
 }
+
+
 
 
 
