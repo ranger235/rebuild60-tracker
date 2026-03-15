@@ -375,7 +375,11 @@ export default function WorkoutLoggerView(props: Props) {
                                         />
                                       ) : (
                                         <div style={{ display: "flex", alignItems: "center", fontSize: 12, opacity: 0.75 }}>
-                                          {d.bandConfig === "combined" ? "Primary + second × combo factor" : d.bandConfig === "doubled" ? "Primary × 2" : "Primary only"}
+                                          {d.bandConfig === "combined"
+                                            ? "Primary + second × combo factor"
+                                            : d.bandConfig === "doubled"
+                                              ? "Primary × 2"
+                                              : "Primary only"}
                                         </div>
                                       )}
                                     </div>
@@ -385,40 +389,54 @@ export default function WorkoutLoggerView(props: Props) {
                                         Pick setup first. Combined uses both band boxes. Doubled mirrors the same band.
                                       </div>
                                     </div>
-
-                                    <div style={{ marginTop: 6 }}>
-                                      <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Sets (today)</div>
-                                      <div style={{ display: "grid", gap: 6 }}>
-                                        {exSets.map((s3: any) => {
-                                          const est =
-                                            s3.weight_lbs != null && s3.reps != null
-                                              ? oneRmEpley(Number(s3.weight_lbs), Number(s3.reps))
-                                              : null;
-
-                                          return (
-                                            <div key={s3.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                              <div>
-                                                <b>{s3.set_number}.</b>{" "}
-                                                {formatSet({
-                                                  load_type: (s3 as any).load_type ?? null,
-                                                  weight_lbs: s3.weight_lbs ?? null,
-                                                  band_level: (s3 as any).band_level ?? null,
-                                                  band_mode: (s3 as any).band_mode ?? null,
-                                                  band_config: (s3 as any).band_config ?? null,
-                                                  band_est_lbs: (s3 as any).band_est_lbs ?? null,
-                                                  reps: s3.reps ?? null,
-                                                  rpe: s3.rpe ?? null,
-                                                  is_warmup: !!s3.is_warmup
-                                                })}
-                                              </div>
-                                              <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
                                   </div>
                                 )}
+
+                                {advanced && (
+                                  <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={d.warmup}
+                                      onChange={(e) => updateDraft(ex.id, { warmup: e.target.checked })}
+                                    />
+                                    Warmup set
+                                  </label>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Sets Today */}
+                            <div style={{ marginTop: 12 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Sets (today)</div>
+                              <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                                {exSets.map((s3: any) => {
+                                  const est =
+                                    s3.weight_lbs != null && s3.reps != null
+                                      ? oneRmEpley(Number(s3.weight_lbs), Number(s3.reps))
+                                      : null;
+
+                                  return (
+                                    <div key={s3.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                      <div>
+                                        <b>{s3.set_number}.</b>{" "}
+                                        {formatSet({
+                                          load_type: (s3 as any).load_type ?? null,
+                                          weight_lbs: s3.weight_lbs ?? null,
+                                          band_level: (s3 as any).band_level ?? null,
+                                          band_mode: (s3 as any).band_mode ?? null,
+                                          band_config: (s3 as any).band_config ?? null,
+                                          band_est_lbs: (s3 as any).band_est_lbs ?? null,
+                                          reps: s3.reps ?? null,
+                                          rpe: s3.rpe ?? null,
+                                          is_warmup: !!s3.is_warmup
+                                        })}
+                                      </div>
+                                      <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
 
                             {coachEnabled && <CoachBoundary exerciseName={displayExerciseName(ex.name)} sets={exSets} compound={compound} />}
                           </div>
@@ -469,6 +487,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
