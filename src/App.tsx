@@ -589,6 +589,36 @@ useEffect(() => {
   const [calSeries, setCalSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [z2Series, setZ2Series] = useState<{ xLabel: string; y: number }[]>([]);
+  type TrainingTimelineWeek = {
+    label: string;
+    start: string;
+    end: string;
+    sessions: number;
+    tonnage: number;
+    sets: number;
+    topLiftLabel: string;
+    topLiftValue: number;
+    focus: string;
+  };
+  type BrainSignal = {
+    key: string;
+    label: string;
+    value: string;
+    status: "good" | "ok" | "watch";
+    detail: string;
+  };
+  type BrainArchitecture = {
+    readiness: number;
+    momentum: number;
+    recovery: number;
+    compliance: number;
+    summary: string;
+    nextFocus: string;
+    signals: BrainSignal[];
+  };
+
+  const [trainingTimeline, setTrainingTimeline] = useState<TrainingTimelineWeek[]>([]);
+  const [brainArchitecture, setBrainArchitecture] = useState<BrainArchitecture | null>(null);
 
 
   // -----------------------------
@@ -1972,6 +2002,13 @@ async function refreshDashboard() {
         if (cur == null || val > cur) map.set(day, val);
       }
 
+      const sessionExerciseNames = new Map<string, string[]>();
+      for (const e of allExercises) {
+        const arr = sessionExerciseNames.get(e.session_id) ?? [];
+        arr.push(e.name);
+        sessionExerciseNames.set(e.session_id, arr);
+      }
+
       for (const s of allSets) {
         const info = exInfo.get(s.exercise_id);
         if (!info) continue;
@@ -2162,6 +2199,158 @@ async function refreshDashboard() {
           return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
         })
         .filter(Boolean) as { xLabel: string; y: number }[];
+
+      const classifyFocus = (names: string[]): string => {
+        const scores = { push: 0, pull: 0, lower: 0, conditioning: 0 };
+        for (const name of names) {
+          const key = exerciseKey(name);
+          if (["bench_press", "incline_bench_press", "dumbbell_bench_press", "overhead_press", "dip", "chest_fly", "triceps_pressdown", "overhead_triceps_extension", "lateral_raise"].includes(key)) scores.push += 1;
+          if (["deadlift", "romanian_deadlift", "barbell_row", "chest_supported_row", "seated_cable_row", "lat_pulldown", "pull_up", "chin_up", "face_pull", "shrug", "curl", "preacher_curl", "hammer_curl", "rear_delt_fly"].includes(key)) scores.pull += 1;
+          if (["squat", "ssb_squat", "split_squat", "leg_press", "hack_squat", "leg_extension", "hamstring_curl", "calf_raise"].includes(key)) scores.lower += 1;
+          if (["plank", "crunch"].includes(key)) scores.conditioning += 1;
+        }
+        const ordered = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+        if (!ordered[0] || ordered[0][1] === 0) return "Mixed";
+        const map: Record<string, string> = {
+          push: "Push emphasis",
+          pull: "Pull emphasis",
+          lower: "Lower emphasis",
+          conditioning: "Conditioning / trunk"
+        };
+        return map[ordered[0][0]] ?? "Mixed";
+      };
+
+      const weekBuckets: Array<{
+        label: string;
+        start: string;
+        end: string;
+        sessions: number;
+        tonnage: number;
+        sets: number;
+        topLiftLabel: string;
+        topLiftValue: number;
+        focus: string;
+      }> = [];
+      for (let weekOffset = 7; weekOffset >= 0; weekOffset--) {
+        const weekEnd = new Date(end);
+        weekEnd.setDate(end.getDate() - weekOffset * 7);
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekEnd.getDate() - 6);
+        const weekDays: string[] = [];
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(weekStart);
+          d.setDate(weekStart.getDate() + i);
+          weekDays.push(fmt(d));
+        }
+        const weekSessions = allSessions.filter((sess) => weekDays.includes(sess.day_date || isoToDay(sess.started_at)) && (sess as any).exclude_from_analytics !== true);
+        const focusCounts = new Map<string, number>();
+        for (const sess of weekSessions) {
+          const focus = classifyFocus(sessionExerciseNames.get(sess.id) ?? []);
+          focusCounts.set(focus, (focusCounts.get(focus) ?? 0) + 1);
+        }
+        let dominantFocus = "Mixed";
+        let dominantFocusCount = -1;
+        for (const [focus, count] of focusCounts.entries()) {
+          if (count > dominantFocusCount) {
+            dominantFocus = focus;
+            dominantFocusCount = count;
+          }
+        }
+        const weekBench = bestInRange(bestBenchE1RM, weekDays) ?? 0;
+        const weekSquat = bestInRange(bestSquatE1RM, weekDays) ?? 0;
+        const weekDl = bestInRange(bestDlE1RM, weekDays) ?? 0;
+        const topLift = [
+          { label: "Bench", value: weekBench },
+          { label: "Squat", value: weekSquat },
+          { label: "Pull", value: weekDl }
+        ].sort((a, b) => b.value - a.value)[0];
+        weekBuckets.push({
+          label: `${weekDays[0].slice(5)} → ${weekDays[6].slice(5)}`,
+          start: weekDays[0],
+          end: weekDays[6],
+          sessions: weekSessions.length,
+          tonnage: Math.round(sumMap(tonnageByDay, weekDays)),
+          sets: Math.round(sumMap(setsByDay, weekDays)),
+          topLiftLabel: topLift?.label ?? "—",
+          topLiftValue: topLift?.value ?? 0,
+          focus: dominantFocus
+        });
+      }
+
+      const avgSleep7 = slSeries.length > 0 ? slSeries.slice(-7).reduce((acc, p) => acc + Number(p.y || 0), 0) / Math.max(1, slSeries.slice(-7).length) : 0;
+      const avgProtein7 = pSeries.length > 0 ? pSeries.slice(-7).reduce((acc, p) => acc + Number(p.y || 0), 0) / Math.max(1, pSeries.slice(-7).length) : 0;
+      const avgZ27 = zSeries.length > 0 ? zSeries.slice(-7).reduce((acc, p) => acc + Number(p.y || 0), 0) / Math.max(1, zSeries.slice(-7).length) : 0;
+      const quickLogDays7 = new Set([...slSeries.slice(-7), ...pSeries.slice(-7), ...zSeries.slice(-7), ...wSeries.slice(-7)].map((p) => p.xLabel)).size;
+      const sessionsLast7 = sessionsThis;
+      const sessionsPrev7 = sessionsPrev;
+      const readiness = Math.max(0, Math.min(100,
+        Math.round(
+          (avgSleep7 >= 7 ? 35 : avgSleep7 >= 6 ? 26 : avgSleep7 >= 5 ? 18 : 10) +
+          (avgProtein7 >= 180 ? 30 : avgProtein7 >= 150 ? 24 : avgProtein7 >= 120 ? 16 : 8) +
+          (sessionsLast7 >= 4 ? 20 : sessionsLast7 >= 3 ? 16 : sessionsLast7 >= 2 ? 12 : 6) +
+          (avgZ27 >= 20 ? 15 : avgZ27 >= 10 ? 10 : 5)
+        )
+      ));
+      const momentum = Math.max(0, Math.min(100, Math.round(
+        50 +
+        (tonPct >= 10 ? 20 : tonPct >= 0 ? 10 : tonPct <= -10 ? -15 : -5) +
+        (setsPct >= 10 ? 15 : setsPct >= 0 ? 8 : setsPct <= -10 ? -12 : -4) +
+        (sessionsLast7 > sessionsPrev7 ? 10 : sessionsLast7 < sessionsPrev7 ? -10 : 0)
+      )));
+      const recovery = Math.max(0, Math.min(100, Math.round(
+        (avgSleep7 >= 7 ? 45 : avgSleep7 >= 6 ? 35 : avgSleep7 >= 5 ? 25 : 15) +
+        (avgZ27 >= 20 ? 20 : avgZ27 >= 10 ? 15 : 8) +
+        (sessionsLast7 <= 4 ? 20 : sessionsLast7 === 5 ? 14 : 8) +
+        (wSeries.length >= 2 ? 15 : 10)
+      )));
+      const compliance = Math.max(0, Math.min(100, Math.round(
+        (quickLogDays7 >= 5 ? 35 : quickLogDays7 >= 3 ? 24 : 12) +
+        (sessionsLast7 >= 4 ? 35 : sessionsLast7 >= 3 ? 28 : sessionsLast7 >= 2 ? 18 : 8) +
+        (avgProtein7 >= 180 ? 30 : avgProtein7 >= 150 ? 22 : avgProtein7 >= 120 ? 14 : 8)
+      )));
+
+      const brainSignals = [
+        {
+          key: "sleep",
+          label: "Sleep",
+          value: avgSleep7 ? `${avgSleep7.toFixed(1)} h` : "—",
+          status: avgSleep7 >= 6.5 ? "good" : avgSleep7 >= 5.5 ? "ok" : "watch",
+          detail: avgSleep7 >= 6.5 ? "Recovery floor is holding." : avgSleep7 >= 5.5 ? "Serviceable, but not plush." : "Sleep is the weak link right now."
+        },
+        {
+          key: "protein",
+          label: "Protein",
+          value: avgProtein7 ? `${Math.round(avgProtein7)} g` : "—",
+          status: avgProtein7 >= 180 ? "good" : avgProtein7 >= 150 ? "ok" : "watch",
+          detail: avgProtein7 >= 180 ? "Muscle retention box checked." : avgProtein7 >= 150 ? "Close, but you can tighten it." : "Protein is drifting below rebuild territory."
+        },
+        {
+          key: "training",
+          label: "Training Cadence",
+          value: `${sessionsLast7}/7 days`,
+          status: sessionsLast7 >= 4 ? "good" : sessionsLast7 >= 3 ? "ok" : "watch",
+          detail: sessionsLast7 >= 4 ? "Plenty of signal for progression." : sessionsLast7 >= 3 ? "Adequate cadence, keep it deliberate." : "Cadence is thin — consistency beats heroics."
+        },
+        {
+          key: "momentum",
+          label: "Momentum",
+          value: `${momentum}`,
+          status: momentum >= 70 ? "good" : momentum >= 55 ? "ok" : "watch",
+          detail: momentum >= 70 ? "The trendline is moving the right way." : momentum >= 55 ? "Neutral to positive. Needs pressure." : "Trend softened — tighten execution."
+        }
+      ] as BrainSignal[];
+
+      const dominantRecentFocus = weekBuckets.slice(-3).reduce((acc, wk) => {
+        acc[wk.focus] = (acc[wk.focus] ?? 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+      const nextFocus = Object.entries(dominantRecentFocus).sort((a, b) => a[1] - b[1])[0]?.[0] ?? "Mixed";
+      const summary = readiness >= 75 && momentum >= 65
+        ? "System says go — enough training signal and enough recovery to push progression without being a cowboy."
+        : readiness >= 60
+          ? "System is usable but not luxurious — progress lives here if execution stays tidy."
+          : "System is flashing yellow — recover, eat, and stack simple wins before chasing fireworks.";
+
 setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
@@ -2173,6 +2362,16 @@ setTonnageSeries(tonSeries);
       setCalSeries(cSeries);
       setProteinSeries(pSeries);
       setZ2Series(zSeries);
+      setTrainingTimeline(weekBuckets);
+      setBrainArchitecture({
+        readiness,
+        momentum,
+        recovery,
+        compliance,
+        summary,
+        nextFocus,
+        signals: brainSignals
+      });
 
       await persistDetectedMilestones({
         userId,
@@ -2461,6 +2660,8 @@ async function syncNow() {
           calSeries={calSeries}
           proteinSeries={proteinSeries}
           z2Series={z2Series}
+          trainingTimeline={trainingTimeline}
+          brainArchitecture={brainArchitecture}
           refreshAiCoach={refreshAiCoach}
           aiCoachBusy={aiCoachBusy}
           aiCoachErr={aiCoachErr}
@@ -2567,6 +2768,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
