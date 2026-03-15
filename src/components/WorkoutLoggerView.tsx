@@ -10,8 +10,9 @@ type Draft = {
   rpe: string;
   warmup: boolean;
   bandLevel: string;
+  bandLevel2: string;
   bandMode: "resist" | "assist";
-  bandConfig: "single" | "doubled";
+  bandConfig: "single" | "doubled" | "combined";
   bandEstLbs: string;
 };
 
@@ -344,8 +345,8 @@ export default function WorkoutLoggerView(props: Props) {
                                       </select>
                                       <input
                                         placeholder="Est lbs (opt)"
-                                        value={d.bandEstLbs}
-                                        onChange={(e) => updateDraft(ex.id, { bandEstLbs: e.target.value })}
+                                        value={(d as any).bandEst ?? (d as any).bandEstLbs ?? ""}
+                                        onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value } as any)}
                                       />
                                     </div>
                                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -461,4 +462,5 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
