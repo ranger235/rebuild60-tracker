@@ -2098,7 +2098,13 @@ setTonnageSeries(tonSeries);
 async function refreshLocalUiFromDexie() {
   if (!userId) return;
 
-  await loadQuickLogForDay(selectedDayDate);
+  // Don't clobber Quick Log inputs while the user is typing.
+  // Those fields should reload on day changes and after explicit saves,
+  // not every autosync pass.
+  if (tab !== "quick") {
+    await loadQuickLogForDay(selectedDayDate);
+  }
+
   await loadSessionsForDay(selectedDayDate);
   await loadTemplates();
 
@@ -2468,6 +2474,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
