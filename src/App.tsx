@@ -412,19 +412,28 @@ async function loadBandEquiv() {
   }
 }
 
-async function saveBandEquiv(next: Record<string, number>) {
+async function saveBandEquiv(next: Record<string, number>, comboFactorOverride?: number) {
   if (!userId) return;
   const updatedAt = Date.now();
+  const factor =
+    typeof comboFactorOverride === "number" && Number.isFinite(comboFactorOverride)
+      ? comboFactorOverride
+      : bandComboFactorRef.current;
+
   await localdb.localSettings.put({
     user_id: userId,
     key: "band_equiv_v1",
     value: JSON.stringify({
       ...next,
-      comboFactor: bandComboFactorRef.current
+      comboFactor: factor
     }),
     updatedAt
   });
+
   setBandEquivMap(next);
+  if (typeof comboFactorOverride === "number" && Number.isFinite(comboFactorOverride)) {
+    setBandComboFactor(comboFactorOverride);
+  }
 }
 
 useEffect(() => {
@@ -2144,6 +2153,8 @@ async function syncNow() {
           loadBandEquiv={loadBandEquiv}
           bandEquivMap={bandEquivMap}
           setBandEquivMap={setBandEquivMap}
+          bandComboFactor={bandComboFactor}
+          setBandComboFactor={setBandComboFactor}
           saveBandEquiv={saveBandEquiv}
           weight={weight}
           setWeight={setWeight}
@@ -2269,6 +2280,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
