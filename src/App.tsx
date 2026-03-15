@@ -4,6 +4,7 @@ import { enqueue, runSyncPass, startAutoSync } from "./sync";
 import { pullSync } from "./pullSync";
 import {
   localdb,
+  type LocalMilestone,
   type LocalWorkoutExercise,
   type LocalWorkoutSession,
   type LocalWorkoutSet,
@@ -574,6 +575,7 @@ useEffect(() => {
   const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
   const [aiCoachBusy, setAiCoachBusy] = useState(false);
   const [aiCoachErr, setAiCoachErr] = useState<string | null>(null);
+  const [milestones, setMilestones] = useState<LocalMilestone[]>([]);
 
   const [tonnageSeries, setTonnageSeries] = useState<{ xLabel: string; y: number }[]>([]);
   const [setsSeries, setSetsSeries] = useState<{ xLabel: string; y: number }[]>([]);
@@ -1852,7 +1854,89 @@ async function loadQuickLogForDay(day: string) {
   // -----------------------------
   // Dashboard computations (local, offline)
   // -----------------------------
-  async function refreshDashboard() {
+  
+
+async function persistDetectedMilestones(args: {
+  userId: string;
+  benchSeries: { xLabel: string; y: number }[];
+  squatSeries: { xLabel: string; y: number }[];
+  dlSeries: { xLabel: string; y: number }[];
+  trainingDays28: number;
+}) {
+  const { userId, benchSeries, squatSeries, dlSeries, trainingDays28 } = args;
+  const existing = await localdb.localMilestones.where("user_id").equals(userId).toArray();
+  const existingIds = new Set(existing.map((m) => m.id));
+  const now = Date.now();
+
+  type Candidate = LocalMilestone;
+  const candidates: Candidate[] = [];
+
+  const lifts = [
+    { key: "bench_press", name: "Bench Press", series: benchSeries, thresholds: [135, 185, 225, 275, 315] },
+    { key: "squat", name: "Squat", series: squatSeries, thresholds: [185, 225, 275, 315, 365, 405] },
+    { key: "deadlift", name: "Deadlift", series: dlSeries, thresholds: [225, 275, 315, 365, 405, 455] },
+  ];
+
+  for (const lift of lifts) {
+    if (!lift.series || lift.series.length === 0) continue;
+    const best = Math.max(...lift.series.map((p) => Number(p.y) || 0));
+    if (best > 0) {
+      const rounded = Math.round(best);
+      const prId = `${userId}:pr:${lift.key}:${rounded}`;
+      candidates.push({
+        id: prId,
+        user_id: userId,
+        milestone_type: "pr",
+        code: `pr:${lift.key}:${rounded}`,
+        label: `New ${lift.name} PR — ${rounded} e1RM`,
+        achieved_on: todayISO(),
+        createdAt: now
+      });
+    }
+
+    for (const t of lift.thresholds) {
+      if (best >= t) {
+        const thresholdId = `${userId}:threshold:${lift.key}:${t}`;
+        candidates.push({
+          id: thresholdId,
+          user_id: userId,
+          milestone_type: "threshold",
+          code: `threshold:${lift.key}:${t}`,
+          label: `Crossed ${t} ${lift.name}`,
+          achieved_on: todayISO(),
+          createdAt: now
+        });
+      }
+    }
+  }
+
+  if (trainingDays28 >= 20) {
+    const id = `${userId}:consistency:20-days-28`;
+    candidates.push({
+      id,
+      user_id: userId,
+      milestone_type: "consistency",
+      code: "consistency:20-days-28",
+      label: "20 Training Days in 28 Days",
+      achieved_on: todayISO(),
+      createdAt: now
+    });
+  }
+
+  const fresh = candidates.filter((c) => !existingIds.has(c.id));
+  if (fresh.length > 0) {
+    await localdb.localMilestones.bulkPut(fresh);
+  }
+
+  const all = await localdb.localMilestones.where("user_id").equals(userId).toArray();
+  all.sort((a, b) => {
+    if (a.achieved_on === b.achieved_on) return b.createdAt - a.createdAt;
+    return a.achieved_on < b.achieved_on ? 1 : -1;
+  });
+  setMilestones(all.slice(0, 8));
+}
+
+async function refreshDashboard() {
     if (!userId) return;
     setDashBusy(true);
     try {
@@ -1896,13 +1980,13 @@ async function loadQuickLogForDay(day: string) {
 
         setsByDay.set(day, (setsByDay.get(day) ?? 0) + 1);
 
-        const w = s.weight_lbs ?? 0;
+        const effectiveLoad = Number(s.weight_lbs ?? s.band_est_lbs ?? 0);
         const r = s.reps ?? 0;
-        if (w > 0 && r > 0) {
-          tonnageByDay.set(day, (tonnageByDay.get(day) ?? 0) + w * r);
+        if (effectiveLoad > 0 && r > 0) {
+          tonnageByDay.set(day, (tonnageByDay.get(day) ?? 0) + effectiveLoad * r);
 
           // e1RM (best per day) for bucketed names
-          const e1 = oneRmEpley(w, r);
+          const e1 = oneRmEpley(effectiveLoad, r);
 
           if (isBenchName(info.name)) bumpMax(bestBenchE1RM, day, e1);
           if (isSquatName(info.name)) bumpMax(bestSquatE1RM, day, e1);
@@ -2089,6 +2173,14 @@ setTonnageSeries(tonSeries);
       setCalSeries(cSeries);
       setProteinSeries(pSeries);
       setZ2Series(zSeries);
+
+      await persistDetectedMilestones({
+        userId,
+        benchSeries: bench,
+        squatSeries: squat,
+        dlSeries: dl,
+        trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length
+      });
     } finally {
       setDashBusy(false);
     }
@@ -2373,6 +2465,7 @@ async function syncNow() {
           aiCoachBusy={aiCoachBusy}
           aiCoachErr={aiCoachErr}
           aiCoach={aiCoach}
+          milestones={milestones}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
           secs={secs}
@@ -2474,6 +2567,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
