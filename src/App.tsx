@@ -1105,6 +1105,7 @@ async function addSet(exerciseId: string) {
         alert("Primary band level (1–5) required.");
         return;
       }
+
       band_level = lvl;
       band_mode = d.bandMode || "resist";
 
@@ -1121,19 +1122,20 @@ async function addSet(exerciseId: string) {
 
       band_est_lbs = estimateBandLoad(lvl, band_config, d.bandEst);
 
-      // Safety fallback so combined bands always get an estimate even if settings are weird.
       if (band_est_lbs == null) {
-        const baseMap = bandEquivMapRef.current ?? {};
-        const primary = typeof baseMap[String(lvl)] === "number" ? Number(baseMap[String(lvl)]) : null;
-        const secondary =
-          secondaryLvl && typeof baseMap[String(secondaryLvl)] === "number"
-            ? Number(baseMap[String(secondaryLvl)])
-            : null;
+        const baseMap = bandEquivMap || { "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 };
+        const primary = Number(baseMap[String(lvl)] ?? NaN);
+        const secondary = secondaryLvl ? Number(baseMap[String(secondaryLvl)] ?? NaN) : NaN;
+        const comboFactor = Number.isFinite(Number(bandComboFactor)) ? Number(bandComboFactor) : 1.1;
 
-        if (primary != null) {
-          if (d.bandConfig === "doubled") band_est_lbs = Math.round(primary * 2);
-          else if (d.bandConfig === "combined" && secondary != null) band_est_lbs = Math.round((primary + secondary) * (bandComboFactorRef.current || 1.1));
-          else band_est_lbs = Math.round(primary);
+        if (Number.isFinite(primary) && primary > 0) {
+          if (d.bandConfig === "doubled") {
+            band_est_lbs = Math.round(primary * 2);
+          } else if (d.bandConfig === "combined" && Number.isFinite(secondary) && secondary > 0) {
+            band_est_lbs = Math.round((primary + secondary) * comboFactor);
+          } else {
+            band_est_lbs = Math.round(primary);
+          }
         }
       }
 
@@ -1165,28 +1167,22 @@ async function addSet(exerciseId: string) {
     };
 
     await localdb.localSets.put(local);
-
-    // Update UI immediately so the set appears even if cloud sync later retries.
     setSets((prev) => [...prev, local].sort((a, b) => a.set_number - b.set_number));
 
-    try {
-      await enqueue("insert_set", {
-        id,
-        exercise_id: exerciseId,
-        set_number: nextSetNumber,
-        load_type: loadType,
-        weight_lbs,
-        band_level,
-        band_mode,
-        band_config,
-        band_est_lbs,
-        reps,
-        rpe: advanced && d.rpe ? Number(d.rpe) : null,
-        is_warmup: advanced ? !!d.warmup : false
-      });
-    } catch (e) {
-      console.error("Queueing set failed", e);
-    }
+    await enqueue("insert_set", {
+      id,
+      exercise_id: exerciseId,
+      set_number: nextSetNumber,
+      load_type: loadType,
+      weight_lbs,
+      band_level,
+      band_mode,
+      band_config,
+      band_est_lbs,
+      reps,
+      rpe: advanced && d.rpe ? Number(d.rpe) : null,
+      is_warmup: advanced ? !!d.warmup : false
+    });
 
     updateDraft(exerciseId, {
       weight: loadType === "weight" ? "" : d.weight,
@@ -1226,7 +1222,6 @@ async function addSet(exerciseId: string) {
       });
     }
 
-    // Refresh from Dexie to keep ordering/state honest, but the UI already updated above.
     if (openSessionId) await openSession(openSessionId);
   } catch (e: any) {
     console.error(e);
@@ -2293,6 +2288,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
