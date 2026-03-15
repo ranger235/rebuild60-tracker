@@ -43,9 +43,17 @@ type Props = {
   createTemplate: () => any;
   openTemplate: (templateId: string) => any;
   deleteTemplate: (templateId: string) => any;
+  editTemplateName: string;
+  setEditTemplateName: (v: string) => void;
+  editTemplateDesc: string;
+  setEditTemplateDesc: (v: string) => void;
+  saveTemplateMeta: () => any;
   newTemplateExerciseName: string;
   setNewTemplateExerciseName: (v: string) => void;
   addExerciseToTemplate: () => any;
+  renameTemplateExercise: (templateExerciseId: string, rawName: string) => any;
+  deleteTemplateExercise: (templateExerciseId: string) => any;
+  moveTemplateExercise: (templateExerciseId: string, direction: -1 | 1) => any;
   startSessionFromTemplate: (templateId: string) => any;
   displayExerciseName: (raw: string) => string;
 
@@ -151,9 +159,17 @@ export default function WorkoutLoggerView(props: Props) {
         createTemplate={createTemplate}
         openTemplate={openTemplate}
         deleteTemplate={deleteTemplate}
+        editTemplateName={editTemplateName}
+        setEditTemplateName={setEditTemplateName}
+        editTemplateDesc={editTemplateDesc}
+        setEditTemplateDesc={setEditTemplateDesc}
+        saveTemplateMeta={saveTemplateMeta}
         newTemplateExerciseName={newTemplateExerciseName}
         setNewTemplateExerciseName={setNewTemplateExerciseName}
         addExerciseToTemplate={addExerciseToTemplate}
+        renameTemplateExercise={renameTemplateExercise}
+        deleteTemplateExercise={deleteTemplateExercise}
+        moveTemplateExercise={moveTemplateExercise}
         startSessionFromTemplate={startSessionFromTemplate}
         displayExerciseName={displayExerciseName}
       />
@@ -487,6 +503,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
