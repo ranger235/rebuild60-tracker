@@ -1364,6 +1364,9 @@ async function addSet(exerciseId: string) {
 
   async function openTemplate(templateId: string) {
     setOpenTemplateId(templateId);
+    const t = await localdb.localTemplates.get(templateId);
+    setEditTemplateName(t?.name ?? "");
+    setEditTemplateDesc(t?.description ?? "");
     const ex = await localdb.localTemplateExercises.where({ template_id: templateId }).sortBy("sort_order");
     setTemplateExercises(ex);
   }
@@ -1396,6 +1399,93 @@ async function addSet(exerciseId: string) {
       console.warn("Failed to enqueue delete_template:", e);
     }
   }
+
+
+async function saveTemplateMeta() {
+  if (!userId || !openTemplateId) return;
+  const name = canonicalizeExerciseInput(editTemplateName).trim();
+  if (!name) {
+    alert("Template name required.");
+    return;
+  }
+
+  const current = await localdb.localTemplates.get(openTemplateId);
+  const updated = {
+    id: openTemplateId,
+    user_id: userId,
+    name,
+    description: editTemplateDesc.trim() || null,
+    created_at: current?.created_at ?? new Date().toISOString()
+  };
+
+  await localdb.localTemplates.put(updated);
+  await enqueue("update_template", updated);
+  await loadTemplates();
+  await openTemplate(openTemplateId);
+}
+
+async function renameTemplateExercise(templateExerciseId: string, rawName: string) {
+  if (!openTemplateId) return;
+  const name = canonicalizeExerciseInput(rawName).trim();
+  if (!name) return;
+
+  const current = templateExercises.find((x) => x.id === templateExerciseId);
+  if (!current) return;
+
+  const updated = { ...current, name };
+  await localdb.localTemplateExercises.put(updated);
+  setTemplateExercises((prev) =>
+    prev.map((x) => (x.id === templateExerciseId ? { ...x, name } : x))
+  );
+  await enqueue("update_template_exercise", updated);
+}
+
+async function deleteTemplateExercise(templateExerciseId: string) {
+  if (!openTemplateId) return;
+  const remaining = templateExercises.filter((x) => x.id !== templateExerciseId);
+  const renumbered = remaining.map((x, i) => ({ ...x, sort_order: i }));
+
+  await localdb.transaction("rw", localdb.localTemplateExercises, async () => {
+    await localdb.localTemplateExercises.delete(templateExerciseId);
+    for (const row of renumbered) {
+      await localdb.localTemplateExercises.put(row);
+    }
+  });
+
+  setTemplateExercises(renumbered);
+
+  await enqueue("delete_template_exercise", { template_exercise_id: templateExerciseId });
+  await enqueue("reorder_template_exercises", {
+    ordered_template_exercise_ids: renumbered.map((x) => x.id)
+  });
+}
+
+async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 1) {
+  if (!openTemplateId) return;
+  const ordered = templateExercises.slice().sort((a, b) => a.sort_order - b.sort_order);
+  const idx = ordered.findIndex((x) => x.id === templateExerciseId);
+  if (idx < 0) return;
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= ordered.length) return;
+
+  const copy = ordered.slice();
+  const tmp = copy[idx];
+  copy[idx] = copy[swapIdx];
+  copy[swapIdx] = tmp;
+
+  const renumbered = copy.map((x, i) => ({ ...x, sort_order: i }));
+
+  await localdb.transaction("rw", localdb.localTemplateExercises, async () => {
+    for (const row of renumbered) {
+      await localdb.localTemplateExercises.put(row);
+    }
+  });
+
+  setTemplateExercises(renumbered);
+  await enqueue("reorder_template_exercises", {
+    ordered_template_exercise_ids: renumbered.map((x) => x.id)
+  });
+}
   async function createTemplate() {
     if (!userId) return;
     const name = newTemplateName.trim();
@@ -2371,6 +2461,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
