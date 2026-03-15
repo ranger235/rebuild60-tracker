@@ -85,7 +85,7 @@ export type LocalWorkoutSet = {
 
   band_level?: number | null; // 1..5
   band_mode?: "assist" | "resist" | null;
-  band_config?: "single" | "doubled" | null;
+  band_config?: string | null; // "single" | "doubled" | "combo:<secondary_level>"
   band_est_lbs?: number | null;
 
   reps?: number | null;
