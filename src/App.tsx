@@ -172,7 +172,7 @@ type ExerciseDraft = {
   loadType: "weight" | "band" | "bodyweight";
   weight: string; // used for loadType=weight
   bandLevel: string; // primary 1..5 when loadType=band
-  bandLevel2: string; // optional secondary band level for combined setup
+  bandLevel2: string; // optional secondary 1..5 when using combined bands
   bandMode: "assist" | "resist";
   bandConfig: "single" | "doubled" | "combined";
   bandEst: string; // optional override
@@ -202,25 +202,24 @@ function buildBandConfig(mode: "single" | "doubled" | "combined", secondaryLevel
 function estimateBandLoad(
   primaryLevel: number | null,
   config: string | null | undefined,
-  overrideText: string | null | undefined
+  overrideText: string | null | undefined,
+  bandMap: Record<string, number>,
+  comboFactor: number
 ): number | null {
   const override = overrideText != null && String(overrideText).trim() !== "" ? Number(overrideText) : null;
   if (override != null && Number.isFinite(override) && override > 0) return Math.round(override);
 
   if (!primaryLevel || primaryLevel < 1 || primaryLevel > 5) return null;
 
-  const baseMap = bandEquivMapRef.current ?? {};
-  const primary = baseMap[String(primaryLevel)];
+  const primary = bandMap[String(primaryLevel)];
   if (typeof primary !== "number" || !Number.isFinite(primary)) return null;
 
   const parsed = parseBandConfig(config);
-  if (parsed.mode === "doubled") {
-    return Math.round(primary * 2);
-  }
-  if (parsed.mode === "combined") {
-    const secondary = parsed.secondaryLevel != null ? baseMap[String(parsed.secondaryLevel)] : null;
+  if (parsed.mode === "doubled") return Math.round(primary * 2);
+  if (parsed.mode === "combined" && parsed.secondaryLevel != null) {
+    const secondary = bandMap[String(parsed.secondaryLevel)];
     if (typeof secondary === "number" && Number.isFinite(secondary)) {
-      return Math.round((primary + secondary) * (bandComboFactorRef.current || 1.1));
+      return Math.round((primary + secondary) * comboFactor);
     }
   }
   return Math.round(primary);
@@ -248,7 +247,13 @@ function formatSet(s: SetLite) {
     const est =
       s.band_est_lbs != null
         ? Number(s.band_est_lbs)
-        : estimateBandLoad(typeof s.band_level === "number" ? s.band_level : null, s.band_config, null);
+        : estimateBandLoad(
+            typeof s.band_level === "number" ? s.band_level : null,
+            s.band_config,
+            null,
+            bandEquivMap,
+            bandComboFactor
+          );
     const estTxt = est != null ? `~${est}` : "";
     return `B${lvl}${cfg}${mode}${estTxt} x${r}${wu}${rpe}`;
   }
@@ -1073,160 +1078,136 @@ async function saveQuickLog() {
 
   
 async function addSet(exerciseId: string) {
-  try {
-    const d =
-      draftByExerciseId[exerciseId] ??
-      { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
+  const d =
+    draftByExerciseId[exerciseId] ??
+    { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
 
-    const reps = d.reps ? Number(d.reps) : null;
-    if (!reps || reps <= 0) {
-      alert("Reps required.");
+  const reps = d.reps ? Number(d.reps) : null;
+  if (!reps || reps <= 0) {
+    alert("Reps required.");
+    return;
+  }
+
+  const loadType = d.loadType || "weight";
+
+  let weight_lbs: number | null = null;
+  let band_level: number | null = null;
+  let band_mode: "assist" | "resist" | null = null;
+  let band_config: string | null = null;
+  let band_est_lbs: number | null = null;
+
+  if (loadType === "weight") {
+    const w = d.weight ? Number(d.weight) : null;
+    if (!w || w <= 0) {
+      alert("Weight required (or switch to Band/BW).");
+      return;
+    }
+    weight_lbs = w;
+  } else if (loadType === "band") {
+    const lvl = d.bandLevel ? Number(d.bandLevel) : null;
+    if (!lvl || lvl < 1 || lvl > 5) {
+      alert("Primary band level (1–5) required.");
+      return;
+    }
+    band_level = lvl;
+    band_mode = d.bandMode || "resist";
+
+    const secondaryLvl = d.bandLevel2 ? Number(d.bandLevel2) : null;
+    if (d.bandConfig === "combined" && (!secondaryLvl || secondaryLvl < 1 || secondaryLvl > 5)) {
+      alert("Second band level (1–5) required for combined bands.");
       return;
     }
 
-    const loadType = d.loadType || "weight";
+    band_config = buildBandConfig(
+      d.bandConfig || "single",
+      secondaryLvl && secondaryLvl >= 1 && secondaryLvl <= 5 ? secondaryLvl : null
+    );
 
-    let weight_lbs: number | null = null;
-    let band_level: number | null = null;
-    let band_mode: "assist" | "resist" | null = null;
-    let band_config: string | null = null;
-    let band_est_lbs: number | null = null;
-
-    if (loadType === "weight") {
-      const w = d.weight ? Number(d.weight) : null;
-      if (!w || w <= 0) {
-        alert("Weight required (or switch to Band/BW).");
-        return;
-      }
-      weight_lbs = w;
-    } else if (loadType === "band") {
-      const lvl = d.bandLevel ? Number(d.bandLevel) : null;
-      if (!lvl || lvl < 1 || lvl > 5) {
-        alert("Primary band level (1–5) required.");
-        return;
-      }
-
-      band_level = lvl;
-      band_mode = d.bandMode || "resist";
-
-      const secondaryLvl = d.bandLevel2 ? Number(d.bandLevel2) : null;
-      if (d.bandConfig === "combined" && (!secondaryLvl || secondaryLvl < 1 || secondaryLvl > 5)) {
-        alert("Second band level (1–5) required for combined bands.");
-        return;
-      }
-
-      band_config = buildBandConfig(
-        d.bandConfig || "single",
-        secondaryLvl && secondaryLvl >= 1 && secondaryLvl <= 5 ? secondaryLvl : null
-      );
-
-      band_est_lbs = estimateBandLoad(lvl, band_config, d.bandEst);
-
-      if (band_est_lbs == null) {
-        const baseMap = bandEquivMap || { "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 };
-        const primary = Number(baseMap[String(lvl)] ?? NaN);
-        const secondary = secondaryLvl ? Number(baseMap[String(secondaryLvl)] ?? NaN) : NaN;
-        const comboFactor = Number.isFinite(Number(bandComboFactor)) ? Number(bandComboFactor) : 1.1;
-
-        if (Number.isFinite(primary) && primary > 0) {
-          if (d.bandConfig === "doubled") {
-            band_est_lbs = Math.round(primary * 2);
-          } else if (d.bandConfig === "combined" && Number.isFinite(secondary) && secondary > 0) {
-            band_est_lbs = Math.round((primary + secondary) * comboFactor);
-          } else {
-            band_est_lbs = Math.round(primary);
-          }
-        }
-      }
-
-      if (band_est_lbs == null) {
-        alert("Could not estimate band load. Enter an override or check band settings.");
-        return;
-      }
-    } else {
-      weight_lbs = null;
+    band_est_lbs = estimateBandLoad(lvl, band_config, d.bandEst, bandEquivMap, bandComboFactor);
+    if (band_est_lbs == null) {
+      alert("Could not estimate band load. Enter an override or check band settings.");
+      return;
     }
-
-    const existing = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
-    const nextSetNumber = (existing?.length ?? 0) + 1;
-
-    const id = uuid();
-    const local: LocalWorkoutSet = {
-      id,
-      exercise_id: exerciseId,
-      set_number: nextSetNumber,
-      load_type: loadType as any,
-      weight_lbs,
-      band_level,
-      band_mode,
-      band_config,
-      band_est_lbs,
-      reps,
-      rpe: advanced && d.rpe ? Number(d.rpe) : null,
-      is_warmup: advanced ? !!d.warmup : false
-    };
-
-    await localdb.localSets.put(local);
-    setSets((prev) => [...prev, local].sort((a, b) => a.set_number - b.set_number));
-
-    await enqueue("insert_set", {
-      id,
-      exercise_id: exerciseId,
-      set_number: nextSetNumber,
-      load_type: loadType,
-      weight_lbs,
-      band_level,
-      band_mode,
-      band_config,
-      band_est_lbs,
-      reps,
-      rpe: advanced && d.rpe ? Number(d.rpe) : null,
-      is_warmup: advanced ? !!d.warmup : false
-    });
-
-    updateDraft(exerciseId, {
-      weight: loadType === "weight" ? "" : d.weight,
-      bandEst: loadType === "band" ? "" : d.bandEst,
-      reps: "",
-      rpe: "",
-      warmup: false
-    });
-
-    setSecs(90);
-    setTimerOn(true);
-
-    const ex = exercises.find((e) => e.id === exerciseId);
-    if (ex) {
-      setLastByExerciseName((prev) => {
-        const k = exerciseKey(ex.name);
-        const prevSummary = prev[k];
-        const appended: SetLite = {
-          load_type: loadType,
-          weight_lbs: weight_lbs ?? null,
-          band_level,
-          band_mode,
-          band_config,
-          band_est_lbs,
-          reps: reps ?? null,
-          rpe: advanced && d.rpe ? Number(d.rpe) : null,
-          is_warmup: advanced ? !!d.warmup : false
-        };
-        return {
-          ...prev,
-          [k]: {
-            source: "local",
-            started_at: new Date().toISOString(),
-            sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
-          }
-        };
-      });
-    }
-
-    if (openSessionId) await openSession(openSessionId);
-  } catch (e: any) {
-    console.error(e);
-    alert(`Save set failed: ${e?.message ?? String(e)}`);
+  } else {
+    weight_lbs = null;
   }
+
+  const existing = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
+  const nextSetNumber = (existing?.length ?? 0) + 1;
+
+  const id = uuid();
+  const local: LocalWorkoutSet = {
+    id,
+    exercise_id: exerciseId,
+    set_number: nextSetNumber,
+    load_type: loadType as any,
+    weight_lbs,
+    band_level,
+    band_mode,
+    band_config,
+    band_est_lbs,
+    reps,
+    rpe: advanced && d.rpe ? Number(d.rpe) : null,
+    is_warmup: advanced ? !!d.warmup : false
+  };
+
+  await localdb.localSets.put(local);
+  setSets((prev) => [...prev, local].sort((a, b) => a.set_number - b.set_number));
+
+  await enqueue("insert_set", {
+    id,
+    exercise_id: exerciseId,
+    set_number: nextSetNumber,
+    load_type: loadType,
+    weight_lbs,
+    band_level,
+    band_mode,
+    band_config,
+    band_est_lbs,
+    reps,
+    rpe: advanced && d.rpe ? Number(d.rpe) : null,
+    is_warmup: advanced ? !!d.warmup : false
+  });
+
+  updateDraft(exerciseId, {
+    weight: loadType === "weight" ? "" : d.weight,
+    bandEst: loadType === "band" ? "" : d.bandEst,
+    reps: "",
+    rpe: "",
+    warmup: false
+  });
+
+  setSecs(90);
+  setTimerOn(true);
+
+  const ex = exercises.find((e) => e.id === exerciseId);
+  if (ex) {
+    setLastByExerciseName((prev) => {
+      const k = exerciseKey(ex.name);
+      const prevSummary = prev[k];
+      const appended: SetLite = {
+        load_type: loadType,
+        weight_lbs: weight_lbs ?? null,
+        band_level,
+        band_mode,
+        band_config,
+        band_est_lbs,
+        reps: reps ?? null,
+        rpe: advanced && d.rpe ? Number(d.rpe) : null,
+        is_warmup: advanced ? !!d.warmup : false
+      };
+      return {
+        ...prev,
+        [k]: {
+          source: "local",
+          started_at: new Date().toISOString(),
+          sets: prevSummary?.sets ? [...prevSummary.sets, appended] : [appended]
+        }
+      };
+    });
+  }
+
+  if (openSessionId) await openSession(openSessionId);
 }
 
 // -----------------------------
@@ -2288,6 +2269,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
