@@ -13,7 +13,7 @@ type Draft = {
   bandLevel2: string;
   bandMode: "resist" | "assist";
   bandConfig: "single" | "doubled" | "combined";
-  bandEstLbs: string;
+  bandEst: string;
 };
 
 type LastSummary = {
@@ -325,9 +325,15 @@ export default function WorkoutLoggerView(props: Props) {
                                   <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
                                     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
                                       <input
-                                        placeholder="Level 1–5"
+                                        placeholder="Primary 1–5"
                                         value={d.bandLevel}
                                         onChange={(e) => updateDraft(ex.id, { bandLevel: e.target.value })}
+                                      />
+                                      <input
+                                        placeholder="2nd 1–5 (opt)"
+                                        value={d.bandLevel2}
+                                        onChange={(e) => updateDraft(ex.id, { bandLevel2: e.target.value })}
+                                        disabled={d.bandConfig !== "combined"}
                                       />
                                       <select
                                         value={d.bandMode}
@@ -338,31 +344,46 @@ export default function WorkoutLoggerView(props: Props) {
                                       </select>
                                       <select
                                         value={d.bandConfig}
-                                        onChange={(e) => updateDraft(ex.id, { bandConfig: e.target.value as any })}
+                                        onChange={(e) =>
+                                          updateDraft(ex.id, {
+                                            bandConfig: e.target.value as any,
+                                            bandLevel2: e.target.value === "combined" ? d.bandLevel2 : ""
+                                          })
+                                        }
                                       >
                                         <option value="single">Single</option>
+                                        <option value="combined">Combined</option>
                                         <option value="doubled">Doubled</option>
                                       </select>
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
                                       <input
-                                        placeholder="Est lbs (opt)"
-                                        value={(d as any).bandEst ?? (d as any).bandEstLbs ?? ""}
+                                        placeholder="Est lbs override (opt)"
+                                        value={d.bandEst}
                                         onChange={(e) => updateDraft(ex.id, { bandEst: e.target.value } as any)}
                                       />
-                                    </div>
-                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                                       <input
                                         placeholder="Reps"
                                         value={d.reps}
                                         onChange={(e) => updateDraft(ex.id, { reps: e.target.value })}
                                       />
-                                      {advanced && (
+                                      {advanced ? (
                                         <input
                                           placeholder="RPE"
                                           value={d.rpe}
                                           onChange={(e) => updateDraft(ex.id, { rpe: e.target.value })}
                                         />
+                                      ) : (
+                                        <div style={{ display: "flex", alignItems: "center", fontSize: 12, opacity: 0.75 }}>
+                                          Combine bands uses the app combo factor
+                                        </div>
                                       )}
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                                       <button onClick={() => addSet(ex.id)}>Save Set</button>
+                                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                                        Single = 1 band • Combined = 1 + 2 style • Doubled = same band mirrored
+                                      </div>
                                     </div>
                                   </div>
                                 )}
@@ -462,5 +483,6 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
