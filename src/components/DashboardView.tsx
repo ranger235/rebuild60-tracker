@@ -12,12 +12,40 @@ export type WeeklyCoach = {
   tonnagePrev: number;
   setsThis: number;
   setsPrev: number;
-  adherence: number;
-  big3: {
-    bench: number;
-    squat: number;
-    deadlift: number;
-  };
+  benchBest?: number;
+  squatBest?: number;
+  dlBest?: number;
+  coachLine: string;
+};
+
+export type TrainingTimelineWeek = {
+  label: string;
+  start: string;
+  end: string;
+  sessions: number;
+  tonnage: number;
+  sets: number;
+  topLiftLabel: string;
+  topLiftValue: number;
+  focus: string;
+};
+
+export type BrainSignal = {
+  key: string;
+  label: string;
+  value: string;
+  status: "good" | "ok" | "watch";
+  detail: string;
+};
+
+export type BrainArchitecture = {
+  readiness: number;
+  momentum: number;
+  recovery: number;
+  compliance: number;
+  summary: string;
+  nextFocus: string;
+  signals: BrainSignal[];
 };
 
 export type AiCoachResult = {
@@ -69,6 +97,8 @@ type Props = {
   calSeries: Point[];
   proteinSeries: Point[];
   z2Series: Point[];
+  trainingTimeline: TrainingTimelineWeek[];
+  brainArchitecture: BrainArchitecture | null;
 
   refreshAiCoach: () => void;
   aiCoachBusy: boolean;
@@ -127,6 +157,8 @@ export default function DashboardView(props: Props) {
     calSeries,
     proteinSeries,
     z2Series,
+    trainingTimeline,
+    brainArchitecture,
     refreshAiCoach,
     aiCoachBusy,
     aiCoachErr,
@@ -170,6 +202,12 @@ const keyLiftCards = [
     { label: "Squat", points: squatSeries },
     { label: "Deadlift / RDL", points: dlSeries }
   ];
+
+  const signalTone = (status: "good" | "ok" | "watch") => {
+    if (status === "good") return "#eef8ee";
+    if (status === "ok") return "#fff8e8";
+    return "#fff0f0";
+  };
 
   return (
     <>
@@ -481,6 +519,7 @@ Quick Log Trends (last 28 days)</h4>
     </>
   );
 }
+
 
 
 
