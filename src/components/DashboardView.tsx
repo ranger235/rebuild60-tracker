@@ -36,7 +36,9 @@ type Props = {
   loadBandEquiv: () => void;
   bandEquivMap: Record<string, number>;
   setBandEquivMap: (next: Record<string, number>) => void;
-  saveBandEquiv: (next: Record<string, number>) => void;
+  bandComboFactor: number;
+  setBandComboFactor: (next: number) => void;
+  saveBandEquiv: (next: Record<string, number>, comboFactorOverride?: number) => void;
 
   weight: string;
   setWeight: (v: string) => void;
@@ -89,6 +91,8 @@ export default function DashboardView(props: Props) {
     loadBandEquiv,
     bandEquivMap,
     setBandEquivMap,
+    bandComboFactor,
+    setBandComboFactor,
     saveBandEquiv,
     weight,
     setWeight,
@@ -146,8 +150,68 @@ export default function DashboardView(props: Props) {
           <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fbfbfb", marginTop: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
               <div style={{ fontWeight: 800 }}>Band Equivalent Weights</div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Saved locally (Dexie) per user</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Saved locally (Dexie) per user and synced with your settings</div>
             </div>
+
+            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
+              These are your default “equivalent lbs” for band levels <b>1–5</b>. Used when a band set has no explicit override.
+              Combined bands use the <b>combo factor</b> below.
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(60px, 1fr))", gap: 8, marginTop: 10 }}>
+              {(["1","2","3","4","5"] as const).map((k) => (
+                <div key={k} style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>L{k}</div>
+                  <input
+                    value={String(bandEquivMap[k] ?? "")}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const num = raw.trim() === "" ? 0 : Number(raw);
+                      const next = { ...bandEquivMap, [k]: Number.isFinite(num) ? num : bandEquivMap[k] };
+                      setBandEquivMap(next);
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 180px)", gap: 8, marginTop: 10 }}>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>Combined factor</div>
+                <input
+                  value={String(bandComboFactor ?? "")}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    const num = raw === "" ? NaN : Number(raw);
+                    if (Number.isFinite(num)) setBandComboFactor(num);
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
+              Example: a 1 + 2 combo uses <code>(Band 1 + Band 2) × combo factor</code>.
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button onClick={() => saveBandEquiv(bandEquivMap, bandComboFactor)}>Save</button>
+              <button
+                onClick={() => {
+                  const defaults = { "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 };
+                  const factor = 1.1;
+                  setBandEquivMap(defaults);
+                  setBandComboFactor(factor);
+                  saveBandEquiv(defaults, factor);
+                }}
+                title="Reset to defaults"
+              >
+                Reset
+              </button>
+              <button onClick={loadBandEquiv} title="Reload saved values">
+                Reload
+              </button>
+            </div>
+          </div>
 
             <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
               These are your default “equivalent lbs” for band levels <b>1–5</b>. Used only when a band set has no explicit “Est lbs”.
@@ -299,4 +363,5 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
