@@ -171,8 +171,8 @@ type LastSetSummary = {
 type ExerciseDraft = {
   loadType: "weight" | "band" | "bodyweight";
   weight: string; // used for loadType=weight
-  bandLevel: string; // primary level 1..5 when loadType=band
-  bandLevel2: string; // optional secondary band level when combined
+  bandLevel: string; // primary 1..5 when loadType=band
+  bandLevel2: string; // optional secondary band level for combined setup
   bandMode: "assist" | "resist";
   bandConfig: "single" | "doubled" | "combined";
   bandEst: string; // optional override
@@ -1085,7 +1085,6 @@ async function addSet(exerciseId: string) {
 
   const loadType = d.loadType || "weight";
 
-  // Band equiv map and combo factor are read through refs for stable estimation.
   let weight_lbs: number | null = null;
   let band_level: number | null = null;
   let band_mode: "assist" | "resist" | null = null;
@@ -1102,7 +1101,7 @@ async function addSet(exerciseId: string) {
   } else if (loadType === "band") {
     const lvl = d.bandLevel ? Number(d.bandLevel) : null;
     if (!lvl || lvl < 1 || lvl > 5) {
-      alert("Band level (1–5) required.");
+      alert("Primary band level (1–5) required.");
       return;
     }
     band_level = lvl;
@@ -2256,6 +2255,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
