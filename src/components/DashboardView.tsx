@@ -131,6 +131,40 @@ export default function DashboardView(props: Props) {
     setSecs,
   } = props;
 
+  const sumPoints = (points: Point[]) => points.reduce((acc, p) => acc + (Number(p.y) || 0), 0);
+  const activeDays = (points: Point[]) => points.filter((p) => Number(p.y) > 0).length;
+
+  const tonnage28 = Math.round(sumPoints(tonnageSeries));
+  const sets28 = Math.round(sumPoints(setsSeries));
+  const trainingDays28 = activeDays(setsSeries);
+  const avgTonnagePerTrainingDay = trainingDays28 > 0 ? Math.round(tonnage28 / trainingDays28) : 0;
+  const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
+
+  function trendText(points: Point[]) {
+    if (!points || points.length < 2) return "Not enough data";
+    const last = Number(points[points.length - 1]?.y ?? 0);
+    const prev = Number(points[points.length - 2]?.y ?? 0);
+    if (!Number.isFinite(last) || !Number.isFinite(prev)) return "Not enough data";
+    if (last > prev) return "Up";
+    if (last < prev) return "Down";
+    return "Flat";
+  }
+
+  function latestPoint(points: Point[]) {
+    return points && points.length > 0 ? Number(points[points.length - 1].y) : null;
+  }
+
+  function bestPoint(points: Point[]) {
+    if (!points || points.length === 0) return null;
+    return Math.max(...points.map((p) => Number(p.y) || 0));
+  }
+
+  const keyLiftCards = [
+    { label: "Bench Press", points: benchSeries },
+    { label: "Squat", points: squatSeries },
+    { label: "Deadlift / RDL", points: dlSeries }
+  ];
+
   return (
     <>
 
@@ -211,6 +245,75 @@ export default function DashboardView(props: Props) {
                 Reload
               </button>
             </div>
+          </div>
+
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Analytics Layer — Phase 1</h4>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa" }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>28-Day Tonnage</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{tonnage28.toLocaleString()}</div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                Avg / training day: {avgTonnagePerTrainingDay.toLocaleString()}
+              </div>
+            </div>
+
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa" }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>28-Day Work Sets</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{sets28.toLocaleString()}</div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                Avg / training day: {avgSetsPerTrainingDay}
+              </div>
+            </div>
+
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa" }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Training Days (28d)</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{trainingDays28}</div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                Days with logged sets
+              </div>
+            </div>
+
+            <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa" }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>This Week Snapshot</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>
+                {weeklyCoach ? weeklyCoach.sessionsThis : "—"} sessions
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                {weeklyCoach ? `${weeklyCoach.tonnageThis.toLocaleString()} tonnage / ${weeklyCoach.setsThis} sets` : "Refresh dashboard"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+            {keyLiftCards.map((card) => {
+              const latest = latestPoint(card.points);
+              const best = bestPoint(card.points);
+              const trend = trendText(card.points);
+
+              return (
+                <div key={card.label} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fbfbfb" }}>
+                  <div style={{ fontWeight: 800 }}>{card.label}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>Latest e1RM</div>
+                      <div style={{ fontSize: 18, fontWeight: 800 }}>{latest != null ? Math.round(latest) : "—"}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>Best e1RM</div>
+                      <div style={{ fontSize: 18, fontWeight: 800 }}>{best != null ? Math.round(best) : "—"}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>Trend</div>
+                      <div style={{ fontSize: 18, fontWeight: 800 }}>{trend}</div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
+                    Built from canonical exercise grouping and band-aware load logic already in the tracker.
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
@@ -326,6 +429,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
