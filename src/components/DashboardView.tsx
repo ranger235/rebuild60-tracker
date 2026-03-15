@@ -213,43 +213,6 @@ export default function DashboardView(props: Props) {
             </div>
           </div>
 
-            <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
-              These are your default “equivalent lbs” for band levels <b>1–5</b>. Used only when a band set has no explicit “Est lbs”.
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(60px, 1fr))", gap: 8, marginTop: 10 }}>
-              {(["1","2","3","4","5"] as const).map((k) => (
-                <div key={k} style={{ display: "grid", gap: 6 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.8 }}>L{k}</div>
-                  <input
-                    value={String(bandEquivMap[k] ?? "")}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const num = raw.trim() === "" ? 0 : Number(raw);
-                      const next = { ...bandEquivMap, [k]: Number.isFinite(num) ? num : bandEquivMap[k] };
-                      setBandEquivMap(next);
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button onClick={() => saveBandEquiv(bandEquivMap)}>Save</button>
-              <button
-                onClick={() =>
-                  saveBandEquiv({ "1": 10, "2": 20, "3": 30, "4": 40, "5": 50 })
-                }
-                title="Reset to defaults"
-              >
-                Reset
-              </button>
-              <button onClick={loadBandEquiv} title="Reload saved values">
-                Reload
-              </button>
-            </div>
-          </div>
-
           <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
           <div style={{ display: "grid", gap: 12 }}>
             <LineChart title="Bodyweight (lbs)" points={weightSeries} />
@@ -363,5 +326,6 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
