@@ -2376,6 +2376,9 @@ async function syncNow() {
           />
         </ErrorBoundary>
       )}
+  </div>
+  );
+}
 
 
 
