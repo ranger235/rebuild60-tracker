@@ -159,7 +159,42 @@ export default function DashboardView(props: Props) {
     return Math.max(...points.map((p) => Number(p.y) || 0));
   }
 
-  const keyLiftCards = [
+  
+  function detectMilestones() {
+    const milestones: string[] = [];
+
+    const lifts = [
+      { name: "Bench Press", series: benchSeries, thresholds: [135,185,225,275,315] },
+      { name: "Squat", series: squatSeries, thresholds: [185,225,275,315,365,405] },
+      { name: "Deadlift", series: dlSeries, thresholds: [225,275,315,365,405,455] },
+    ];
+
+    lifts.forEach(l=>{
+      if(!l.series || l.series.length===0) return;
+      const best=Math.max(...l.series.map(p=>Number(p.y)||0));
+      const latest=l.series[l.series.length-1]?.y ?? 0;
+
+      if(latest===best && best>0){
+        milestones.push(`New ${l.name} PR — ${Math.round(best)} e1RM`);
+      }
+
+      l.thresholds.forEach(t=>{
+        const hit=l.series.find(p=>Number(p.y)>=t);
+        if(hit && latest>=t){
+          milestones.push(`Crossed ${t} ${l.name}`);
+        }
+      });
+    });
+
+    if(trainingDays28>=20){
+      milestones.push("20 Training Days in 28 Days");
+    }
+
+    return milestones.slice(0,5);
+  }
+
+  const milestoneList = detectMilestones();
+const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
     { label: "Squat", points: squatSeries },
     { label: "Deadlift / RDL", points: dlSeries }
@@ -316,7 +351,24 @@ export default function DashboardView(props: Props) {
             })}
           </div>
 
-          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Quick Log Trends (last 28 days)</h4>
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Recent Milestones</h4>
+
+          {milestoneList.length===0 && (
+            <div style={{fontSize:13,opacity:.75}}>No new milestones detected yet.</div>
+          )}
+
+          {milestoneList.length>0 && (
+            <div style={{display:"grid",gap:6}}>
+              {milestoneList.map((m,i)=>(
+                <div key={i} style={{border:"1px solid #ddd",borderRadius:10,padding:10,background:"#fafafa"}}>
+                  {m}
+                </div>
+              ))}
+            </div>
+          )}
+
+Quick Log Trends (last 28 days)</h4>
           <div style={{ display: "grid", gap: 12 }}>
             <LineChart title="Bodyweight (lbs)" points={weightSeries} />
             <LineChart title="Waist (in)" points={waistSeries} />
@@ -429,6 +481,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
