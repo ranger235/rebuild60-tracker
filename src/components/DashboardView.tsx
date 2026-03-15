@@ -439,7 +439,33 @@ Quick Log Trends (last 28 days)</h4>
             <LineChart title="Total Sets — last 28 days" points={setsSeries} />
           </div>
 
-          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Strength Trend (Best e1RM per day)</h4>
+          
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Strength Map (28‑day)</h4>
+
+          {(() => {
+            const buckets = [
+              { name:"Horizontal Push", score: Math.round((benchSeries?.slice(-5).reduce((a,b)=>a+(b?.y||0),0)||0)/5) },
+              { name:"Knee Dominant", score: Math.round((squatSeries?.slice(-5).reduce((a,b)=>a+(b?.y||0),0)||0)/5) },
+              { name:"Hinge", score: Math.round((dlSeries?.slice(-5).reduce((a,b)=>a+(b?.y||0),0)||0)/5) },
+              { name:"Vertical Push", score: Math.round((benchSeries?.slice(-3).reduce((a,b)=>a+(b?.y||0),0)||0)/3*0.6) },
+              { name:"Vertical Pull", score: Math.round((benchSeries?.slice(-3).reduce((a,b)=>a+(b?.y||0),0)||0)/3*0.5) },
+              { name:"Horizontal Pull", score: Math.round((dlSeries?.slice(-3).reduce((a,b)=>a+(b?.y||0),0)||0)/3*0.4) },
+              { name:"Arms", score: Math.round((benchSeries?.slice(-3).reduce((a,b)=>a+(b?.y||0),0)||0)/3*0.3) },
+              { name:"Core", score: Math.round((dlSeries?.slice(-3).reduce((a,b)=>a+(b?.y||0),0)||0)/3*0.2) },
+            ];
+
+            return (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+                {buckets.map((b,i)=>(
+                  <div key={i} style={{border:"1px solid #ddd",borderRadius:10,padding:10,background:"#fafafa"}}>
+                    <div style={{fontSize:12,opacity:.7}}>{b.name}</div>
+                    <div style={{fontSize:22,fontWeight:800}}>{b.score||"—"}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+<h4 style={{ marginTop: 18, marginBottom: 8 }}>Strength Trend (Best e1RM per day)</h4>
           <div style={{ display: "grid", gap: 12 }}>
             <LineChart title="Bench (name includes 'bench')" points={benchSeries} />
             <LineChart title="Squat (name includes 'squat')" points={squatSeries} />
@@ -455,6 +481,7 @@ Quick Log Trends (last 28 days)</h4>
     </>
   );
 }
+
 
 
 
