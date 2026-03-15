@@ -155,7 +155,7 @@ type SetLite = {
   weight_lbs: number | null;
   band_level?: number | null;
   band_mode?: "assist" | "resist" | null;
-  band_config?: "single" | "doubled" | null;
+  band_config?: string | null; // "single" | "doubled" | "combo:<secondary_level>"
   band_est_lbs?: number | null;
   reps: number | null;
   rpe: number | null;
@@ -171,14 +171,60 @@ type LastSetSummary = {
 type ExerciseDraft = {
   loadType: "weight" | "band" | "bodyweight";
   weight: string; // used for loadType=weight
-  bandLevel: string; // 1..5 when loadType=band
+  bandLevel: string; // primary level 1..5 when loadType=band
+  bandLevel2: string; // optional secondary band level when combined
   bandMode: "assist" | "resist";
-  bandConfig: "single" | "doubled";
+  bandConfig: "single" | "doubled" | "combined";
   bandEst: string; // optional override
   reps: string;
   rpe: string;
   warmup: boolean;
 };
+
+function parseBandConfig(config: string | null | undefined): { mode: "single" | "doubled" | "combined"; secondaryLevel: number | null } {
+  const raw = String(config || "single");
+  if (raw === "doubled") return { mode: "doubled", secondaryLevel: null };
+  if (raw.startsWith("combo:")) {
+    const lvl = Number(raw.split(":")[1] || "");
+    return { mode: "combined", secondaryLevel: Number.isFinite(lvl) ? lvl : null };
+  }
+  return { mode: "single", secondaryLevel: null };
+}
+
+function buildBandConfig(mode: "single" | "doubled" | "combined", secondaryLevel: number | null): string {
+  if (mode === "combined" && secondaryLevel && secondaryLevel >= 1 && secondaryLevel <= 5) {
+    return `combo:${secondaryLevel}`;
+  }
+  if (mode === "doubled") return "doubled";
+  return "single";
+}
+
+function estimateBandLoad(
+  primaryLevel: number | null,
+  config: string | null | undefined,
+  overrideText: string | null | undefined
+): number | null {
+  const override = overrideText != null && String(overrideText).trim() !== "" ? Number(overrideText) : null;
+  if (override != null && Number.isFinite(override) && override > 0) return Math.round(override);
+
+  if (!primaryLevel || primaryLevel < 1 || primaryLevel > 5) return null;
+
+  const baseMap = bandEquivMapRef.current ?? {};
+  const primary = baseMap[String(primaryLevel)];
+  if (typeof primary !== "number" || !Number.isFinite(primary)) return null;
+
+  const parsed = parseBandConfig(config);
+  if (parsed.mode === "doubled") {
+    return Math.round(primary * 2);
+  }
+  if (parsed.mode === "combined") {
+    const secondary = parsed.secondaryLevel != null ? baseMap[String(parsed.secondaryLevel)] : null;
+    if (typeof secondary === "number" && Number.isFinite(secondary)) {
+      return Math.round((primary + secondary) * (bandComboFactorRef.current || 1.1));
+    }
+  }
+  return Math.round(primary);
+}
 
 function formatSet(s: SetLite) {
   const r = s.reps ?? "—";
@@ -191,17 +237,20 @@ function formatSet(s: SetLite) {
   }
   if (lt === "band") {
     const lvl = s.band_level ?? "—";
+    const parsed = parseBandConfig(s.band_config);
+    const cfg =
+      parsed.mode === "doubled"
+        ? "D"
+        : parsed.mode === "combined" && parsed.secondaryLevel
+          ? `+${parsed.secondaryLevel}`
+          : "S";
     const mode = s.band_mode === "assist" ? "A" : "R";
-    const cfg = s.band_config === "doubled" ? "D" : "S";
     const est =
       s.band_est_lbs != null
         ? Number(s.band_est_lbs)
-        : (() => {
-            const m = bandEquivMapRef.current?.[String(lvl)];
-            return typeof m === "number" ? m : null;
-          })();
+        : estimateBandLoad(typeof s.band_level === "number" ? s.band_level : null, s.band_config, null);
     const estTxt = est != null ? `~${est}` : "";
-    return `B${lvl}${mode}${cfg}${estTxt} x${r}${wu}${rpe}`;
+    return `B${lvl}${cfg}${mode}${estTxt} x${r}${wu}${rpe}`;
   }
 
   const w = s.weight_lbs ?? "—";
@@ -324,10 +373,15 @@ const [bandEquivMap, setBandEquivMap] = useState<Record<string, number>>({
   "4": 40,
   "5": 50
 });
+const [bandComboFactor, setBandComboFactor] = useState<number>(1.1);
 const bandEquivMapRef = useRef<Record<string, number>>(bandEquivMap);
+const bandComboFactorRef = useRef<number>(bandComboFactor);
 useEffect(() => {
   bandEquivMapRef.current = bandEquivMap;
 }, [bandEquivMap]);
+useEffect(() => {
+  bandComboFactorRef.current = bandComboFactor;
+}, [bandComboFactor]);
 
 async function loadBandEquiv() {
   if (!userId) return;
@@ -340,6 +394,10 @@ async function loadBandEquiv() {
         for (const k of ["1", "2", "3", "4", "5"]) {
           const v = (parsed as any)[k];
           if (typeof v === "number" && isFinite(v)) next[k] = v;
+        }
+        const factor = Number((parsed as any)?.comboFactor);
+        if (Number.isFinite(factor) && factor >= 1 && factor <= 2) {
+          setBandComboFactor(factor);
         }
         setBandEquivMap(next);
       }
@@ -355,7 +413,10 @@ async function saveBandEquiv(next: Record<string, number>) {
   await localdb.localSettings.put({
     user_id: userId,
     key: "band_equiv_v1",
-    value: JSON.stringify(next),
+    value: JSON.stringify({
+      ...next,
+      comboFactor: bandComboFactorRef.current
+    }),
     updatedAt
   });
   setBandEquivMap(next);
@@ -922,7 +983,7 @@ async function saveQuickLog() {
     setDraftByExerciseId((prev) => {
       const next = { ...prev };
       for (const e of ex) {
-        if (!next[e.id]) next[e.id] = { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
+        if (!next[e.id]) next[e.id] = { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
       }
       return next;
     });
@@ -968,7 +1029,7 @@ async function saveQuickLog() {
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [exerciseId]: { ...(prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }), ...patch }
+      [exerciseId]: { ...(prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }), ...patch }
     }));
   }
 
@@ -1001,7 +1062,7 @@ async function saveQuickLog() {
 
     setDraftByExerciseId((prev) => ({
       ...prev,
-      [id]: prev[id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
+      [id]: prev[id] ?? { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
     }));
 
     await openSession(openSessionId);
@@ -1014,7 +1075,7 @@ async function saveQuickLog() {
 async function addSet(exerciseId: string) {
   const d =
     draftByExerciseId[exerciseId] ??
-    { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
+    { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
 
   const reps = d.reps ? Number(d.reps) : null;
   if (!reps || reps <= 0) {
@@ -1024,13 +1085,11 @@ async function addSet(exerciseId: string) {
 
   const loadType = d.loadType || "weight";
 
-  // Band equiv map (from localSettings)
-  const bandEquiv = bandEquivMapRef.current;
-
+  // Band equiv map and combo factor are read through refs for stable estimation.
   let weight_lbs: number | null = null;
   let band_level: number | null = null;
   let band_mode: "assist" | "resist" | null = null;
-  let band_config: "single" | "doubled" | null = null;
+  let band_config: string | null = null;
   let band_est_lbs: number | null = null;
 
   if (loadType === "weight") {
@@ -1048,14 +1107,13 @@ async function addSet(exerciseId: string) {
     }
     band_level = lvl;
     band_mode = d.bandMode || "resist";
-    band_config = d.bandConfig || "single";
-    const override = d.bandEst ? Number(d.bandEst) : null;
-
-    const base = bandEquiv?.[String(lvl)] != null ? Number(bandEquiv[String(lvl)]) : null;
-    const cfgMult = band_config === "doubled" ? 2 : 1;
-    const est = override && override > 0 ? override : base != null ? base * cfgMult : null;
-
-    band_est_lbs = est != null ? Math.round(est) : null;
+    const secondaryLvl = d.bandLevel2 ? Number(d.bandLevel2) : null;
+    if (d.bandConfig === "combined" && (!secondaryLvl || secondaryLvl < 1 || secondaryLvl > 5)) {
+      alert("Second band level (1–5) required for combined bands.");
+      return;
+    }
+    band_config = buildBandConfig(d.bandConfig || "single", secondaryLvl && secondaryLvl >= 1 && secondaryLvl <= 5 ? secondaryLvl : null);
+    band_est_lbs = estimateBandLoad(lvl, band_config, d.bandEst);
   } else {
     // bodyweight
     weight_lbs = null;
@@ -1355,7 +1413,7 @@ async function addSet(exerciseId: string) {
 
       setDraftByExerciseId((prev) => ({
         ...prev,
-        [exerciseId]: prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
+        [exerciseId]: prev[exerciseId] ?? { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false }
       }));
     }
 
@@ -1528,12 +1586,14 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
     const chosen = compound ? pickFirstWorkSet(summary.sets) : pickTopSet(summary.sets);
     if (!chosen) return;
 
+    const parsedBand = parseBandConfig((chosen.band_config as any) ?? "single");
     updateDraft(exerciseId, {
       loadType: (chosen.load_type as any) ?? "weight",
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
       bandLevel: chosen.band_level != null ? String(chosen.band_level) : "",
+      bandLevel2: parsedBand.secondaryLevel != null ? String(parsedBand.secondaryLevel) : "",
       bandMode: (chosen.band_mode as any) ?? "resist",
-      bandConfig: (chosen.band_config as any) ?? "single",
+      bandConfig: parsedBand.mode,
       bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
@@ -1554,12 +1614,14 @@ function pickTopSet(setsAll: SetLite[]): SetLite | null {
 
     if (!chosen) return;
 
+    const parsedBand = parseBandConfig((chosen.band_config as any) ?? "single");
     updateDraft(exerciseId, {
       loadType: (chosen.load_type as any) ?? "weight",
       weight: chosen.weight_lbs != null ? String(chosen.weight_lbs) : "",
       bandLevel: chosen.band_level != null ? String(chosen.band_level) : "",
+      bandLevel2: parsedBand.secondaryLevel != null ? String(parsedBand.secondaryLevel) : "",
       bandMode: (chosen.band_mode as any) ?? "resist",
-      bandConfig: (chosen.band_config as any) ?? "single",
+      bandConfig: parsedBand.mode,
       bandEst: chosen.band_est_lbs != null ? String(chosen.band_est_lbs) : "",
       reps: chosen.reps != null ? String(chosen.reps) : "",
       rpe: chosen.rpe != null ? String(chosen.rpe) : "",
@@ -2194,6 +2256,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
