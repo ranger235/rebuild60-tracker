@@ -110,9 +110,17 @@ export default function WorkoutLoggerView(props: Props) {
     createTemplate,
     openTemplate,
     deleteTemplate,
+    editTemplateName,
+    setEditTemplateName,
+    editTemplateDesc,
+    setEditTemplateDesc,
+    saveTemplateMeta,
     newTemplateExerciseName,
     setNewTemplateExerciseName,
     addExerciseToTemplate,
+    renameTemplateExercise,
+    deleteTemplateExercise,
+    moveTemplateExercise,
     startSessionFromTemplate,
     displayExerciseName,
     sessions,
@@ -503,6 +511,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
