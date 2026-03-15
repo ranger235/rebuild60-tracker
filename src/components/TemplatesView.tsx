@@ -15,9 +15,18 @@ type Props = {
   openTemplate: (templateId: string) => void;
   deleteTemplate: (templateId: string) => void;
 
+  editTemplateName: string;
+  setEditTemplateName: (v: string) => void;
+  editTemplateDesc: string;
+  setEditTemplateDesc: (v: string) => void;
+  saveTemplateMeta: () => void;
+
   newTemplateExerciseName: string;
   setNewTemplateExerciseName: (v: string) => void;
   addExerciseToTemplate: () => void;
+  renameTemplateExercise: (templateExerciseId: string, rawName: string) => void;
+  deleteTemplateExercise: (templateExerciseId: string) => void;
+  moveTemplateExercise: (templateExerciseId: string, direction: -1 | 1) => void;
 
   startSessionFromTemplate: () => void;
 
@@ -35,9 +44,17 @@ export default function TemplatesView({
   createTemplate,
   openTemplate,
   deleteTemplate,
+  editTemplateName,
+  setEditTemplateName,
+  editTemplateDesc,
+  setEditTemplateDesc,
+  saveTemplateMeta,
   newTemplateExerciseName,
   setNewTemplateExerciseName,
   addExerciseToTemplate,
+  renameTemplateExercise,
+  deleteTemplateExercise,
+  moveTemplateExercise,
   startSessionFromTemplate,
   displayExerciseName
 }: Props) {
@@ -102,7 +119,24 @@ export default function TemplatesView({
       )}
 
       {openTemplateId && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 10, display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Edit template</div>
+            <input
+              placeholder="Template name"
+              value={editTemplateName}
+              onChange={(e) => setEditTemplateName(e.target.value)}
+            />
+            <input
+              placeholder="Description (optional)"
+              value={editTemplateDesc}
+              onChange={(e) => setEditTemplateDesc(e.target.value)}
+            />
+            <div>
+              <button onClick={saveTemplateMeta}>Save Template Details</button>
+            </div>
+          </div>
+
           <div style={{ display: "flex", gap: 10 }}>
             <input
               placeholder="Add exercise to template"
@@ -114,20 +148,39 @@ export default function TemplatesView({
           </div>
 
           {templateExercises.length > 0 && (
-            <div style={{ marginTop: 10, opacity: 0.9 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Template exercises</div>
-              <ol>
+            <div style={{ marginTop: 2, opacity: 0.95 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8, marginBottom: 8 }}>Template exercises</div>
+              <div style={{ display: "grid", gap: 8 }}>
                 {templateExercises
                   .slice()
                   .sort((a, b) => a.sort_order - b.sort_order)
-                  .map((e) => (
-                    <li key={e.id}>{displayExerciseName(e.name)}</li>
+                  .map((e, idx, arr) => (
+                    <div
+                      key={e.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto auto auto",
+                        gap: 8,
+                        alignItems: "center",
+                        border: "1px solid #ddd",
+                        borderRadius: 8,
+                        padding: 8
+                      }}
+                    >
+                      <input
+                        value={e.name}
+                        onChange={(ev) => renameTemplateExercise(e.id, ev.target.value)}
+                      />
+                      <button onClick={() => moveTemplateExercise(e.id, -1)} disabled={idx === 0} title="Move up">↑</button>
+                      <button onClick={() => moveTemplateExercise(e.id, 1)} disabled={idx === arr.length - 1} title="Move down">↓</button>
+                      <button onClick={() => deleteTemplateExercise(e.id)} title="Delete exercise">✕</button>
+                    </div>
                   ))}
-              </ol>
+              </div>
             </div>
           )}
 
-          <button onClick={startSessionFromTemplate} style={{ marginTop: 10 }}>
+          <button onClick={startSessionFromTemplate} style={{ marginTop: 4 }}>
             Start Session from Template
           </button>
         </div>
@@ -135,3 +188,4 @@ export default function TemplatesView({
     </div>
   );
 }
+
