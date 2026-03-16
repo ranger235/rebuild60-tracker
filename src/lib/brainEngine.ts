@@ -1,5 +1,5 @@
 import { DEFAULT_SEQUENCE } from "./sessionSequence";
-import { allSlotsForFocus, pickBestCandidateForSlot, type Slot } from "./slotEngine";
+import { allSlotsForFocus, type Slot } from "./slotEngine";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -396,6 +396,61 @@ function analyzeProgressionMemory(hist: ExerciseHistory | null): ProgressionMemo
   return { strength, fatigue, stalled };
 }
 
+
+function scoreCandidateForSlot(
+  hist: ExerciseHistory | null,
+  usedKeys: Set<string>
+): { score: number; label: "Mainstay" | "Rotation pick" } {
+  if (!hist) {
+    return { score: 15, label: "Rotation pick" };
+  }
+
+  if (usedKeys.has(hist.key)) {
+    return { score: -1000, label: "Rotation pick" };
+  }
+
+  const familiarity = 70;
+  const daysAgo = hist.lastPerformedDaysAgo ?? 14;
+  const freshness = Math.max(0, Math.min(30, Math.round(daysAgo)));
+  const score = familiarity + freshness;
+  const label = daysAgo >= 10 ? "Rotation pick" : "Mainstay";
+
+  return { score, label };
+}
+
+function choosePrimaryHistoryForSlot(
+  candidates: string[],
+  history: ExerciseHistory[],
+  usedKeys: Set<string>
+): { hist: ExerciseHistory | null; selectionLabel: "Mainstay" | "Rotation pick" } {
+  const byKey = new Map(history.map((h) => [h.key, h]));
+
+  let bestHist: ExerciseHistory | null = null;
+  let bestScore = -Infinity;
+  let bestLabel: "Mainstay" | "Rotation pick" = "Rotation pick";
+
+  for (const key of candidates) {
+    const hist = byKey.get(key) ?? null;
+    const scored = scoreCandidateForSlot(hist, usedKeys);
+    if (scored.score > bestScore) {
+      bestScore = scored.score;
+      bestHist = hist;
+      bestLabel = scored.label;
+    }
+  }
+
+  return { hist: bestHist, selectionLabel: bestLabel };
+}
+
+function chooseFallbackKey(
+  candidates: string[],
+  usedKeys: Set<string>
+): string {
+  const unused = candidates.find((key) => !usedKeys.has(key));
+  return unused ?? candidates[0];
+}
+
+
 function chooseSiblingVariation(
   hist: ExerciseHistory | null,
   history: ExerciseHistory[],
@@ -522,18 +577,19 @@ function buildExercises(
   history: ExerciseHistory[]
 ): RecommendedExercise[] {
   const slotDefs = allSlotsForFocus(focus);
+  const usedKeys = new Set<string>();
 
   return slotDefs.map(({ slot, candidates }) => {
     const program = SLOT_PROGRAMS[slot];
-    const primaryHist = findHistory(history, candidates);
-    const primaryMemory = analyzeProgressionMemory(primaryHist);
-    const scored = pickBestCandidateForSlot(slot, history, mode);
-    const best = scored[0] ?? null;
-    const bestKey = best?.key ?? candidates[0];
-    const bestHist = history.find((h) => h.key === bestKey) ?? null;
-    const activeHist = bestHist ?? primaryHist;
-    const activeMemory = analyzeProgressionMemory(activeHist);
-    const key = activeHist?.key ?? bestKey;
+    const primaryChoice = choosePrimaryHistoryForSlot(candidates, history, usedKeys);
+    const primaryHist = primaryChoice.hist;
+    const memory = analyzeProgressionMemory(primaryHist);
+    const swapCandidate = memory.stalled ? chooseSiblingVariation(primaryHist, history, candidates) : null;
+    const swapHist = swapCandidate && !usedKeys.has(swapCandidate.key) ? swapCandidate : null;
+    const activeHist = swapHist ?? primaryHist;
+    const key = activeHist?.key ?? chooseFallbackKey(candidates, usedKeys);
+    usedKeys.add(key);
+
     const name = activeHist?.name ?? DISPLAY_NAME[key] ?? key;
     const sets = mode === "Reduced volume" && (slot === "Pump" || slot === "Calves") ? "2" : program.sets;
     const loadInfo = renderLoad(activeHist, program.bump, mode, program.reps, name);
@@ -545,35 +601,22 @@ function buildExercises(
     let eventTag: string | undefined;
     let swappedFrom: string | null = null;
 
-    const forcedSwap = !!(primaryHist && bestHist && primaryHist.key !== bestHist.key && primaryMemory.stalled);
-    const scoredRotation = !!(primaryHist && bestHist && primaryHist.key !== bestHist.key && !primaryMemory.stalled);
-
-    if (forcedSwap && primaryHist && bestHist) {
-      loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${bestHist.name} from your own logged exercise pool.`;
-      note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${bestHist.name} gets the nod for this block.`;
+    if (swapHist && primaryHist) {
+      loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${swapHist.name} from your own logged exercise pool.`;
+      note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${swapHist.name} gets the nod for this block.`;
       eventTag = "Variation swap";
       swappedFrom = primaryHist.name;
-    } else if (scoredRotation && primaryHist && bestHist) {
-      loadInfo.loadBasis = `Load path: slot scoring gave ${bestHist.name} the edge today — enough familiarity to be useful, enough freshness to keep things moving.`;
-      note = `${bestHist.name} wins this slot on a 70/30 familiarity-to-freshness score, instead of just repeating ${primaryHist.name} again.`;
-      eventTag = "Fresh rotation";
-      swappedFrom = primaryHist.name;
-    } else if (activeMemory.strength === "improving" && activeMemory.fatigue === "stable" && activeHist?.lastReps) {
-      note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
-      eventTag = mode === "Progression" ? "Progression push" : "Trend green";
-    } else if (activeMemory.strength === "flat" && activeMemory.fatigue === "rising") {
-      note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
-      eventTag = "Hold steady";
     } else if (mode === "Reduced volume") {
-      eventTag = best?.tags.includes("Recovery-friendly") ? "Recovery-friendly" : "Reduced volume";
-    } else if (best?.tags.includes("Familiar") && !best?.tags.includes("Fresh")) {
-      eventTag = "Familiar anchor";
-    } else if (best?.tags.includes("Fresh")) {
-      eventTag = "Fresh option";
-    }
-
-    if (best && best.tags.length > 0 && !forcedSwap && !scoredRotation) {
-      note = `${note} Slot score: ${best.tags.join(", ")}.`;
+      note = `${note} Selection leans toward a lower-fatigue choice today.`;
+      eventTag = "Recovery-friendly";
+    } else if (memory.strength === "improving" && memory.fatigue === "stable" && activeHist?.lastReps) {
+      note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
+      eventTag = mode === "Progression" ? "Progression push" : primaryChoice.selectionLabel;
+    } else if (memory.strength === "flat" && memory.fatigue === "rising") {
+      note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
+      eventTag = "Hold load";
+    } else {
+      eventTag = primaryChoice.selectionLabel;
     }
 
     return {
@@ -713,6 +756,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
 
 
