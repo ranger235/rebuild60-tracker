@@ -145,6 +145,23 @@ function focusTone(focus: BrainFocus) {
   return "#f6f6f6";
 }
 
+function alertChipTone(text: string) {
+  const t = text.toLowerCase();
+  if (t.includes("override") || t.includes("recovery protection")) return { bg: "#fff3e8", border: "#efc9a8" };
+  if (t.includes("variation swap")) return { bg: "#f3efff", border: "#cdbef5" };
+  if (t.includes("progression")) return { bg: "#ebf8ee", border: "#b8dfc0" };
+  return { bg: "#f4f4f4", border: "#d9d9d9" };
+}
+
+function eventTagTone(text?: string) {
+  const t = (text || "").toLowerCase();
+  if (t.includes("swap")) return { bg: "#f3efff", border: "#cdbef5" };
+  if (t.includes("progress")) return { bg: "#ebf8ee", border: "#b8dfc0" };
+  if (t.includes("hold")) return { bg: "#fff8ea", border: "#ebd39e" };
+  if (t.includes("reduced")) return { bg: "#fff3e8", border: "#efc9a8" };
+  return { bg: "#f4f4f4", border: "#d9d9d9" };
+}
+
 export default function DashboardView(props: Props) {
   const {
     dashBusy,
@@ -310,6 +327,29 @@ export default function DashboardView(props: Props) {
               <div style={{ fontSize: 16, fontWeight: 800 }}>{brainSnapshot.recommendedSession.bias}</div>
             </div>
 
+            {brainSnapshot.recommendedSession.alerts?.length ? (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                {brainSnapshot.recommendedSession.alerts.map((alert) => {
+                  const tone = alertChipTone(alert);
+                  return (
+                    <div
+                      key={alert}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        background: tone.bg,
+                        border: `1px solid ${tone.border}`
+                      }}
+                    >
+                      {alert}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
             <div style={{ marginTop: 8, lineHeight: 1.4 }}>{brainSnapshot.recommendedSession.rationale}</div>
             <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>{brainSnapshot.recommendedSession.volumeNote}</div>
 
@@ -320,6 +360,22 @@ export default function DashboardView(props: Props) {
                     <div>
                       <div style={{ fontSize: 12, opacity: 0.75 }}>{ex.slot}</div>
                       <div style={{ fontWeight: 800 }}>{ex.name}</div>
+                      {ex.eventTag ? (
+                        <div
+                          style={{
+                            display: "inline-block",
+                            marginTop: 6,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: "4px 8px",
+                            borderRadius: 999,
+                            background: eventTagTone(ex.eventTag).bg,
+                            border: `1px solid ${eventTagTone(ex.eventTag).border}`
+                          }}
+                        >
+                          {ex.eventTag}
+                        </div>
+                      ) : null}
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontWeight: 800 }}>{ex.sets} × {ex.reps}</div>
@@ -539,6 +595,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
