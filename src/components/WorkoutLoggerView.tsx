@@ -113,6 +113,22 @@ type Props = {
     missed: string[];
     summary: string;
   } | null;
+  coachSessionSeed: {
+    sessionId: string;
+    title: string;
+    bias: string;
+    summary: string;
+    exercises: Array<{
+      exerciseId: string;
+      name: string;
+      slot: string;
+      sets: string;
+      reps: string;
+      load: string;
+      loadBasis: string;
+      note: string;
+    }>;
+  } | null;
 };
 
 export default function WorkoutLoggerView(props: Props) {
@@ -168,7 +184,8 @@ export default function WorkoutLoggerView(props: Props) {
     setTimerOn,
     secs,
     setSecs,
-    recommendationComparison
+    recommendationComparison,
+    coachSessionSeed
   } = props;
 
   return (
@@ -197,6 +214,22 @@ export default function WorkoutLoggerView(props: Props) {
               <strong>Swaps this session:</strong> {recommendationComparison.substitutions.map((s) => `${s.recommended} → ${s.actual}`).join(" • ")}
             </div>
           )}
+        </div>
+      )}
+
+      {coachSessionSeed && (
+        <div style={{ border: "1px solid #d5d5d5", borderRadius: 10, padding: 12, marginBottom: 12, background: "#f7fbff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800 }}>Loaded from Coach</div>
+            <div style={{ fontWeight: 700 }}>{coachSessionSeed.bias}</div>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 13 }}>
+            <strong>{coachSessionSeed.title}</strong>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>{coachSessionSeed.summary}</div>
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+            Draft boxes are pre-seeded from the coach target. Rep boxes use the midpoint of a range for quick logging, while the full target range stays visible on each exercise card below.
+          </div>
         </div>
       )}
 
@@ -344,6 +377,36 @@ export default function WorkoutLoggerView(props: Props) {
                                 <div style={{ opacity: 0.7 }}>No last data yet. Hit Refresh.</div>
                               )}
                             </div>
+
+                            {coachSessionSeed?.sessionId === openSessionId && (() => {
+                              const coachEx = coachSessionSeed.exercises.find((seed) => seed.exerciseId === ex.id);
+                              if (!coachEx) return null;
+                              const repMidpoint =
+                                coachEx.reps && coachEx.reps.includes("-")
+                                  ? Math.round(
+                                      coachEx.reps
+                                        .split("-")
+                                        .map((n) => Number(n.trim()))
+                                        .filter((n) => Number.isFinite(n))
+                                        .reduce((a, b) => a + b, 0) /
+                                        2
+                                    )
+                                  : null;
+                              return (
+                                <div style={{ marginTop: 10, padding: "8px 10px", border: "1px solid #d7e7f7", background: "#f7fbff", borderRadius: 8, fontSize: 12 }}>
+                                  <div style={{ fontWeight: 700 }}>Coach target — {coachEx.slot}</div>
+                                  <div style={{ marginTop: 4 }}>
+                                    {coachEx.sets} sets × {coachEx.reps} reps{coachEx.load ? ` @ ${coachEx.load}` : ""}
+                                  </div>
+                                  <div style={{ marginTop: 4, opacity: 0.85 }}>{coachEx.loadBasis}</div>
+                                  {repMidpoint != null && (
+                                    <div style={{ marginTop: 4, opacity: 0.8 }}>
+                                      Draft prefill uses midpoint <strong>{repMidpoint}</strong> from target range <strong>{coachEx.reps}</strong> for quick entry.
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
 
                             {/* Set entry */}
                             {d && (
@@ -575,6 +638,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
