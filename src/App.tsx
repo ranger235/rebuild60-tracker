@@ -18,6 +18,7 @@ import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
+import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 
 function todayISO(): string {
   const d = new Date();
@@ -2050,24 +2051,7 @@ function daysBetweenISO(a: string, b: string): number {
   return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
-function focusFromExerciseKey(k: string): BrainFocus {
-  if ([
-    "bench_press", "incline_bench_press", "dumbbell_bench_press", "overhead_press",
-    "dip", "lateral_raise", "chest_fly", "triceps_pressdown", "overhead_triceps_extension"
-  ].includes(k)) return "Push";
 
-  if ([
-    "barbell_row", "chest_supported_row", "seated_cable_row", "lat_pulldown", "pull_up",
-    "chin_up", "rear_delt_fly", "face_pull", "shrug", "curl", "preacher_curl", "hammer_curl"
-  ].includes(k)) return "Pull";
-
-  if ([
-    "deadlift", "romanian_deadlift", "squat", "ssb_squat", "split_squat", "leg_press",
-    "hack_squat", "leg_extension", "hamstring_curl", "calf_raise", "plank", "crunch"
-  ].includes(k)) return "Lower";
-
-  return "Mixed";
-}
 
 function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
   const entries: Array<[BrainFocus, number]> = [
@@ -2886,6 +2870,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
