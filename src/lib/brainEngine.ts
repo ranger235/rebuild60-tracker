@@ -18,6 +18,8 @@ export type ExerciseHistory = {
   recentSets: number;
   recentBestE1RM: number | null;
   lastPerformedDaysAgo: number | null;
+  recentTopSetE1RMs?: number[];
+  recentAvgSetReps?: number[];
 };
 
 export type BrainInput = {
@@ -94,6 +96,13 @@ type Decision = {
   wasOverride: boolean;
   overrideReason: string | null;
 };
+
+type ProgressionMemory = {
+  strength: "improving" | "flat" | "declining" | "unknown";
+  fatigue: "stable" | "rising" | "unknown";
+  stalled: boolean;
+};
+
 
 const DISPLAY_NAME: Record<string, string> = {
   bench_press: "Bench Press",
@@ -258,6 +267,49 @@ function nearestIncrement(value: number, increment: number): number {
   return Math.round(value / increment) * increment;
 }
 
+function analyzeProgressionMemory(hist: ExerciseHistory | null): ProgressionMemory {
+  const top = hist?.recentTopSetE1RMs ?? [];
+  const avg = hist?.recentAvgSetReps ?? [];
+
+  if (top.length < 3 || avg.length < 3) {
+    return { strength: "unknown", fatigue: "unknown", stalled: false };
+  }
+
+  const [t1, t2, t3] = top.slice(-3);
+  const [a1, a2, a3] = avg.slice(-3);
+  const priorTop = Math.max(t1, t2);
+  const topDelta = priorTop > 0 ? (t3 - priorTop) / priorTop : 0;
+
+  const strength =
+    topDelta > 0.015 ? "improving" :
+    topDelta < -0.015 ? "declining" :
+    "flat";
+
+  const fatigue = a3 < a1 - 0.5 || a3 < a2 - 0.5 ? "rising" : "stable";
+  const stalled = strength !== "improving" && fatigue === "rising";
+
+  return { strength, fatigue, stalled };
+}
+
+function chooseSiblingVariation(
+  hist: ExerciseHistory | null,
+  history: ExerciseHistory[],
+  candidates: string[]
+): ExerciseHistory | null {
+  if (!hist) return null;
+
+  const options = history
+    .filter((h) => h.key !== hist.key && candidates.includes(h.key))
+    .sort((a, b) => {
+      const aRecent = a.lastPerformedDaysAgo ?? 9999;
+      const bRecent = b.lastPerformedDaysAgo ?? 9999;
+      if (aRecent !== bRecent) return aRecent - bRecent;
+      return (b.recentSets ?? 0) - (a.recentSets ?? 0);
+    });
+
+  return options[0] ?? null;
+}
+
 function parseRepRange(reps: string): { min: number; max: number; target: number } {
   const cleaned = reps.trim();
   if (cleaned.includes("-")) {
@@ -366,11 +418,28 @@ function buildExercises(
 ): RecommendedExercise[] {
   const template = focus === "Push" ? PUSH_TEMPLATE : focus === "Pull" ? PULL_TEMPLATE : LOWER_TEMPLATE;
   return template.map((slot) => {
-    const hist = findHistory(history, slot.candidates);
-    const key = hist?.key ?? slot.candidates[0];
-    const name = hist?.name ?? DISPLAY_NAME[key] ?? key;
+    const primaryHist = findHistory(history, slot.candidates);
+    const memory = analyzeProgressionMemory(primaryHist);
+    const swapHist = memory.stalled ? chooseSiblingVariation(primaryHist, history, slot.candidates) : null;
+    const activeHist = swapHist ?? primaryHist;
+    const key = activeHist?.key ?? slot.candidates[0];
+    const name = activeHist?.name ?? DISPLAY_NAME[key] ?? key;
     const sets = mode === "Reduced volume" && (slot.slot === "Finisher" || slot.slot === "Calves") ? "2" : slot.sets;
-    const loadInfo = renderLoad(hist, slot.bump, mode, slot.reps, name);
+    const loadInfo = renderLoad(activeHist, slot.bump, mode, slot.reps, name);
+
+    let note = activeHist?.lastReps
+      ? `Last time ${Math.round(activeHist.lastLoad ?? 0)} x ${activeHist.lastReps}. ${slot.note}`
+      : slot.note;
+
+    if (swapHist && primaryHist) {
+      loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${swapHist.name} from your own logged exercise pool.`;
+      note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${swapHist.name} gets the nod for this block.`;
+    } else if (memory.strength === "improving" && memory.fatigue === "stable" && activeHist?.lastReps) {
+      note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
+    } else if (memory.strength === "flat" && memory.fatigue === "rising") {
+      note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
+    }
+
     return {
       slot: slot.slot,
       name,
@@ -378,7 +447,7 @@ function buildExercises(
       reps: slot.reps,
       load: loadInfo.load,
       loadBasis: loadInfo.loadBasis,
-      note: hist?.lastReps ? `Last time ${Math.round(hist.lastLoad ?? 0)} x ${hist.lastReps}. ${slot.note}` : slot.note
+      note
     };
   });
 }
@@ -484,6 +553,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
 
 
