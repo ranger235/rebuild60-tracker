@@ -158,21 +158,6 @@ export default function DashboardView(props: Props) {
     bandComboFactor,
     setBandComboFactor,
     saveBandEquiv,
-    weight,
-    setWeight,
-    waist,
-    setWaist,
-    sleepHours,
-    setSleepHours,
-    calories,
-    setCalories,
-    protein,
-    setProtein,
-    z2Minutes,
-    setZ2Minutes,
-    notes,
-    setNotes,
-    saveQuickLog,
     weeklyCoach,
     tonnageSeries,
     setsSeries,
@@ -338,10 +323,12 @@ export default function DashboardView(props: Props) {
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontWeight: 800 }}>{ex.sets} × {ex.reps}</div>
-                      <div style={{ fontSize: 12, opacity: 0.8 }}>{ex.load}</div>
+                      <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>Suggested load</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, opacity: 0.9 }}>{ex.load}</div>
                     </div>
                   </div>
                   <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>{ex.note}</div>
+                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>{ex.loadBasis}</div>
                 </div>
               ))}
             </div>
@@ -462,17 +449,29 @@ export default function DashboardView(props: Props) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginTop: 18 }}>
         <div style={cardStyle}>
-          <div style={{ fontWeight: 800 }}>Quick Log Today</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
-            <input value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="Weight (lbs)" />
-            <input value={waist} onChange={(e) => setWaist(e.target.value)} placeholder="Waist (in)" />
-            <input value={sleepHours} onChange={(e) => setSleepHours(e.target.value)} placeholder="Sleep (hours)" />
-            <input value={protein} onChange={(e) => setProtein(e.target.value)} placeholder="Protein (g)" />
-            <input value={calories} onChange={(e) => setCalories(e.target.value)} placeholder="Calories" />
-            <input value={z2Minutes} onChange={(e) => setZ2Minutes(e.target.value)} placeholder="Zone 2 (min)" />
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+            <div style={{ fontWeight: 800 }}>Dashboard Notes</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Quick Log lives on the main landing page now</div>
           </div>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes" rows={3} style={{ width: "100%", marginTop: 8 }} />
-          <button onClick={saveQuickLog} style={{ marginTop: 8 }}>Save Quick Log</button>
+          <div style={{ fontSize: 13, lineHeight: 1.4, marginTop: 10 }}>
+            Cleaner command-center view: the dashboard reads the system, and the Quick Log handles data entry on first load where it belongs.
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+            Weight, waist, sleep, protein, calories, Zone 2, and notes still feed these dashboard trends — they just are not duplicated here anymore.
+          </div>
+          {milestones.length > 0 ? (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.12)" }}>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Latest milestone</div>
+              <div style={{ fontWeight: 800 }}>{milestones[0].label}</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                {milestones[0].achieved_on} • {milestones[0].milestone_type}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75 }}>
+              No milestones logged yet — the board will start showing them as PRs and streak markers land.
+            </div>
+          )}
         </div>
 
         <div style={cardStyle}>
@@ -540,6 +539,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
