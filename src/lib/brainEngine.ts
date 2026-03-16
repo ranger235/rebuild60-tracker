@@ -58,6 +58,8 @@ export type RecommendedExercise = {
   load: string;
   loadBasis: string;
   note: string;
+  eventTag?: string;
+  swappedFrom?: string | null;
 };
 
 export type RecommendedSession = {
@@ -66,6 +68,7 @@ export type RecommendedSession = {
   title: string;
   rationale: string;
   volumeNote: string;
+  alerts: string[];
   exercises: RecommendedExercise[];
 };
 
@@ -431,13 +434,22 @@ function buildExercises(
       ? `Last time ${Math.round(activeHist.lastLoad ?? 0)} x ${activeHist.lastReps}. ${slot.note}`
       : slot.note;
 
+    let eventTag: string | undefined;
+    let swappedFrom: string | null = null;
+
     if (swapHist && primaryHist) {
       loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${swapHist.name} from your own logged exercise pool.`;
       note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${swapHist.name} gets the nod for this block.`;
+      eventTag = "Variation swap";
+      swappedFrom = primaryHist.name;
     } else if (memory.strength === "improving" && memory.fatigue === "stable" && activeHist?.lastReps) {
       note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
+      eventTag = mode === "Progression" ? "Progression push" : "Trend green";
     } else if (memory.strength === "flat" && memory.fatigue === "rising") {
       note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
+      eventTag = "Hold steady";
+    } else if (mode === "Reduced volume") {
+      eventTag = "Reduced volume";
     }
 
     return {
@@ -447,7 +459,9 @@ function buildExercises(
       reps: slot.reps,
       load: loadInfo.load,
       loadBasis: loadInfo.loadBasis,
-      note
+      note,
+      eventTag,
+      swappedFrom
     };
   });
 }
@@ -535,6 +549,27 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
         ? "Take the first compound seriously, then keep the rest crisp and businesslike."
         : "Run the planned work, keep execution clean, and let consistency do the lifting.";
 
+  const alerts: string[] = [];
+  if (decision.wasOverride) {
+    alerts.push(`Sequence override: ${decision.plannedFocus} delayed, ${decision.focus} runs today`);
+  } else {
+    alerts.push(`Sequence on track: ${decision.focus} is still next in line`);
+  }
+  if (decision.mode === "Progression") {
+    alerts.push("Progression window open");
+  } else if (decision.mode === "Reduced volume") {
+    alerts.push("Recovery protection mode");
+  }
+  const swappedExercises = recommendedExercises.filter((ex) => ex.swappedFrom);
+  if (swappedExercises.length > 0) {
+    for (const ex of swappedExercises.slice(0, 2)) {
+      alerts.push(`Variation swap: ${ex.swappedFrom} → ${ex.name}`);
+    }
+    if (swappedExercises.length > 2) {
+      alerts.push(`+${swappedExercises.length - 2} more swap${swappedExercises.length - 2 === 1 ? "" : "s"}`);
+    }
+  }
+
   return {
     readiness: { score: readinessScore, label: metricLabel(readinessScore) },
     momentum: { score: momentumScore, label: metricLabel(momentumScore) },
@@ -549,10 +584,12 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       title: `${decision.focus} Day`,
       rationale,
       volumeNote,
+      alerts,
       exercises: recommendedExercises
     }
   };
 }
+
 
 
 
