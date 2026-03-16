@@ -75,6 +75,8 @@ type Props = {
   draftByExerciseId: Record<string, Draft>;
   updateDraft: (exerciseId: string, patch: Partial<Draft>) => any;
   addSet: (exerciseId: string) => any;
+  deleteSet: (exerciseId: string, setId: string) => any;
+  deleteExerciseFromSession: (exerciseId: string) => any;
 
   // UI toggles
   advanced: boolean;
@@ -136,6 +138,8 @@ export default function WorkoutLoggerView(props: Props) {
     draftByExerciseId,
     updateDraft,
     addSet,
+    deleteSet,
+    deleteExerciseFromSession,
     advanced,
     setAdvanced,
     coachEnabled,
@@ -258,9 +262,18 @@ export default function WorkoutLoggerView(props: Props) {
                                 {defaultLabel}{" "}
                                 <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 600 }}>({defaultLabel})</span>
                               </div>
-                              <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
-                                Refresh
-                              </button>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
+                                  Refresh
+                                </button>
+                                <button
+                                  onClick={() => deleteExerciseFromSession(ex.id)}
+                                  style={{ padding: "6px 10px", color: "#8b0000" }}
+                                  title="Remove exercise and all sets from this session"
+                                >
+                                  Remove Exercise
+                                </button>
+                              </div>
                             </div>
 
                             <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
@@ -440,7 +453,7 @@ export default function WorkoutLoggerView(props: Props) {
                                       : null;
 
                                   return (
-                                    <div key={s3.id} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                    <div key={s3.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
                                       <div>
                                         <b>{s3.set_number}.</b>{" "}
                                         {formatSet({
@@ -455,7 +468,17 @@ export default function WorkoutLoggerView(props: Props) {
                                           is_warmup: !!s3.is_warmup
                                         })}
                                       </div>
-                                      <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                        <div style={{ opacity: 0.75 }}>{est ? `~1RM ${est}` : ""}</div>
+                                        <button
+                                          onClick={() => deleteSet(ex.id, s3.id)}
+                                          style={{ padding: "2px 8px", color: "#8b0000" }}
+                                          title="Delete this saved set"
+                                          aria-label={`Delete set ${s3.set_number} for ${defaultLabel}`}
+                                        >
+                                          ×
+                                        </button>
+                                      </div>
                                     </div>
                                   );
                                 })}
@@ -511,6 +534,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
