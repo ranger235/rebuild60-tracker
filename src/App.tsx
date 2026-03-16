@@ -18,6 +18,7 @@ import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
+import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 
 function todayISO(): string {
@@ -301,8 +302,11 @@ type RecommendationComparison = {
   volumeDelta: number | null;
   loadDeltaAvg: number | null;
   substitutions: Array<{ recommended: string; actual: string }>;
+  substitutionKeys: Array<{ recommendedKey: string; actualKey: string }>;
   extras: string[];
+  extrasKeys: string[];
   missed: string[];
+  missedKeys: string[];
   summary: string;
 };
 
@@ -379,11 +383,15 @@ function compareRecommendationToSession(params: {
   const missed = recExercises.filter((ex) => !actualKeys.has(ex.key));
   const extras = [...actualByKey.entries()]
     .filter(([key]) => !recExercises.some((r) => r.key === key))
-    .map(([, value]) => value);
+    .map(([key, value]) => ({ key, ...value }));
 
   const substitutions = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
     recommended: miss.name,
     actual: extras[idx].name
+  }));
+  const substitutionKeys = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
+    recommendedKey: miss.key,
+    actualKey: extras[idx].key
   }));
 
   let totalRecommendedSets = 0;
@@ -429,8 +437,11 @@ function compareRecommendationToSession(params: {
     volumeDelta,
     loadDeltaAvg,
     substitutions,
+    substitutionKeys,
     extras: extras.map((x) => x.name),
+    extrasKeys: extras.map((x) => x.key),
     missed: missed.map((x) => x.name),
+    missedKeys: missed.map((x) => x.key),
     summary
   };
 }
@@ -750,6 +761,7 @@ useEffect(() => {
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
+  const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
 
   type AiCoach = { text: string; ts: number; model: string };
   const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
@@ -2633,6 +2645,19 @@ async function refreshDashboard() {
         });
       }
 
+      let preferenceSignals = null;
+      try {
+        const prefRow = userId
+          ? await localdb.localSettings.get([userId, "recommendation_history_v1"])
+          : null;
+        const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
+        const prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
+        setPreferenceHistory(prefHistory);
+        preferenceSignals = derivePreferenceSignals(prefHistory);
+      } catch {
+        preferenceSignals = null;
+      }
+
       const brain = computeBrainSnapshot({
         sleepAvg7,
         proteinAvg7,
@@ -2654,7 +2679,8 @@ async function refreshDashboard() {
           }
           return dominantFocusFromCounts(counts);
         })() : null,
-        exerciseHistory: [...exerciseHistoryMap.values()]
+        exerciseHistory: [...exerciseHistoryMap.values()],
+        preferenceSignals
       });
 
       setTimelineWeeks(timeline);
@@ -2756,6 +2782,47 @@ async function syncNow() {
       sets
     }));
   }, [recommendationFingerprint, exercises, sets]);
+
+  useEffect(() => {
+    if (!userId || !openSessionId || !recommendationComparison?.available) return;
+    const hasWork = exercises.some((ex) =>
+      sets.some((s) => s.exercise_id === ex.id && !s.is_warmup)
+    );
+    if (!hasWork) return;
+
+    void (async () => {
+      const existing = await localdb.localSettings.get([userId, "recommendation_history_v1"]);
+      let history: PreferenceHistoryEntry[] = [];
+      try {
+        history = existing?.value ? JSON.parse(existing.value) : [];
+        if (!Array.isArray(history)) history = [];
+      } catch {
+        history = [];
+      }
+
+      const entry: PreferenceHistoryEntry = {
+        sessionId: openSessionId,
+        timestamp: Date.now(),
+        recommendedFocus: recommendationComparison.recommendedFocus,
+        actualFocus: recommendationComparison.actualFocus,
+        adherenceScore: recommendationComparison.adherenceScore,
+        substitutionKeys: recommendationComparison.substitutionKeys,
+        extrasKeys: recommendationComparison.extrasKeys,
+        missedKeys: recommendationComparison.missedKeys,
+        volumeDelta: recommendationComparison.volumeDelta,
+        loadDeltaAvg: recommendationComparison.loadDeltaAvg,
+      };
+
+      const next = [entry, ...history.filter((h) => h.sessionId !== openSessionId)].slice(0, 30);
+      await localdb.localSettings.put({
+        user_id: userId,
+        key: "recommendation_history_v1",
+        value: JSON.stringify(next),
+        updatedAt: Date.now(),
+      });
+      setPreferenceHistory(next);
+    })();
+  }, [userId, openSessionId, recommendationComparison, exercises, sets]);
 
   // refresh dashboard when opening the dashboard tab
   useEffect(() => {
@@ -3088,6 +3155,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
