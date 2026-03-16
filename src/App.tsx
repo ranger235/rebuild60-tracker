@@ -17,7 +17,6 @@ import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
 
 function todayISO(): string {
   const d = new Date();
@@ -571,20 +570,6 @@ useEffect(() => {
   };
 
   const [weeklyCoach, setWeeklyCoach] = useState<WeeklyCoach | null>(null);
-
-  type DashboardTimelineWeek = {
-    start: string;
-    end: string;
-    label: string;
-    sessions: number;
-    sets: number;
-    tonnage: number;
-    topLift: string;
-    dominantFocus: BrainFocus;
-  };
-
-  const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
-  const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
 
   type AiCoach = { text: string; ts: number; model: string };
   const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
@@ -1327,6 +1312,88 @@ async function addSet(exerciseId: string) {
   if (openSessionId) await openSession(openSessionId);
 }
 
+async function deleteSet(exerciseId: string, setId: string) {
+  const target = sets.find((s) => s.id === setId && s.exercise_id === exerciseId) ?? null;
+  if (!target) return;
+
+  try {
+    const remainingForExercise = await localdb.transaction("rw", localdb.localSets, async () => {
+      await localdb.localSets.delete(setId);
+      const remaining = await localdb.localSets.where({ exercise_id: exerciseId }).sortBy("set_number");
+      for (let i = 0; i < remaining.length; i++) {
+        const desired = i + 1;
+        if (remaining[i].set_number !== desired) {
+          await localdb.localSets.update(remaining[i].id, { set_number: desired });
+          remaining[i] = { ...remaining[i], set_number: desired };
+        }
+      }
+      return remaining;
+    });
+
+    await enqueue("delete_set", { set_id: setId });
+    await enqueue("renumber_sets", { ordered_set_ids: remainingForExercise.map((s) => s.id) });
+
+    setSets((prev) => {
+      const survivors = prev.filter((s) => s.id !== setId);
+      return survivors.map((s) => {
+        if (s.exercise_id !== exerciseId) return s;
+        const idx = remainingForExercise.findIndex((r) => r.id === s.id);
+        return idx >= 0 ? { ...s, set_number: remainingForExercise[idx].set_number } : s;
+      });
+    });
+  } catch (e: any) {
+    console.error(e);
+    alert(`Delete set failed: ${e?.message ?? String(e)}`);
+  }
+}
+
+async function deleteExerciseFromSession(exerciseId: string) {
+  const targetExercise = exercises.find((ex) => ex.id === exerciseId) ?? null;
+  if (!targetExercise) return;
+
+  const label = displayExerciseName(targetExercise.name || "Exercise");
+  const ok = confirm(
+    `Remove ${label} from this session and delete all its saved sets?
+
+This removes it locally immediately and queues a cloud delete.`
+  );
+  if (!ok) return;
+
+  try {
+    const remainingExercises = await localdb.transaction("rw", localdb.localExercises, localdb.localSets, async () => {
+      await localdb.localSets.where({ exercise_id: exerciseId }).delete();
+      await localdb.localExercises.delete(exerciseId);
+
+      const remaining = openSessionId
+        ? await localdb.localExercises.where({ session_id: openSessionId }).sortBy("sort_order")
+        : [];
+
+      for (let i = 0; i < remaining.length; i++) {
+        if (remaining[i].sort_order !== i) {
+          await localdb.localExercises.update(remaining[i].id, { sort_order: i });
+          remaining[i] = { ...remaining[i], sort_order: i };
+        }
+      }
+
+      return remaining;
+    });
+
+    await enqueue("delete_exercise", { exercise_id: exerciseId });
+    await enqueue("reorder_exercises", { ordered_exercise_ids: remainingExercises.map((ex) => ex.id) });
+
+    setExercises(remainingExercises);
+    setSets((prev) => prev.filter((s) => s.exercise_id !== exerciseId));
+    setDraftByExerciseId((prev) => {
+      const next = { ...prev };
+      delete next[exerciseId];
+      return next;
+    });
+  } catch (e: any) {
+    console.error(e);
+    alert(`Remove exercise failed: ${e?.message ?? String(e)}`);
+  }
+}
+
 // -----------------------------
   // Delete Session (local now + cloud queued)
   // -----------------------------
@@ -1951,53 +2018,6 @@ async function persistDetectedMilestones(args: {
   setMilestones(all.slice(0, 8));
 }
 
-function startOfWeekMonday(d: Date): Date {
-  const x = new Date(d);
-  const day = x.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  x.setDate(x.getDate() + diff);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
-function daysBetweenISO(a: string, b: string): number {
-  const da = new Date(`${a}T00:00:00`);
-  const db = new Date(`${b}T00:00:00`);
-  return Math.round((db.getTime() - da.getTime()) / 86400000);
-}
-
-function focusFromExerciseKey(k: string): BrainFocus {
-  if ([
-    "bench_press", "incline_bench_press", "dumbbell_bench_press", "overhead_press",
-    "dip", "lateral_raise", "chest_fly", "triceps_pressdown", "overhead_triceps_extension"
-  ].includes(k)) return "Push";
-
-  if ([
-    "barbell_row", "chest_supported_row", "seated_cable_row", "lat_pulldown", "pull_up",
-    "chin_up", "rear_delt_fly", "face_pull", "shrug", "curl", "preacher_curl", "hammer_curl"
-  ].includes(k)) return "Pull";
-
-  if ([
-    "deadlift", "romanian_deadlift", "squat", "ssb_squat", "split_squat", "leg_press",
-    "hack_squat", "leg_extension", "hamstring_curl", "calf_raise", "plank", "crunch"
-  ].includes(k)) return "Lower";
-
-  return "Mixed";
-}
-
-function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
-  const entries: Array<[BrainFocus, number]> = [
-    ["Push", counts.Push],
-    ["Pull", counts.Pull],
-    ["Lower", counts.Lower],
-    ["Mixed", counts.Mixed]
-  ];
-  entries.sort((a, b) => b[1] - a[1]);
-  if (entries[0][1] === 0) return "Mixed";
-  if (entries[1][1] === entries[0][1]) return "Mixed";
-  return entries[0][0];
-}
-
 async function refreshDashboard() {
     if (!userId) return;
     setDashBusy(true);
@@ -2224,176 +2244,7 @@ async function refreshDashboard() {
           return v == null ? null : { xLabel: d.slice(5), y: Number(v) };
         })
         .filter(Boolean) as { xLabel: string; y: number }[];
-
-      const sleepAvg7 = (() => {
-        const last7 = slSeries.slice(-7).map((x) => Number(x.y)).filter((x) => Number.isFinite(x));
-        if (last7.length === 0) return null;
-        return last7.reduce((a, b) => a + b, 0) / last7.length;
-      })();
-
-      const proteinAvg7 = (() => {
-        const last7 = pSeries.slice(-7).map((x) => Number(x.y)).filter((x) => Number.isFinite(x));
-        if (last7.length === 0) return null;
-        return last7.reduce((a, b) => a + b, 0) / last7.length;
-      })();
-
-      const userSessionIds = new Set(allSessions.map((s) => s.id));
-      const setsByExerciseId = new Map<string, LocalWorkoutSet[]>();
-      for (const st of allSets) {
-        const info = exInfo.get(st.exercise_id);
-        if (!info || !userSessionIds.has(info.session_id)) continue;
-        const arr = setsByExerciseId.get(st.exercise_id) ?? [];
-        arr.push(st);
-        setsByExerciseId.set(st.exercise_id, arr);
-      }
-
-      const sessionExercisesMap = new Map<string, LocalWorkoutExercise[]>();
-      for (const ex of allExercises) {
-        if (!userSessionIds.has(ex.session_id)) continue;
-        const arr = sessionExercisesMap.get(ex.session_id) ?? [];
-        arr.push(ex);
-        sessionExercisesMap.set(ex.session_id, arr);
-      }
-
-      const recentSessions = [...allSessions]
-        .filter((s) => s.exclude_from_analytics !== true)
-        .sort((a, b) => (a.day_date || isoToDay(a.started_at)) < (b.day_date || isoToDay(b.started_at)) ? 1 : -1);
-
-      const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-      const recentFocusWindow = recentSessions.slice(0, 9);
-      const exerciseHistoryMap = new Map<string, ExerciseHistory>();
-
-      for (const session of recentFocusWindow) {
-        const focusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-        const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
-        for (const ex of exercisesForSession) {
-          const key = exerciseKey(ex.name);
-          const focus = focusFromExerciseKey(key);
-          focusCounts[focus] += 1;
-        }
-        recentFocusCounts[dominantFocusFromCounts(focusCounts)] += 1;
-      }
-
-      const today = fmt(endDay);
-      for (const session of recentSessions) {
-        const exercisesForSession = (sessionExercisesMap.get(session.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
-        for (const ex of exercisesForSession) {
-          const key = exerciseKey(ex.name);
-          if (exerciseHistoryMap.has(key)) continue;
-          const focus = focusFromExerciseKey(key);
-          const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
-          let lastLoad: number | null = null;
-          let lastReps: number | null = null;
-          let bestE1: number | null = null;
-          for (const st of sets) {
-            const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
-            const reps = Number(st.reps ?? 0);
-            if (load > 0 && reps > 0) {
-              if (lastLoad == null || load > lastLoad) {
-                lastLoad = load;
-                lastReps = reps;
-              }
-              const e1 = oneRmEpley(load, reps);
-              if (bestE1 == null || e1 > bestE1) bestE1 = e1;
-            }
-          }
-          exerciseHistoryMap.set(key, {
-            key,
-            name: displayExerciseName(ex.name),
-            focus,
-            lastLoad,
-            lastReps,
-            recentSets: sets.length,
-            recentBestE1RM: bestE1,
-            lastPerformedDaysAgo: daysBetweenISO(session.day_date || isoToDay(session.started_at), today)
-          });
-        }
-      }
-
-      const timeline: DashboardTimelineWeek[] = [];
-      const currentWeekStart = startOfWeekMonday(endDay);
-      for (let offset = 7; offset >= 0; offset--) {
-        const start = new Date(currentWeekStart);
-        start.setDate(currentWeekStart.getDate() - offset * 7);
-        const endW = new Date(start);
-        endW.setDate(start.getDate() + 6);
-        const startIso = fmt(start);
-        const endIso = fmt(endW);
-        const weekSessions = recentSessions.filter((s) => {
-          const d = s.day_date || isoToDay(s.started_at);
-          return d >= startIso && d <= endIso;
-        });
-
-        let weekSets = 0;
-        let weekTonnage = 0;
-        let topLiftName = "—";
-        let topLiftScore = 0;
-        const weekFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-
-        for (const session of weekSessions) {
-          const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
-          const sessionFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-          for (const ex of exercisesForSession) {
-            const key = exerciseKey(ex.name);
-            const focus = focusFromExerciseKey(key);
-            sessionFocusCounts[focus] += 1;
-            const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
-            weekSets += sets.length;
-            for (const st of sets) {
-              const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
-              const reps = Number(st.reps ?? 0);
-              if (load > 0 && reps > 0) {
-                weekTonnage += load * reps;
-                const e1 = oneRmEpley(load, reps);
-                if (e1 > topLiftScore) {
-                  topLiftScore = e1;
-                  topLiftName = `${displayExerciseName(ex.name)} ${Math.round(e1)}`;
-                }
-              }
-            }
-          }
-          weekFocusCounts[dominantFocusFromCounts(sessionFocusCounts)] += 1;
-        }
-
-        timeline.push({
-          start: startIso,
-          end: endIso,
-          label: `${startIso.slice(5)} → ${endIso.slice(5)}`,
-          sessions: weekSessions.length,
-          sets: weekSets,
-          tonnage: Math.round(weekTonnage),
-          topLift: topLiftName,
-          dominantFocus: dominantFocusFromCounts(weekFocusCounts)
-        });
-      }
-
-      const brain = computeBrainSnapshot({
-        sleepAvg7,
-        proteinAvg7,
-        trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
-        weeklyCoach: {
-          sessionsThis,
-          sessionsPrev,
-          tonnageThis: tonThis,
-          tonnagePrev: tonPrev,
-          setsThis,
-          setsPrev
-        },
-        recentFocusCounts,
-        lastSessionFocus: recentFocusWindow.length > 0 ? (() => {
-          const session = recentFocusWindow[0];
-          const counts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-          for (const ex of sessionExercisesMap.get(session.id) ?? []) {
-            counts[focusFromExerciseKey(exerciseKey(ex.name))] += 1;
-          }
-          return dominantFocusFromCounts(counts);
-        })() : null,
-        exerciseHistory: [...exerciseHistoryMap.values()]
-      });
-
-      setTimelineWeeks(timeline);
-      setBrainSnapshot(brain);
-      setTonnageSeries(tonSeries);
+setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
       setSquatSeries(squat);
@@ -2697,8 +2548,6 @@ async function syncNow() {
           aiCoachErr={aiCoachErr}
           aiCoach={aiCoach}
           milestones={milestones}
-          timelineWeeks={timelineWeeks}
-          brainSnapshot={brainSnapshot}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
           secs={secs}
@@ -2781,6 +2630,8 @@ async function syncNow() {
             draftByExerciseId={draftByExerciseId}
             updateDraft={updateDraft}
             addSet={addSet}
+            deleteSet={deleteSet}
+            deleteExerciseFromSession={deleteExerciseFromSession}
             advanced={advanced}
             setAdvanced={setAdvanced}
             coachEnabled={coachEnabled}
@@ -2800,6 +2651,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
