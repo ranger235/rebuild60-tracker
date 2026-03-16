@@ -1,6 +1,3 @@
-// exerciseFocusMap.ts
-// Central place for exercise → focus classification
-
 export type ExerciseFocus =
   | "Push"
   | "Pull"
@@ -16,26 +13,61 @@ export type ExerciseFocus =
   | "Mixed"
 
 export function focusFromExerciseKey(key: string): ExerciseFocus {
-
   const k = key.toLowerCase()
 
-  // Push patterns
+  // --- CHEST ---
   if (
     k.includes("bench") ||
-    k.includes("dip") ||
-    k.includes("press")
-  ) return "Push"
+    k.includes("chest press") ||
+    k.includes("dip")
+  ) return "Chest"
 
-  // Pull patterns
+  // --- BACK ---
   if (
     k.includes("row") ||
     k.includes("pull") ||
     k.includes("chin")
-  ) return "Pull"
+  ) return "Back"
 
-  // Lower body patterns
+  // --- SHOULDERS ---
+  if (
+    k.includes("overhead press") ||
+    k.includes("shoulder press") ||
+    k.includes("lateral raise")
+  ) return "Shoulders"
+
+  // --- BICEPS ---
+  if (
+    k.includes("curl")
+  ) return "Biceps"
+
+  // --- TRICEPS ---
+  if (
+    k.includes("tricep") ||
+    k.includes("pushdown") ||
+    k.includes("skull")
+  ) return "Triceps"
+
+  // --- QUADS ---
   if (
     k.includes("squat") ||
+    k.includes("leg press")
+  ) return "Quads"
+
+  // --- HAMSTRINGS ---
+  if (
+    k.includes("rdl") ||
+    k.includes("hamstring")
+  ) return "Hamstrings"
+
+  // --- GLUTES ---
+  if (
+    k.includes("hip thrust") ||
+    k.includes("glute")
+  ) return "Glutes"
+
+  // --- FALLBACK LOWER ---
+  if (
     k.includes("deadlift") ||
     k.includes("lunge") ||
     k.includes("leg")
@@ -43,3 +75,4 @@ export function focusFromExerciseKey(key: string): ExerciseFocus {
 
   return "Mixed"
 }
+
