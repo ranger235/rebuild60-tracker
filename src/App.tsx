@@ -1293,6 +1293,41 @@ async function saveQuickLog() {
   // -----------------------------
   // Workout: local-first helpers
   // -----------------------------
+  async function getDeletedSessionIds(): Promise<Set<string>> {
+    if (!userId) return new Set();
+    try {
+      const row = await localdb.localSettings.get([userId, "deleted_session_ids_v1"]);
+      const parsed = row?.value ? JSON.parse(row.value) : [];
+      return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string" && x.length > 0) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  async function rememberDeletedSessionId(sessionId: string) {
+    if (!userId) return;
+    const current = await getDeletedSessionIds();
+    current.add(sessionId);
+    await localdb.localSettings.put({
+      user_id: userId,
+      key: "deleted_session_ids_v1",
+      value: JSON.stringify([...current]),
+      updatedAt: Date.now()
+    });
+  }
+
+  async function forgetDeletedSessionId(sessionId: string) {
+    if (!userId) return;
+    const current = await getDeletedSessionIds();
+    if (!current.has(sessionId)) return;
+    current.delete(sessionId);
+    await localdb.localSettings.put({
+      user_id: userId,
+      key: "deleted_session_ids_v1",
+      value: JSON.stringify([...current]),
+      updatedAt: Date.now()
+    });
+  }
   async function loadSessionsForDay(day: string) {
     if (!userId) return;
 
@@ -1310,6 +1345,9 @@ async function saveQuickLog() {
         .map((op) => op?.payload?.session_id)
         .filter((id): id is string => typeof id === "string" && id.length > 0)
     );
+
+    const rememberedDeletes = await getDeletedSessionIds();
+    for (const id of rememberedDeletes) deletedIds.add(id);
 
     setSessions(rows.filter((row) => !deletedIds.has(row.id)).reverse());
   }
@@ -1356,6 +1394,10 @@ async function saveQuickLog() {
       title: "Week 1 Day 1",
       notes: null
     };
+
+    await forgetDeletedSessionId(id);
+
+    await forgetDeletedSessionId(id);
 
     await localdb.localSessions.put(local);
 
@@ -1736,6 +1778,7 @@ This removes it locally immediately and queues a cloud delete.`
 
       // queue cloud delete (handled in sync.ts update below)
       await enqueue("delete_session", { session_id: sessionId });
+      await rememberDeletedSessionId(sessionId);
 
       // refresh UI
       setOpenSessionId((cur) => (cur === sessionId ? null : cur));
@@ -3265,6 +3308,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
