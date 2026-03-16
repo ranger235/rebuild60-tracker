@@ -87,6 +87,14 @@ type TemplateSlot = {
   note: string;
 };
 
+type Decision = {
+  plannedFocus: Exclude<BrainFocus, "Mixed">;
+  focus: Exclude<BrainFocus, "Mixed">;
+  mode: "Progression" | "Base" | "Reduced volume";
+  wasOverride: boolean;
+  overrideReason: string | null;
+};
+
 const DISPLAY_NAME: Record<string, string> = {
   bench_press: "Bench Press",
   incline_bench_press: "Incline Bench Press",
@@ -183,20 +191,67 @@ function nextFocusFromSplit(
   return sequence[(idx + 1) % sequence.length] as Exclude<BrainFocus, "Mixed">;
 }
 
-function chooseFocus(input: BrainInput, recoveryScore: number): Exclude<BrainFocus, "Mixed"> {
+function choosePlannedFocus(input: BrainInput): Exclude<BrainFocus, "Mixed"> {
   const rotated = nextFocusFromSplit(input.lastSessionFocus, DEFAULT_SEQUENCE);
   const underHit = inferUnderrepresentedFocus(input.recentFocusCounts);
   const gap = input.recentFocusCounts[rotated] - input.recentFocusCounts[underHit];
 
-  if (recoveryScore < 60 && rotated === "Lower") return "Push";
   if (gap >= 2) return underHit;
   return rotated;
 }
 
+function fallbackOverrideFocus(plannedFocus: Exclude<BrainFocus, "Mixed">): Exclude<BrainFocus, "Mixed"> {
+  if (plannedFocus === "Lower") return "Push";
+  if (plannedFocus === "Push") return "Pull";
+  return "Push";
+}
+
 function progressionMode(readiness: number, recovery: number, momentum: number): "Progression" | "Base" | "Reduced volume" {
   if (recovery < 62 || readiness < 65) return "Reduced volume";
-  if (readiness >= 80 && recovery >= 70 && momentum >= 75) return "Progression";
+  if (readiness >= 85 && recovery >= 80 && momentum >= 85) return "Progression";
   return "Base";
+}
+
+function chooseDecision(
+  input: BrainInput,
+  readiness: number,
+  recovery: number,
+  momentum: number
+): Decision {
+  const plannedFocus = choosePlannedFocus(input);
+  const baseMode = progressionMode(readiness, recovery, momentum);
+
+  if (recovery < 45) {
+    const focus = fallbackOverrideFocus(plannedFocus);
+    return {
+      plannedFocus,
+      focus,
+      mode: "Reduced volume",
+      wasOverride: focus !== plannedFocus,
+      overrideReason:
+        focus !== plannedFocus
+          ? `Recovery is low, so ${plannedFocus} is delayed — not skipped — and ${focus} gets the nod for today.`
+          : "Recovery is low, so today stays light and crisp."
+    };
+  }
+
+  if (recovery < 60 && plannedFocus === "Lower") {
+    return {
+      plannedFocus,
+      focus: "Push",
+      mode: "Reduced volume",
+      wasOverride: true,
+      overrideReason: "Recovery is soft, so heavy lower work is delayed until next time. Today shifts to a lighter push session."
+    };
+  }
+
+  return {
+    plannedFocus,
+    focus: plannedFocus,
+    mode: baseMode,
+    wasOverride: false,
+    overrideReason: null
+  };
 }
 
 function nearestIncrement(value: number, increment: number): number {
@@ -360,16 +415,17 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const readinessScore = clamp(sleepScore * 0.35 + proteinScore * 0.25 + momentumScore * 0.2 + recoveryScore * 0.2, 25, 99);
   const complianceScore = clamp(cadenceScore * 0.7 + proteinScore * 0.2 + sleepScore * 0.1, 25, 99);
 
-  const focus = chooseFocus(input, recoveryScore);
-  const mode = progressionMode(readinessScore, recoveryScore, momentumScore);
-  const recommendedExercises = buildExercises(focus, mode, input.exerciseHistory);
+  const decision = chooseDecision(input, readinessScore, recoveryScore, momentumScore);
+  const recommendedExercises = buildExercises(decision.focus, decision.mode, input.exerciseHistory);
 
   const systemTake =
-    mode === "Progression"
-      ? "System says go — enough signal and enough recovery to nudge progression without getting stupid."
-      : mode === "Reduced volume"
-        ? "System says train, but keep your head on straight — enough fatigue is hanging around that today should be crisp, not heroic."
-        : "System says steady as she goes — productive base work beats forcing the issue.";
+    decision.wasOverride
+      ? `System called an audible — ${decision.overrideReason ?? "recovery is low enough to delay the planned session."}`
+      : decision.mode === "Progression"
+        ? "System says go — enough signal and enough recovery to nudge progression without getting stupid."
+        : decision.mode === "Reduced volume"
+          ? "System says train, but keep your head on straight — enough fatigue is hanging around that today should be crisp, not heroic."
+          : "System says steady as she goes — productive base work beats forcing the issue.";
 
   const signalCards: BrainSignalCard[] = [
     {
@@ -394,34 +450,41 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   ];
 
+  const rationale =
+    decision.wasOverride
+      ? `${decision.overrideReason} The planned ${decision.plannedFocus} session remains next in line after today.`
+      : decision.focus === "Push"
+        ? "Pressing is next in the split and current recovery is good enough to make it worth showing up with intent."
+        : decision.focus === "Pull"
+          ? "Pulling gets the nod — it follows the split cleanly and balances recent work without burying recovery."
+          : "Lower gets the nod — either it is next in line or it needs catching up, so we put work where work is owed.";
+
+  const volumeNote =
+    decision.mode === "Reduced volume"
+      ? "Trim one accessory set where needed and leave one more rep in reserve than usual."
+      : decision.mode === "Progression"
+        ? "Take the first compound seriously, then keep the rest crisp and businesslike."
+        : "Run the planned work, keep execution clean, and let consistency do the lifting.";
+
   return {
     readiness: { score: readinessScore, label: metricLabel(readinessScore) },
     momentum: { score: momentumScore, label: metricLabel(momentumScore) },
     recovery: { score: recoveryScore, label: metricLabel(recoveryScore) },
     compliance: { score: complianceScore, label: metricLabel(complianceScore) },
     systemTake,
-    nextFocus: `${focus} — ${mode}`,
+    nextFocus: `${decision.focus} — ${decision.mode}${decision.wasOverride ? " (override)" : ""}`,
     signalCards,
     recommendedSession: {
-      focus,
-      bias: mode,
-      title: `${focus} Day`,
-      rationale:
-        focus === "Push"
-          ? "Pressing is next in the split and current recovery is good enough to make it worth showing up with intent."
-          : focus === "Pull"
-            ? "Pulling gets the nod — it follows the split cleanly and balances recent work without burying recovery."
-            : "Lower gets the nod — either it is next in line or it needs catching up, so we put work where work is owed.",
-      volumeNote:
-        mode === "Reduced volume"
-          ? "Trim one accessory set where needed and leave one more rep in reserve than usual."
-          : mode === "Progression"
-            ? "Take the first compound seriously, then keep the rest crisp and businesslike."
-            : "Run the planned work, keep execution clean, and let consistency do the lifting.",
+      focus: decision.focus,
+      bias: decision.mode,
+      title: `${decision.focus} Day`,
+      rationale,
+      volumeNote,
       exercises: recommendedExercises
     }
   };
 }
+
 
 
 
