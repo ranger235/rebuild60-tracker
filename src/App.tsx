@@ -1161,6 +1161,1191 @@ useEffect(() => {
           ? dd
           : (typeof started === "string" && started.length >= 10 ? started.slice(0, 10) : null);
 
+        recentimport { useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "./supabase";
+import { enqueue, runSyncPass, startAutoSync } from "./sync";
+import { pullSync } from "./pullSync";
+import {
+  localdb,
+  type LocalMilestone,
+  type LocalWorkoutExercise,
+  type LocalWorkoutSession,
+  type LocalWorkoutSet,
+  type LocalWorkoutTemplate,
+  type LocalWorkoutTemplateExercise
+} from "./localdb";
+import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode } from "./utils/backup";
+import DashboardView from "./components/DashboardView";
+import QuickLogView from "./components/QuickLogView";
+import WorkoutLoggerView from "./components/WorkoutLoggerView";
+import ProgressView from "./components/ProgressView";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
+import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
+import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
+
+function todayISO(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function uuid(): string {
+  return crypto.randomUUID();
+}
+
+function oneRmEpley(weight: number, reps: number): number {
+  return Math.round(weight * (1 + reps / 30));
+}
+
+function isoToDay(iso: string): string {
+  // best-effort: ISO string -> YYYY-MM-DD
+  try {
+    const d = new Date(iso);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
+function addDays(day: string, delta: number): string {
+  // day: YYYY-MM-DD
+  const [y, m, d] = day.split("-").map((x) => Number(x));
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  dt.setDate(dt.getDate() + delta);
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+
+// -----------------------------
+// Exercise name normalization + aliases
+// -----------------------------
+function normalizeExerciseName(raw: string): string {
+  return (raw || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[_\-]/g, " ")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const CANONICAL_DISPLAY: Record<string, string> = {
+  bench_press: "Bench Press",
+  incline_bench_press: "Incline Bench Press",
+  dumbbell_bench_press: "DB Bench Press",
+  overhead_press: "Overhead Press",
+  deadlift: "Deadlift",
+  romanian_deadlift: "Romanian Deadlift",
+  barbell_row: "Barbell Row",
+  chest_supported_row: "Chest Supported Row",
+  seated_cable_row: "Seated Cable Row",
+  lat_pulldown: "Lat Pulldown",
+  pull_up: "Pull-Up",
+  chin_up: "Chin-Up",
+  squat: "Squat",
+  ssb_squat: "SSB Squat",
+  split_squat: "Split Squat",
+  leg_press: "Leg Press",
+  hack_squat: "Hack Squat",
+  leg_extension: "Leg Extension",
+  hamstring_curl: "Hamstring Curl",
+  calf_raise: "Calf Raise",
+  dip: "Dip",
+  lateral_raise: "Lateral Raise",
+  rear_delt_fly: "Rear Delt Fly",
+  chest_fly: "Chest Fly",
+  face_pull: "Face Pull",
+  shrug: "Shrug",
+  curl: "Curl",
+  preacher_curl: "Preacher Curl",
+  hammer_curl: "Hammer Curl",
+  triceps_pressdown: "Triceps Pressdown",
+  overhead_triceps_extension: "Overhead Triceps Extension",
+  plank: "Plank",
+  crunch: "Crunch"
+};
+
+const CANONICAL_ALIAS_KEYS: Record<string, string> = {
+  // Bench / press family
+  bp: "bench_press",
+  bench: "bench_press",
+  benchpress: "bench_press",
+  barbellbench: "bench_press",
+  barbellbenchpress: "bench_press",
+  flatbench: "bench_press",
+  flatbenchpress: "bench_press",
+  bbbench: "bench_press",
+  inclinebench: "incline_bench_press",
+  inclinebenchpress: "incline_bench_press",
+  inclinebarbellbench: "incline_bench_press",
+  dbbench: "dumbbell_bench_press",
+  dbbenchpress: "dumbbell_bench_press",
+  dumbbellbench: "dumbbell_bench_press",
+  dumbbellbenchpress: "dumbbell_bench_press",
+  dbbp: "dumbbell_bench_press",
+  ohp: "overhead_press",
+  overheadpress: "overhead_press",
+  militarypress: "overhead_press",
+
+  // Pull / row family
+  bentoverrow: "barbell_row",
+  barbellrow: "barbell_row",
+  bbrow: "barbell_row",
+  chestsupportedrow: "chest_supported_row",
+  chestsupportedrows: "chest_supported_row",
+  seatedcablerow: "seated_cable_row",
+  cablerow: "seated_cable_row",
+  rowmachine: "seated_cable_row",
+  pulldown: "lat_pulldown",
+  latpulldown: "lat_pulldown",
+  latpull: "lat_pulldown",
+  pullup: "pull_up",
+  pullups: "pull_up",
+  chinup: "chin_up",
+  chinups: "chin_up",
+
+  // Deadlift / hinge family
+  dl: "deadlift",
+  deadlift: "deadlift",
+  rdl: "romanian_deadlift",
+  romaniandeadlift: "romanian_deadlift",
+
+  // Squat / leg family
+  squat: "squat",
+  squats: "squat",
+  ssbsquat: "ssb_squat",
+  ssbsquats: "ssb_squat",
+  safetysquatbar: "ssb_squat",
+  safetysquatbarsquat: "ssb_squat",
+  safetysquatbarsquats: "ssb_squat",
+  splitsquat: "split_squat",
+  splitsquats: "split_squat",
+  bulgariansplitsquat: "split_squat",
+  legpress: "leg_press",
+  hacksquat: "hack_squat",
+  legrxtension: "leg_extension",
+  legextension: "leg_extension",
+  hamstringcurl: "hamstring_curl",
+  legcurl: "hamstring_curl",
+  calfraise: "calf_raise",
+  standingcalfraise: "calf_raise",
+  seatedcalfraise: "calf_raise",
+
+  // Isolation / accessory family
+  dip: "dip",
+  dips: "dip",
+  lateralraise: "lateral_raise",
+  lateralraises: "lateral_raise",
+  reardeltfly: "rear_delt_fly",
+  reardeltflyes: "rear_delt_fly",
+  reardeltraise: "rear_delt_fly",
+  fly: "chest_fly",
+  flyes: "chest_fly",
+  chestfly: "chest_fly",
+  pecdeck: "chest_fly",
+  facepull: "face_pull",
+  shrug: "shrug",
+  shrugs: "shrug",
+  curl: "curl",
+  curls: "curl",
+  bicepcurl: "curl",
+  preachersurl: "preacher_curl",
+  preachercurl: "preacher_curl",
+  hammercurl: "hammer_curl",
+  tricepspressdown: "triceps_pressdown",
+  pressdown: "triceps_pressdown",
+  pushdown: "triceps_pressdown",
+  overheadtricepsextension: "overhead_triceps_extension",
+  overheadtricepextension: "overhead_triceps_extension",
+  tricepsextension: "overhead_triceps_extension",
+  plank: "plank",
+  crunch: "crunch",
+  crunches: "crunch"
+};
+
+// Stable canonical movement key used for history, trends, milestones, etc.
+function exerciseKey(raw: string): string {
+  const compact = normalizeExerciseName(raw).replace(/\s+/g, "");
+  return CANONICAL_ALIAS_KEYS[compact] ?? compact;
+}
+
+// Display name (what the UI shows)
+function displayExerciseName(raw: string): string {
+  const k = exerciseKey(raw);
+  return CANONICAL_DISPLAY[k] ?? raw;
+}
+
+// When the user types a known alias as the full exercise name, store the canonical display name.
+// This prevents split histories like "RDL" vs "Romanian Deadlift".
+function canonicalizeExerciseInput(raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return trimmed;
+  const k = exerciseKey(trimmed);
+  return CANONICAL_DISPLAY[k] ?? trimmed;
+}
+
+function isBenchName(name: string): boolean {
+  const k = exerciseKey(name);
+  return k === "bench_press" || k === "incline_bench_press" || k === "dumbbell_bench_press";
+}
+function isSquatName(name: string): boolean {
+  const k = exerciseKey(name);
+  return k === "squat" || k === "ssb_squat" || k === "split_squat" || k === "hack_squat" || k === "leg_press";
+}
+function isDeadliftName(name: string): boolean {
+  const k = exerciseKey(name);
+  return k === "deadlift" || k === "romanian_deadlift";
+}
+
+type SetLite = {
+  load_type?: "weight" | "band" | "bodyweight" | null;
+  weight_lbs: number | null;
+  band_level?: number | null;
+  band_mode?: "assist" | "resist" | null;
+  band_config?: string | null; // "single" | "doubled" | "combo:<secondary_level>"
+  band_est_lbs?: number | null;
+  reps: number | null;
+  rpe: number | null;
+  is_warmup: boolean;
+};
+
+type LastSetSummary = {
+  source: "local" | "cloud";
+  started_at: string;
+  sets: SetLite[];
+};
+
+type ExerciseDraft = {
+  loadType: "weight" | "band" | "bodyweight";
+  weight: string; // used for loadType=weight
+  bandLevel: string; // primary 1..5 when loadType=band
+  bandLevel2: string; // optional secondary 1..5 when using combined bands
+  bandMode: "assist" | "resist";
+  bandConfig: "single" | "doubled" | "combined";
+  bandEst: string; // optional override
+  reps: string;
+  rpe: string;
+  warmup: boolean;
+};
+
+
+type RecommendationExerciseFingerprint = {
+  key: string;
+  name: string;
+  slot: string;
+  sets: number | null;
+  loadLbs: number | null;
+};
+
+type RecommendationFingerprint = {
+  focus: Exclude<BrainFocus, "Mixed">;
+  bias: string;
+  title: string;
+  generatedAt: string;
+  exercises: RecommendationExerciseFingerprint[];
+};
+
+type RecommendationComparison = {
+  available: boolean;
+  adherenceScore: number;
+  focusAligned: boolean;
+  recommendedFocus: string;
+  actualFocus: string;
+  matchedCount: number;
+  totalRecommended: number;
+  volumeDelta: number | null;
+  loadDeltaAvg: number | null;
+  substitutions: Array<{ recommended: string; actual: string }>;
+  substitutionKeys: Array<{ recommendedKey: string; actualKey: string }>;
+  extras: string[];
+  extrasKeys: string[];
+  missed: string[];
+  missedKeys: string[];
+  summary: string;
+};
+
+type CoachSessionExerciseSeed = {
+  exerciseId: string;
+  name: string;
+  slot: string;
+  sets: string;
+  reps: string;
+  load: string;
+  loadBasis: string;
+  note: string;
+};
+
+type CoachSessionSeed = {
+  sessionId: string;
+  title: string;
+  bias: string;
+  summary: string;
+  exercises: CoachSessionExerciseSeed[];
+};
+
+
+
+function firstNumberFromText(value: string | null | undefined): number | null {
+  const text = String(value || "");
+  const m = text.match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseRecommendedSetCount(value: string | null | undefined): number | null {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.includes("-")) {
+    const parts = text.split("-").map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+    if (parts.length === 2) return Math.round((parts[0] + parts[1]) / 2);
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseRecommendedRepTarget(value: string | null | undefined): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.includes("-")) {
+    const parts = text
+      .split("-")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n));
+    if (parts.length === 2) return String(Math.round((parts[0] + parts[1]) / 2));
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
+function inferRecommendedLoadType(loadText: string | null | undefined): "weight" | "band" | "bodyweight" {
+  const text = String(loadText || "").toLowerCase();
+  if (text.includes("bodyweight")) return "bodyweight";
+  if (text.includes("band")) return "band";
+  return "weight";
+}
+
+function buildRecommendationFingerprint(brain: BrainSnapshot | null): RecommendationFingerprint | null {
+  if (!brain?.recommendedSession) return null;
+  return {
+    focus: brain.recommendedSession.focus,
+    bias: brain.recommendedSession.bias,
+    title: brain.recommendedSession.title,
+    generatedAt: new Date().toISOString(),
+    exercises: (brain.recommendedSession.exercises || []).map((ex) => ({
+      key: exerciseKey(ex.name),
+      name: ex.name,
+      slot: ex.slot,
+      sets: parseRecommendedSetCount(ex.sets),
+      loadLbs: firstNumberFromText(ex.load)
+    }))
+  };
+}
+
+
+function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
+  const entries: Array<[BrainFocus, number]> = [
+    ["Push", counts.Push],
+    ["Pull", counts.Pull],
+    ["Lower", counts.Lower],
+    ["Mixed", counts.Mixed]
+  ];
+  entries.sort((a, b) => b[1] - a[1]);
+  if (entries[0][1] === 0) return "Mixed";
+  if (entries[1][1] === entries[0][1]) return "Mixed";
+  return entries[0][0];
+}
+
+function compareRecommendationToSession(params: {
+  recommendation: RecommendationFingerprint | null;
+  exercises: LocalWorkoutExercise[];
+  sets: LocalWorkoutSet[];
+}): RecommendationComparison | null {
+  const { recommendation, exercises, sets } = params;
+  if (!recommendation) return null;
+
+  const sessionExercises = exercises || [];
+  const sessionSets = sets || [];
+  const actualCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
+  const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null }>();
+
+  for (const ex of sessionExercises) {
+    const key = exerciseKey(ex.name);
+    const focus = focusFromExerciseKey(key);
+    actualCounts[focus] += 1;
+    const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
+    let topLoad: number | null = null;
+    for (const st of workSets) {
+      const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
+      if (load > 0 && (topLoad == null || load > topLoad)) topLoad = load;
+    }
+    actualByKey.set(key, {
+      name: displayExerciseName(ex.name),
+      workSets: workSets.length,
+      topLoad
+    });
+  }
+
+  const actualFocus = sessionExercises.length > 0 ? dominantFocusFromCounts(actualCounts) : "Mixed";
+  const recExercises = recommendation.exercises || [];
+  const actualKeys = new Set(actualByKey.keys());
+  const matched = recExercises.filter((ex) => actualKeys.has(ex.key));
+  const missed = recExercises.filter((ex) => !actualKeys.has(ex.key));
+  const extras = [...actualByKey.entries()]
+    .filter(([key]) => !recExercises.some((r) => r.key === key))
+    .map(([key, value]) => ({ key, ...value }));
+
+  const substitutions = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
+    recommended: miss.name,
+    actual: extras[idx].name
+  }));
+  const substitutionKeys = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
+    recommendedKey: miss.key,
+    actualKey: extras[idx].key
+  }));
+
+  let totalRecommendedSets = 0;
+  let totalActualSets = 0;
+  let loadDeltaSum = 0;
+  let loadDeltaCount = 0;
+
+  for (const rec of recExercises) {
+    totalRecommendedSets += rec.sets ?? 0;
+    const actual = actualByKey.get(rec.key);
+    if (actual) {
+      totalActualSets += actual.workSets;
+      if (rec.loadLbs != null && actual.topLoad != null && rec.loadLbs > 0) {
+        loadDeltaSum += ((actual.topLoad - rec.loadLbs) / rec.loadLbs) * 100;
+        loadDeltaCount += 1;
+      }
+    }
+  }
+
+  const volumeDelta = totalRecommendedSets > 0 ? Math.round(((totalActualSets - totalRecommendedSets) / totalRecommendedSets) * 100) : null;
+  const loadDeltaAvg = loadDeltaCount > 0 ? Math.round((loadDeltaSum / loadDeltaCount) * 10) / 10 : null;
+  const focusAligned = actualFocus === recommendation.focus || sessionExercises.length === 0;
+
+  const exerciseScore = recExercises.length > 0 ? matched.length / recExercises.length : 1;
+  const volumeScore = volumeDelta == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(volumeDelta) / 100));
+  const loadScore = loadDeltaAvg == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(loadDeltaAvg) / 30));
+  const adherenceScore = Math.round((exerciseScore * 0.5 + (focusAligned ? 0.25 : 0) + volumeScore * 0.15 + loadScore * 0.10) * 100);
+
+  let summary = `${matched.length}/${recExercises.length} recommended exercises matched`;
+  if (!focusAligned && sessionExercises.length > 0) summary += `, focus drifted to ${actualFocus}`;
+  else if (sessionExercises.length > 0) summary += `, focus stayed on ${recommendation.focus}`;
+  else summary += `, waiting for logged work`;
+  if (volumeDelta != null && sessionExercises.length > 0) summary += `, volume ${volumeDelta >= 0 ? "+" : ""}${volumeDelta}% vs plan`;
+
+  return {
+    available: true,
+    adherenceScore,
+    focusAligned,
+    recommendedFocus: recommendation.focus,
+    actualFocus,
+    matchedCount: matched.length,
+    totalRecommended: recExercises.length,
+    volumeDelta,
+    loadDeltaAvg,
+    substitutions,
+    substitutionKeys,
+    extras: extras.map((x) => x.name),
+    extrasKeys: extras.map((x) => x.key),
+    missed: missed.map((x) => x.name),
+    missedKeys: missed.map((x) => x.key),
+    summary
+  };
+}
+
+function parseBandConfig(config: string | null | undefined): { mode: "single" | "doubled" | "combined"; secondaryLevel: number | null } {
+  const raw = String(config || "single");
+  if (raw === "doubled") return { mode: "doubled", secondaryLevel: null };
+  if (raw.startsWith("combo:")) {
+    const lvl = Number(raw.split(":")[1] || "");
+    return { mode: "combined", secondaryLevel: Number.isFinite(lvl) ? lvl : null };
+  }
+  return { mode: "single", secondaryLevel: null };
+}
+
+function buildBandConfig(mode: "single" | "doubled" | "combined", secondaryLevel: number | null): string {
+  if (mode === "combined" && secondaryLevel && secondaryLevel >= 1 && secondaryLevel <= 5) {
+    return `combo:${secondaryLevel}`;
+  }
+  if (mode === "doubled") return "doubled";
+  return "single";
+}
+
+function estimateBandLoad(
+  primaryLevel: number | null,
+  config: string | null | undefined,
+  overrideText: string | null | undefined,
+  bandMap: Record<string, number>,
+  comboFactor: number
+): number | null {
+  const override = overrideText != null && String(overrideText).trim() !== "" ? Number(overrideText) : null;
+  if (override != null && Number.isFinite(override) && override > 0) return Math.round(override);
+
+  if (!primaryLevel || primaryLevel < 1 || primaryLevel > 5) return null;
+
+  const primary = bandMap[String(primaryLevel)];
+  if (typeof primary !== "number" || !Number.isFinite(primary)) return null;
+
+  const parsed = parseBandConfig(config);
+  if (parsed.mode === "doubled") return Math.round(primary * 2);
+  if (parsed.mode === "combined" && parsed.secondaryLevel != null) {
+    const secondary = bandMap[String(parsed.secondaryLevel)];
+    if (typeof secondary === "number" && Number.isFinite(secondary)) {
+      return Math.round((primary + secondary) * comboFactor);
+    }
+  }
+  return Math.round(primary);
+}
+
+function formatSet(s: SetLite) {
+  const r = s.reps ?? "—";
+  const wu = s.is_warmup ? " WU" : "";
+  const rpe = s.rpe != null ? ` @${s.rpe}` : "";
+
+  const lt = (s.load_type ?? "weight") as "weight" | "band" | "bodyweight";
+  if (lt === "bodyweight") {
+    return `BW x${r}${wu}${rpe}`;
+  }
+  if (lt === "band") {
+    const lvl = s.band_level ?? "—";
+    const parsed = parseBandConfig(s.band_config);
+    const cfg =
+      parsed.mode === "doubled"
+        ? "D"
+        : parsed.mode === "combined" && parsed.secondaryLevel
+          ? `+${parsed.secondaryLevel}`
+          : "S";
+    const mode = s.band_mode === "assist" ? "A" : "R";
+    const est =
+      s.band_est_lbs != null
+        ? Number(s.band_est_lbs)
+        : estimateBandLoad(
+            typeof s.band_level === "number" ? s.band_level : null,
+            s.band_config,
+            null,
+            bandEquivMap,
+            bandComboFactor
+          );
+    const estTxt = est != null ? `~${est}` : "";
+    return `B${lvl}${cfg}${mode}${estTxt} x${r}${wu}${rpe}`;
+  }
+
+  const w = s.weight_lbs ?? "—";
+  return `${w}x${r}${wu}${rpe}`;
+}
+
+function isCompoundExercise(name: string): boolean {
+  const n = name.toLowerCase();
+
+  const compoundKeywords = [
+    "squat",
+    "bench",
+    "deadlift",
+    "press",
+    "overhead",
+    "ohp",
+    "row",
+    "pull-up",
+    "pull up",
+    "chin-up",
+    "chin up",
+    "dip",
+    "lunge",
+    "split squat",
+    "rdl",
+    "romanian",
+    "good morning",
+    "hack squat",
+    "leg press",
+    "incline bench"
+  ];
+
+  const accessoryKeywords = [
+    "curl",
+    "extension",
+    "fly",
+    "lateral",
+    "raise",
+    "tricep",
+    "pushdown",
+    "pulldown",
+    "face pull",
+    "rear delt",
+    "calf",
+    "hamstring curl",
+    "leg curl",
+    "pec deck",
+    "cable",
+    "machine fly",
+    "shrug",
+    "abs",
+    "crunch",
+    "plank"
+  ];
+
+  if (accessoryKeywords.some((k) => n.includes(k))) return false;
+  return compoundKeywords.some((k) => n.includes(k));
+}
+
+
+// -----------------------------
+// Simple SVG sparkline / line chart
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("…");
+  const [lastSyncedAt, setLastSyncedAt] = useState("");
+  const [tab, setTab] = useState<"quick" | "workout" | "dash" | "progress">("quick");
+
+  // Auth
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [isRecoveryMode, setIsRecoveryMode] = useState<boolean>(() => window.location.pathname === "/reset-password");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Date
+  const [selectedDayDate, setSelectedDayDate] = useState(todayISO());
+
+  // Quick Log
+  const [weight, setWeight] = useState("");
+  const [waist, setWaist] = useState("");
+  const [sleepHours, setSleepHours] = useState("");
+  const [calories, setCalories] = useState("");
+  const [protein, setProtein] = useState("");
+  const [z2Minutes, setZ2Minutes] = useState("");
+  const [notes, setNotes] = useState("");
+
+  // Rest timer
+  const [timerOn, setTimerOn] = useState(false);
+  const [secs, setSecs] = useState(90);
+
+  // Workout: local-first state
+  const [sessions, setSessions] = useState<LocalWorkoutSession[]>([]);
+  const [openSessionId, setOpenSessionId] = useState<string | null>(null);
+  const [exercises, setExercises] = useState<LocalWorkoutExercise[]>([]);
+  const [sets, setSets] = useState<LocalWorkoutSet[]>([]);
+
+  // Workout UI
+  const [newExerciseName, setNewExerciseName] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [coachEnabled, setCoachEnabled] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem("rebuild60:coachEnabled");
+      if (v === "0") return false;
+      if (v === "1") return true;
+      return true;
+    } catch {
+      return true;
+    }
+  });
+
+
+
+// Band equivalent lbs calibration (user editable)
+const [bandEquivMap, setBandEquivMap] = useState<Record<string, number>>({
+  "1": 10,
+  "2": 20,
+  "3": 30,
+  "4": 40,
+  "5": 50
+});
+const [bandComboFactor, setBandComboFactor] = useState<number>(1.1);
+const bandEquivMapRef = useRef<Record<string, number>>(bandEquivMap);
+const bandComboFactorRef = useRef<number>(bandComboFactor);
+useEffect(() => {
+  bandEquivMapRef.current = bandEquivMap;
+}, [bandEquivMap]);
+useEffect(() => {
+  bandComboFactorRef.current = bandComboFactor;
+}, [bandComboFactor]);
+
+async function loadBandEquiv() {
+  if (!userId) return;
+  const row = await localdb.localSettings.get([userId, "band_equiv_v1"]);
+  if (row?.value) {
+    try {
+      const parsed = JSON.parse(row.value);
+      if (parsed && typeof parsed === "object") {
+        const next: Record<string, number> = { ...bandEquivMap };
+        for (const k of ["1", "2", "3", "4", "5"]) {
+          const v = (parsed as any)[k];
+          if (typeof v === "number" && isFinite(v)) next[k] = v;
+        }
+        const factor = Number((parsed as any)?.comboFactor);
+        if (Number.isFinite(factor) && factor >= 1 && factor <= 2) {
+          setBandComboFactor(factor);
+        }
+        setBandEquivMap(next);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function saveBandEquiv(next: Record<string, number>, comboFactorOverride?: number) {
+  if (!userId) return;
+  const updatedAt = Date.now();
+  const factor =
+    typeof comboFactorOverride === "number" && Number.isFinite(comboFactorOverride)
+      ? comboFactorOverride
+      : bandComboFactorRef.current;
+
+  await localdb.localSettings.put({
+    user_id: userId,
+    key: "band_equiv_v1",
+    value: JSON.stringify({
+      ...next,
+      comboFactor: factor
+    }),
+    updatedAt
+  });
+
+  setBandEquivMap(next);
+  if (typeof comboFactorOverride === "number" && Number.isFinite(comboFactorOverride)) {
+    setBandComboFactor(comboFactorOverride);
+  }
+}
+
+useEffect(() => {
+  // load persisted band equivalence map for this user
+  loadBandEquiv();
+}, [userId]);
+
+  // Per-exercise drafts
+  const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
+
+  // Templates
+  const [templates, setTemplates] = useState<LocalWorkoutTemplate[]>([]);
+  const [openTemplateId, setOpenTemplateId] = useState<string | null>(null);
+  const [templateExercises, setTemplateExercises] = useState<LocalWorkoutTemplateExercise[]>([]);
+
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateDesc, setNewTemplateDesc] = useState("");
+  const [editTemplateName, setEditTemplateName] = useState("");
+  const [editTemplateDesc, setEditTemplateDesc] = useState("");
+  const [newTemplateExerciseName, setNewTemplateExerciseName] = useState("");
+
+  // Last numbers cache
+  const [lastByExerciseName, setLastByExerciseName] = useState<Record<string, LastSetSummary | undefined>>({});
+
+  // Backup/Restore
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+
+  // Dashboard computed series
+  const [dashBusy, setDashBusy] = useState(false);
+  type WeeklyCoach = {
+    thisWeekStart: string;
+    thisWeekEnd: string;
+    sessionsThis: number;
+    sessionsPrev: number;
+    tonnageThis: number;
+    tonnagePrev: number;
+    setsThis: number;
+    setsPrev: number;
+    benchBest?: number;
+    squatBest?: number;
+    dlBest?: number;
+    coachLine: string;
+  };
+
+  const [weeklyCoach, setWeeklyCoach] = useState<WeeklyCoach | null>(null);
+
+  type DashboardTimelineWeek = {
+    start: string;
+    end: string;
+    label: string;
+    sessions: number;
+    sets: number;
+    tonnage: number;
+    topLift: string;
+    dominantFocus: BrainFocus;
+  };
+
+  const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
+  const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
+  const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
+  const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
+  const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
+  const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
+
+  type AiCoach = { text: string; ts: number; model: string };
+  const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
+  const [aiCoachBusy, setAiCoachBusy] = useState(false);
+  const [aiCoachErr, setAiCoachErr] = useState<string | null>(null);
+  const [milestones, setMilestones] = useState<LocalMilestone[]>([]);
+
+  const [tonnageSeries, setTonnageSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [setsSeries, setSetsSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [benchSeries, setBenchSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [squatSeries, setSquatSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [dlSeries, setDlSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  // Quick Log trend series (last 28 days)
+  const [weightSeries, setWeightSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [waistSeries, setWaistSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [sleepSeries, setSleepSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [calSeries, setCalSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [proteinSeries, setProteinSeries] = useState<{ xLabel: string; y: number }[]>([]);
+  const [z2Series, setZ2Series] = useState<{ xLabel: string; y: number }[]>([]);
+
+
+  // -----------------------------
+  // Auth boot + autosync
+  // -----------------------------
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      setUserId(data.user?.id ?? null);
+      setEmail(data.user?.email ?? "");
+      setLoading(false);
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((evt, session) => {
+      setUserId(session?.user?.id ?? null);
+      setEmail(session?.user?.email ?? "");
+      if (evt === "PASSWORD_RECOVERY") {
+        setIsRecoveryMode(true);
+      }
+      if (evt === "SIGNED_OUT") {
+        setIsRecoveryMode(window.location.pathname === "/reset-password");
+      }
+    });
+
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    const stop = startAutoSync(setStatus, async () => {
+      await refreshLocalUiFromDexie();
+      setLastSyncedAt(new Date().toLocaleTimeString());
+    });
+    return stop;
+  }, [userId, selectedDayDate, openSessionId, tab]);
+
+  useEffect(() => {
+    if (!userId) return;
+    void runSyncPass(setStatus, async () => {
+      await refreshLocalUiFromDexie();
+      setLastSyncedAt(new Date().toLocaleTimeString());
+    });
+  }, [userId, selectedDayDate]);
+
+  useEffect(() => {
+    if (!userId) return;
+    void loadBandEquiv();
+  }, [userId]);
+
+
+  // AI Coach Add-on: load cached weekly AI coach from localStorage
+  useEffect(() => {
+    if (!userId || !weeklyCoach) return;
+    const key = `aiCoach:${userId}:${weeklyCoach.thisWeekStart}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) {
+        setAiCoach(null);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.text === "string") setAiCoach(parsed);
+      else setAiCoach(null);
+    } catch {
+      setAiCoach(null);
+    }
+  }, [userId, weeklyCoach?.thisWeekStart]);
+
+
+  // Timer tick
+  useEffect(() => {
+    if (!timerOn) return;
+    const t = window.setInterval(() => setSecs((s) => (s > 0 ? s - 1 : 0)), 1000);
+    return () => window.clearInterval(t);
+  }, [timerOn]);
+
+
+  async function resetPassword() {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      alert("Enter your email first, then click Reset Password.");
+      return;
+    }
+
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, { redirectTo });
+
+    if (error) alert(error.message);
+    else alert(`Password reset email sent if that account exists. It should return to: ${redirectTo}`);
+  }
+
+  async function finishPasswordReset() {
+    if (!newPassword.trim()) {
+      alert("Enter a new password.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      alert("Use at least 8 characters for the new password.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      alert("Passwords do not match.");
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setNewPassword("");
+    setConfirmPassword("");
+    setIsRecoveryMode(false);
+    window.history.replaceState({}, "", "/");
+    alert("Password updated. You can now sign in with the new password.");
+  }
+
+  async function signUp() {
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) alert(error.message);
+    else alert("Account created. If email confirmation is ON, confirm then sign in.");
+  }
+
+  async function signIn() {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) alert(error.message);
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setIsRecoveryMode(false);
+    window.history.replaceState({}, "", "/");
+    setTab("quick");
+    setOpenSessionId(null);
+    setOpenTemplateId(null);
+    setLastByExerciseName({});
+    setDraftByExerciseId({});
+  }
+
+  // -----------------------------
+  // Backup / Restore
+  // -----------------------------
+    async function exportBackup() {
+    try {
+      setBackupBusy(true);
+
+      const envelope = await exportFullBackup(localdb);
+
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rebuild60-backup-${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      alert("Backup exported. Save that file somewhere safe.");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Backup export failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+    async function importBackupFile(file: File) {
+    try {
+      setBackupBusy(true);
+
+      const text = await file.text();
+      const parsed = validateBackupEnvelope(JSON.parse(text));
+
+      const modeRaw = (prompt(
+        "Import mode:\n\n• Type MERGE (recommended) to safely merge into this device.\n• Type REPLACE to WIPE this device and restore from backup.\n\nMode:",
+        "MERGE"
+      ) || "MERGE").trim().toUpperCase();
+
+      if (modeRaw !== "MERGE" && modeRaw !== "REPLACE") {
+        alert("Import cancelled (invalid mode).");
+        return;
+      }
+
+      const mode = modeRaw as ImportMode;
+
+      if (mode === "REPLACE") {
+        const ok = confirm(
+          "REPLACE will DELETE your local data on this device, then restore from the backup.\n\nIf you're not 100% sure, hit Cancel.\n\nContinue?"
+        );
+        if (!ok) return;
+
+        const typed = (prompt('Type REPLACE to confirm destructive restore:', '') || '').trim().toUpperCase();
+        if (typed !== "REPLACE") {
+          alert("Import cancelled.");
+          return;
+        }
+      }
+
+      const result = await importBackup(localdb, parsed, mode);
+
+      setLastByExerciseName({});
+      setDraftByExerciseId({});
+      setOpenSessionId(null);
+      setOpenTemplateId(null);
+
+      if (userId) {
+        await loadSessionsForDay(selectedDayDate);
+        await loadTemplates();
+      }
+
+      alert(
+        `Restore complete (${mode}).\n\nInserted: ${result.inserted}\nUpdated: ${result.updated}\nSkipped: ${result.skipped}\n\nTip: Keep the app online to sync any pending offline items.`
+      );
+    } catch (e: any) {
+      console.error(e);
+      alert(`Restore failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBackupBusy(false);
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
+  }
+
+  // -----------------------------
+  // Quick Log save (offline-safe)
+  // -----------------------------
+  
+  async function refreshAiCoach(force = false) {
+    if (!userId || !weeklyCoach) return;
+    setAiCoachErr(null);
+
+    const key = `aiCoach:${userId}:${weeklyCoach.thisWeekStart}`;
+    const lastKey = key + ":last";
+    const now = Date.now();
+    const last = Number(localStorage.getItem(lastKey) || "0");
+    const sixHours = 6 * 60 * 60 * 1000;
+    if (!force && last && now - last < sixHours) {
+      setAiCoachErr("AI Coach is rate-limited (6h). Use Force Refresh if you really need it.");
+      return;
+    }
+
+    setAiCoachBusy(true);
+    try {
+
+      // Always pull latest Quick Log snapshot(s) from Dexie (source of truth for offline-first)
+      // Include a short recent window so the AI can see trends without hallucinating.
+      const recentDays = 14;
+      const startDay = addDays(selectedDayDate, -(recentDays - 1));
+      const dayList: string[] = [];
+      for (let i = 0; i < recentDays; i++) dayList.push(addDays(startDay, i));
+
+      const quickRecent = await Promise.all(
+        dayList.map(async (day) => {
+          const [d, n, z] = await Promise.all([
+            localdb.dailyMetrics.get([userId, day]),
+            localdb.nutritionDaily.get([userId, day]),
+            localdb.zone2Daily.get([userId, day])
+          ]);
+          return {
+            day_date: day,
+            weight_lbs: (d as any)?.weight_lbs ?? null,
+            waist_in: (d as any)?.waist_in ?? null,
+            sleep_hours: (d as any)?.sleep_hours ?? null,
+            calories: (n as any)?.calories ?? null,
+            protein_g: (n as any)?.protein_g ?? null,
+            zone2_minutes: (z as any)?.minutes ?? null,
+            notes: (d as any)?.notes ?? null
+          };
+        })
+      );
+
+      const qToday = quickRecent.find((x) => x.day_date === selectedDayDate) || {
+        day_date: selectedDayDate,
+        weight_lbs: null,
+        waist_in: null,
+        sleep_hours: null,
+        calories: null,
+        protein_g: null,
+        zone2_minutes: null,
+        notes: null
+      };
+
+      // Recent workout snapshots (compact): last up to 6 sessions.
+      // IMPORTANT: some sessions may not have day_date populated (or it may be inconsistent).
+      // Select by started_at primarily, and only use day_date as a best-effort filter.
+      const allSessions = await localdb.localSessions
+        .where("user_id")
+        .equals(userId)
+        .sortBy("started_at");
+
+      const inWindow = (allSessions || []).filter((s) => {
+        const dd = (s as any).day_date as string | undefined | null;
+        const started = (s as any).started_at as string | undefined | null;
+        const derived = (typeof dd === "string" && dd)
+          ? dd
+          : (typeof started === "string" && started.length >= 10 ? started.slice(0, 10) : "");
+        if (!derived) return true; // if we truly can't derive, keep it (better than 'no workouts')
+        return derived >= startDay && derived <= selectedDayDate;
+      });
+
+      const recentSessions = inWindow.slice(-6).reverse();
+
+      const recent_workouts = [] as any[];
+      for (const s of recentSessions) {
+        const ex = await localdb.localExercises.where({ session_id: s.id }).sortBy("sort_order");
+        const exSummaries: any[] = [];
+        for (const e of (ex || []).slice(0, 12)) {
+          const ss = await localdb.localSets.where({ exercise_id: e.id }).sortBy("set_number");
+          const work = (ss || []).filter((x) => !x.is_warmup && typeof x.reps === "number" && (x.reps as any) > 0);
+          // pick best set by Epley 1RM using est load
+          let best: any = null;
+          for (const st of work) {
+            const reps = Number((st as any).reps || 0);
+            let load = null as any;
+            const lt = ((st as any).load_type || "weight") as string;
+            if (lt === "band") load = (st as any).band_est_lbs ?? (st as any).weight_lbs ?? null;
+            else if (lt === "bodyweight") load = (st as any).weight_lbs ?? (st as any).band_est_lbs ?? null; // best-effort
+            else load = (st as any).weight_lbs ?? (st as any).band_est_lbs ?? null;
+            if (load == null || !isFinite(Number(load)) || Number(load) <= 0) continue;
+            const score = oneRmEpley(Number(load), reps);
+            if (!best || score > best.score) {
+              best = {
+                score,
+                load_type: lt,
+                weight_lbs: (st as any).weight_lbs ?? null,
+                band_level: (st as any).band_level ?? null,
+                band_mode: (st as any).band_mode ?? null,
+                band_config: (st as any).band_config ?? null,
+                band_est_lbs: (st as any).band_est_lbs ?? null,
+                reps,
+                rpe: (st as any).rpe ?? null
+              };
+            }
+          }
+          exSummaries.push({ name: e.name, best_set: best });
+        }
+
+        const dd = (s as any).day_date as any;
+        const started = (s as any).started_at as any;
+        const derivedDay = (typeof dd === "string" && dd)
+          ? dd
+          : (typeof started === "string" && started.length >= 10 ? started.slice(0, 10) : null);
+
         recent_workouts.push({
           id: s.id,
           day_date: derivedDay,
@@ -1316,6 +2501,41 @@ async function saveQuickLog() {
     });
   }
 
+  async function getCoachSessionSeedMap(): Promise<Record<string, CoachSessionSeed>> {
+    if (!userId) return {};
+    try {
+      const row = await localdb.localSettings.get([userId, "coach_session_seeds_v1"]);
+      const parsed = row?.value ? JSON.parse(row.value) : {};
+      return parsed && typeof parsed === "object" ? parsed as Record<string, CoachSessionSeed> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function putCoachSessionSeed(seed: CoachSessionSeed) {
+    if (!userId) return;
+    const map = await getCoachSessionSeedMap();
+    map[seed.sessionId] = seed;
+    await localdb.localSettings.put({
+      user_id: userId,
+      key: "coach_session_seeds_v1",
+      value: JSON.stringify(map),
+      updatedAt: Date.now()
+    });
+  }
+
+  async function removeCoachSessionSeed(sessionId: string) {
+    if (!userId) return;
+    const map = await getCoachSessionSeedMap();
+    delete map[sessionId];
+    await localdb.localSettings.put({
+      user_id: userId,
+      key: "coach_session_seeds_v1",
+      value: JSON.stringify(map),
+      updatedAt: Date.now()
+    });
+  }
+
   async function forgetDeletedSessionId(sessionId: string) {
     if (!userId) return;
     const current = await getDeletedSessionIds();
@@ -1442,6 +2662,7 @@ async function saveQuickLog() {
     });
 
     const nextDrafts: Record<string, ExerciseDraft> = {};
+    const coachExercises: CoachSessionExerciseSeed[] = [];
 
     for (let i = 0; i < brainSnapshot.recommendedSession.exercises.length; i += 1) {
       const ex = brainSnapshot.recommendedSession.exercises[i];
@@ -1480,10 +2701,36 @@ async function saveQuickLog() {
         rpe: "",
         warmup: false
       };
+
+      coachExercises.push({
+        exerciseId,
+        name: canonicalName,
+        slot: ex.slot,
+        sets: ex.sets,
+        reps: ex.reps,
+        load: ex.load,
+        loadBasis: ex.loadBasis,
+        note: ex.note
+      });
     }
+
+    await putCoachSessionSeed({
+      sessionId: id,
+      title: brainSnapshot.recommendedSession.title || "Coach Session",
+      bias: brainSnapshot.recommendedSession.bias,
+      summary: brainSnapshot.recommendedSession.rationale,
+      exercises: coachExercises
+    });
 
     await loadSessionsForDay(selectedDayDate);
     await openSession(id);
+    setCoachSessionSeed({
+      sessionId: id,
+      title: brainSnapshot.recommendedSession.title || "Coach Session",
+      bias: brainSnapshot.recommendedSession.bias,
+      summary: brainSnapshot.recommendedSession.rationale,
+      exercises: coachExercises
+    });
     setDraftByExerciseId((prev) => ({ ...prev, ...nextDrafts }));
     setTab("workout");
   }
@@ -1779,6 +3026,7 @@ This removes it locally immediately and queues a cloud delete.`
       // queue cloud delete (handled in sync.ts update below)
       await enqueue("delete_session", { session_id: sessionId });
       await rememberDeletedSessionId(sessionId);
+      await removeCoachSessionSeed(sessionId);
 
       // refresh UI
       setOpenSessionId((cur) => (cur === sessionId ? null : cur));
@@ -2936,6 +4184,18 @@ async function syncNow() {
   }, [recommendationFingerprint, exercises, sets]);
 
   useEffect(() => {
+    if (!userId || !openSessionId) {
+      setCoachSessionSeed(null);
+      return;
+    }
+
+    void (async () => {
+      const map = await getCoachSessionSeedMap();
+      setCoachSessionSeed(map[openSessionId] ?? null);
+    })();
+  }, [userId, openSessionId]);
+
+  useEffect(() => {
     if (!userId || !openSessionId || !recommendationComparison?.available) return;
     const hasWork = exercises.some((ex) =>
       sets.some((s) => s.exercise_id === ex.id && !s.is_warmup)
@@ -3302,12 +4562,14 @@ async function syncNow() {
             secs={secs}
             setSecs={setSecs}
             recommendationComparison={recommendationComparison}
+            coachSessionSeed={coachSessionSeed}
           />
         </ErrorBoundary>
       )}
     </div>
   );
 }
+
 
 
 
