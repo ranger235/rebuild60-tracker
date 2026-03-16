@@ -5,6 +5,10 @@ import {
   type Slot,
 } from "./slotEngine";
 import {
+  applyPreferenceSignalsToNeeds,
+  type PreferenceSignals,
+} from "./preferenceLearning";
+import {
   computeNeedSnapshot,
   type NeedEngineInput,
   type NeedKey,
@@ -49,6 +53,7 @@ export type BrainInput = {
   recentFocusCounts: FocusCounts;
   lastSessionFocus: BrainFocus | null;
   exerciseHistory: ExerciseHistory[];
+  preferenceSignals?: PreferenceSignals | null;
 };
 
 export type BrainMetric = {
@@ -674,14 +679,15 @@ function buildMovementSignals(history: ExerciseHistory[]): NeedEngineInput["move
 function buildExercisesFromSlots(
   slots: Slot[],
   mode: "Progression" | "Base" | "Reduced volume",
-  history: ExerciseHistory[]
+  history: ExerciseHistory[],
+  preferenceSignals?: PreferenceSignals | null
 ): RecommendedExercise[] {
   const used = new Set<string>();
 
   return slots.map((slot) => {
     const program = SLOT_PROGRAMS[slot];
     const candidates = candidatesForSlot(slot);
-    const ranked = pickBestCandidateForSlot(slot, history, mode);
+    const ranked = pickBestCandidateForSlot(slot, history, mode, preferenceSignals);
 
     let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
     const primaryKey = ranked[0]?.key ?? candidates[0];
@@ -739,9 +745,13 @@ function buildExercisesFromSlots(
     } else if (mode === "Reduced volume") {
       eventTag = chosen?.tags.includes("Recovery-friendly")
         ? "Recovery-friendly"
+        : chosen?.tags.includes("Preference lean")
+        ? "Preference lean"
         : "Reduced volume";
     } else if (chosen?.tags.includes("Familiar") && !chosen.tags.includes("Fresh")) {
       eventTag = "Mainstay";
+    } else if (chosen?.tags.includes("Preference lean")) {
+      eventTag = "Preference lean";
     } else if (chosen?.tags.includes("Fresh")) {
       eventTag = "Rotation pick";
     }
@@ -753,6 +763,7 @@ function buildExercisesFromSlots(
           if (tag === "Fresh") return "Chosen for rotation";
           if (tag === "Recovery-friendly") return "Chosen for recovery";
           if (tag === "Progression path") return "Chosen for progression";
+          if (tag === "Preference lean") return "Chosen for preference fit";
           if (tag === "Stall penalty") return "Penalty applied for stalling";
           return tag;
         })
@@ -848,16 +859,20 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const weightedNeeds = applyNeedWeightProfile(needSnapshot, needWeightProfile);
 
+  const preferenceWeightedNeeds = applyPreferenceSignalsToNeeds(weightedNeeds, input.preferenceSignals);
+
   const composer = composeAdaptiveSession({
-    needs: weightedNeeds,
+    needs: preferenceWeightedNeeds,
     preferredPairings: {
-      row: ["triceps", "verticalPull", "biceps"],
-      horizontalPress: ["biceps", "triceps", "delts"],
-      quadDominant: ["calves", "hinge"],
-      hinge: ["calves", "quadDominant"],
+      row: [...new Set(["triceps", "verticalPull", "biceps", ...((input.preferenceSignals?.preferredPairings?.row) ?? [])])],
+      horizontalPress: [...new Set(["biceps", "triceps", "delts", ...((input.preferenceSignals?.preferredPairings?.horizontalPress) ?? [])])],
+      quadDominant: [...new Set(["calves", "hinge", ...((input.preferenceSignals?.preferredPairings?.quadDominant) ?? [])])],
+      hinge: [...new Set(["calves", "quadDominant", ...((input.preferenceSignals?.preferredPairings?.hinge) ?? [])])],
+      verticalPress: [...new Set([ ...((input.preferenceSignals?.preferredPairings?.verticalPress) ?? [])])],
+      verticalPull: [...new Set([ ...((input.preferenceSignals?.preferredPairings?.verticalPull) ?? [])])],
     },
     blockedPairings:
-      weightedNeeds.recoveryBias === "red"
+      preferenceWeightedNeeds.recoveryBias === "red"
         ? [["quadDominant", "hinge"]]
         : [],
   });
@@ -874,7 +889,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const recommendedExercises = buildExercisesFromSlots(
     composer.slots,
     decision.mode,
-    input.exerciseHistory
+    input.exerciseHistory,
+    input.preferenceSignals
   );
 
   const systemTake = decision.wasOverride
@@ -930,7 +946,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const topNeedsText = composer.topNeeds
     .slice(0, 3)
-    .map((need) => weightedNeeds.scores[need]?.key ?? need)
+    .map((need) => preferenceWeightedNeeds.scores[need]?.key ?? need)
     .join(", ");
 
   const rationaleParts = [
@@ -979,6 +995,12 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   } else if (decision.mode === "Reduced volume") {
     alerts.push("Recovery protection mode");
   }
+  if (input.preferenceSignals?.reasons?.length) {
+    for (const reason of input.preferenceSignals.reasons.slice(0, 2)) {
+      alerts.push(`Preference learning: ${reason}`);
+    }
+  }
+
   const swappedExercises = recommendedExercises.filter((ex) => ex.swappedFrom);
   if (swappedExercises.length > 0) {
     for (const ex of swappedExercises.slice(0, 2)) {
@@ -1008,6 +1030,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
