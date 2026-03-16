@@ -1,3 +1,4 @@
+import { DEFAULT_SEQUENCE } from "./sessionSequence";
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
 export type FocusCounts = {
@@ -168,14 +169,30 @@ function inferUnderrepresentedFocus(counts: FocusCounts): Exclude<BrainFocus, "M
   return entries[0][0];
 }
 
-function nextFocusFromSplit(lastFocus: BrainFocus | null): Exclude<BrainFocus, "Mixed"> {
-  if (lastFocus === "Push") return "Pull";
-  if (lastFocus === "Pull") return "Lower";
-  return "Push";
+function nextFocusFromSplit(
+  lastFocus: BrainFocus | null,
+  sequence: string[]
+): Exclude<BrainFocus, "Mixed"> {
+
+  if (!sequence || sequence.length === 0) {
+    return "Push";
+  }
+
+  if (!lastFocus) {
+    return sequence[0] as Exclude<BrainFocus, "Mixed">;
+  }
+
+  const idx = sequence.indexOf(lastFocus);
+
+  if (idx === -1) {
+    return sequence[0] as Exclude<BrainFocus, "Mixed">;
+  }
+
+  return sequence[(idx + 1) % sequence.length] as Exclude<BrainFocus, "Mixed">;
 }
 
 function chooseFocus(input: BrainInput, recoveryScore: number): Exclude<BrainFocus, "Mixed"> {
-  const rotated = nextFocusFromSplit(input.lastSessionFocus);
+  const rotated = nextFocusFromSplit(input.lastSessionFocus, DEFAULT_SEQUENCE);
   const underHit = inferUnderrepresentedFocus(input.recentFocusCounts);
   const gap = input.recentFocusCounts[rotated] - input.recentFocusCounts[underHit];
 
@@ -375,4 +392,5 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
