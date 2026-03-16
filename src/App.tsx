@@ -329,6 +329,27 @@ function parseRecommendedSetCount(value: string | null | undefined): number | nu
   return Number.isFinite(n) ? n : null;
 }
 
+function parseRecommendedRepTarget(value: string | null | undefined): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.includes("-")) {
+    const parts = text
+      .split("-")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n));
+    if (parts.length === 2) return String(Math.round((parts[0] + parts[1]) / 2));
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
+function inferRecommendedLoadType(loadText: string | null | undefined): "weight" | "band" | "bodyweight" {
+  const text = String(loadText || "").toLowerCase();
+  if (text.includes("bodyweight")) return "bodyweight";
+  if (text.includes("band")) return "band";
+  return "weight";
+}
+
 function buildRecommendationFingerprint(brain: BrainSnapshot | null): RecommendationFingerprint | null {
   if (!brain?.recommendedSession) return null;
   return {
@@ -1322,6 +1343,79 @@ async function saveQuickLog() {
 
     await loadSessionsForDay(selectedDayDate);
     await openSession(id);
+    setTab("workout");
+  }
+
+  async function startSessionFromRecommendation() {
+    if (!userId || !brainSnapshot?.recommendedSession) return;
+
+    const id = uuid();
+    const started_at = new Date().toISOString();
+
+    const local: LocalWorkoutSession = {
+      id,
+      user_id: userId,
+      day_date: selectedDayDate,
+      started_at,
+      title: brainSnapshot.recommendedSession.title || "Coach Session",
+      notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
+    };
+
+    await localdb.localSessions.put(local);
+
+    await enqueue("create_workout", {
+      id,
+      user_id: userId,
+      day_date: selectedDayDate,
+      started_at,
+      title: local.title,
+      notes: local.notes
+    });
+
+    const nextDrafts: Record<string, ExerciseDraft> = {};
+
+    for (let i = 0; i < brainSnapshot.recommendedSession.exercises.length; i += 1) {
+      const ex = brainSnapshot.recommendedSession.exercises[i];
+      const exerciseId = uuid();
+      const canonicalName = canonicalizeExerciseInput(ex.name);
+
+      const localExercise: LocalWorkoutExercise = {
+        id: exerciseId,
+        session_id: id,
+        name: canonicalName,
+        sort_order: i
+      };
+
+      await localdb.localExercises.put(localExercise);
+
+      await enqueue("insert_exercise", {
+        id: exerciseId,
+        session_id: id,
+        name: canonicalName,
+        sort_order: i
+      });
+
+      const suggestedWeight = firstNumberFromText(ex.load);
+      const repsTarget = parseRecommendedRepTarget(ex.reps);
+      const loadType = inferRecommendedLoadType(ex.load);
+
+      nextDrafts[exerciseId] = {
+        loadType,
+        weight: loadType === "weight" && suggestedWeight != null ? String(suggestedWeight) : "",
+        bandLevel: "3",
+        bandLevel2: "",
+        bandMode: "resist",
+        bandConfig: "single",
+        bandEst: loadType === "band" && suggestedWeight != null ? String(suggestedWeight) : "",
+        reps: repsTarget,
+        rpe: "",
+        warmup: false
+      };
+    }
+
+    await loadSessionsForDay(selectedDayDate);
+    await openSession(id);
+    setDraftByExerciseId((prev) => ({ ...prev, ...nextDrafts }));
     setTab("workout");
   }
 
@@ -3051,6 +3145,7 @@ async function syncNow() {
           milestones={milestones}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
+          startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
           secs={secs}
@@ -3155,6 +3250,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
