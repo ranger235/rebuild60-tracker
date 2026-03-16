@@ -273,6 +273,168 @@ type ExerciseDraft = {
   warmup: boolean;
 };
 
+
+type RecommendationExerciseFingerprint = {
+  key: string;
+  name: string;
+  slot: string;
+  sets: number | null;
+  loadLbs: number | null;
+};
+
+type RecommendationFingerprint = {
+  focus: Exclude<BrainFocus, "Mixed">;
+  bias: string;
+  title: string;
+  generatedAt: string;
+  exercises: RecommendationExerciseFingerprint[];
+};
+
+type RecommendationComparison = {
+  available: boolean;
+  adherenceScore: number;
+  focusAligned: boolean;
+  recommendedFocus: string;
+  actualFocus: string;
+  matchedCount: number;
+  totalRecommended: number;
+  volumeDelta: number | null;
+  loadDeltaAvg: number | null;
+  substitutions: Array<{ recommended: string; actual: string }>;
+  extras: string[];
+  missed: string[];
+  summary: string;
+};
+
+function firstNumberFromText(value: string | null | undefined): number | null {
+  const text = String(value || "");
+  const m = text.match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseRecommendedSetCount(value: string | null | undefined): number | null {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.includes("-")) {
+    const parts = text.split("-").map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+    if (parts.length === 2) return Math.round((parts[0] + parts[1]) / 2);
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildRecommendationFingerprint(brain: BrainSnapshot | null): RecommendationFingerprint | null {
+  if (!brain?.recommendedSession) return null;
+  return {
+    focus: brain.recommendedSession.focus,
+    bias: brain.recommendedSession.bias,
+    title: brain.recommendedSession.title,
+    generatedAt: new Date().toISOString(),
+    exercises: (brain.recommendedSession.exercises || []).map((ex) => ({
+      key: exerciseKey(ex.name),
+      name: ex.name,
+      slot: ex.slot,
+      sets: parseRecommendedSetCount(ex.sets),
+      loadLbs: firstNumberFromText(ex.load)
+    }))
+  };
+}
+
+function compareRecommendationToSession(params: {
+  recommendation: RecommendationFingerprint | null;
+  exercises: LocalWorkoutExercise[];
+  sets: LocalWorkoutSet[];
+}): RecommendationComparison | null {
+  const { recommendation, exercises, sets } = params;
+  if (!recommendation) return null;
+
+  const sessionExercises = exercises || [];
+  const sessionSets = sets || [];
+  const actualCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
+  const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null }>();
+
+  for (const ex of sessionExercises) {
+    const key = exerciseKey(ex.name);
+    const focus = focusFromExerciseKey(key);
+    actualCounts[focus] += 1;
+    const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
+    let topLoad: number | null = null;
+    for (const st of workSets) {
+      const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
+      if (load > 0 && (topLoad == null || load > topLoad)) topLoad = load;
+    }
+    actualByKey.set(key, {
+      name: displayExerciseName(ex.name),
+      workSets: workSets.length,
+      topLoad
+    });
+  }
+
+  const actualFocus = sessionExercises.length > 0 ? dominantFocusFromCounts(actualCounts) : "Mixed";
+  const recExercises = recommendation.exercises || [];
+  const actualKeys = new Set(actualByKey.keys());
+  const matched = recExercises.filter((ex) => actualKeys.has(ex.key));
+  const missed = recExercises.filter((ex) => !actualKeys.has(ex.key));
+  const extras = [...actualByKey.entries()]
+    .filter(([key]) => !recExercises.some((r) => r.key === key))
+    .map(([, value]) => value);
+
+  const substitutions = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
+    recommended: miss.name,
+    actual: extras[idx].name
+  }));
+
+  let totalRecommendedSets = 0;
+  let totalActualSets = 0;
+  let loadDeltaSum = 0;
+  let loadDeltaCount = 0;
+
+  for (const rec of recExercises) {
+    totalRecommendedSets += rec.sets ?? 0;
+    const actual = actualByKey.get(rec.key);
+    if (actual) {
+      totalActualSets += actual.workSets;
+      if (rec.loadLbs != null && actual.topLoad != null && rec.loadLbs > 0) {
+        loadDeltaSum += ((actual.topLoad - rec.loadLbs) / rec.loadLbs) * 100;
+        loadDeltaCount += 1;
+      }
+    }
+  }
+
+  const volumeDelta = totalRecommendedSets > 0 ? Math.round(((totalActualSets - totalRecommendedSets) / totalRecommendedSets) * 100) : null;
+  const loadDeltaAvg = loadDeltaCount > 0 ? Math.round((loadDeltaSum / loadDeltaCount) * 10) / 10 : null;
+  const focusAligned = actualFocus === recommendation.focus || sessionExercises.length === 0;
+
+  const exerciseScore = recExercises.length > 0 ? matched.length / recExercises.length : 1;
+  const volumeScore = volumeDelta == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(volumeDelta) / 100));
+  const loadScore = loadDeltaAvg == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(loadDeltaAvg) / 30));
+  const adherenceScore = Math.round((exerciseScore * 0.5 + (focusAligned ? 0.25 : 0) + volumeScore * 0.15 + loadScore * 0.10) * 100);
+
+  let summary = `${matched.length}/${recExercises.length} recommended exercises matched`;
+  if (!focusAligned && sessionExercises.length > 0) summary += `, focus drifted to ${actualFocus}`;
+  else if (sessionExercises.length > 0) summary += `, focus stayed on ${recommendation.focus}`;
+  else summary += `, waiting for logged work`;
+  if (volumeDelta != null && sessionExercises.length > 0) summary += `, volume ${volumeDelta >= 0 ? "+" : ""}${volumeDelta}% vs plan`;
+
+  return {
+    available: true,
+    adherenceScore,
+    focusAligned,
+    recommendedFocus: recommendation.focus,
+    actualFocus,
+    matchedCount: matched.length,
+    totalRecommended: recExercises.length,
+    volumeDelta,
+    loadDeltaAvg,
+    substitutions,
+    extras: extras.map((x) => x.name),
+    missed: missed.map((x) => x.name),
+    summary
+  };
+}
+
 function parseBandConfig(config: string | null | undefined): { mode: "single" | "doubled" | "combined"; secondaryLevel: number | null } {
   const raw = String(config || "single");
   if (raw === "doubled") return { mode: "doubled", secondaryLevel: null };
@@ -586,6 +748,8 @@ useEffect(() => {
 
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
+  const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
+  const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
 
   type AiCoach = { text: string; ts: number; model: string };
   const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
@@ -2495,6 +2659,16 @@ async function refreshDashboard() {
 
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
+      const fingerprint = buildRecommendationFingerprint(brain);
+      setRecommendationFingerprint(fingerprint);
+      if (userId && fingerprint) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "latest_recommendation_v1",
+          value: JSON.stringify(fingerprint),
+          updatedAt: Date.now()
+        });
+      }
       setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
@@ -2573,6 +2747,15 @@ async function syncNow() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSessionId, exercises.length]);
+
+
+  useEffect(() => {
+    setRecommendationComparison(compareRecommendationToSession({
+      recommendation: recommendationFingerprint,
+      exercises,
+      sets
+    }));
+  }, [recommendationFingerprint, exercises, sets]);
 
   // refresh dashboard when opening the dashboard tab
   useEffect(() => {
@@ -2898,12 +3081,14 @@ async function syncNow() {
             setTimerOn={setTimerOn}
             secs={secs}
             setSecs={setSecs}
+            recommendationComparison={recommendationComparison}
           />
         </ErrorBoundary>
       )}
     </div>
   );
 }
+
 
 
 
