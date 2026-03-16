@@ -52,6 +52,7 @@ export type RecommendedExercise = {
   sets: string;
   reps: string;
   load: string;
+  loadBasis: string;
   note: string;
 };
 
@@ -189,13 +190,71 @@ function progressionMode(readiness: number, recovery: number, momentum: number):
   return "Base";
 }
 
-function renderLoad(lastLoad: number | null, bump: number, mode: "Progression" | "Base" | "Reduced volume", name: string): string {
-  if (lastLoad == null || !Number.isFinite(lastLoad) || lastLoad <= 0) {
-    return name.includes("Pull-Up") || name.includes("Chin-Up") ? "Bodyweight / last good load" : "Find working weight";
+function nearestIncrement(value: number, increment: number): number {
+  return Math.round(value / increment) * increment;
+}
+
+function targetRepsFromRange(reps: string): number {
+  const cleaned = reps.trim();
+  if (cleaned.includes("-")) {
+    const [a, b] = cleaned.split("-").map((part) => Number(part.trim()));
+    if (Number.isFinite(a) && Number.isFinite(b)) return (a + b) / 2;
   }
-  if (mode === "Progression" && bump > 0) return `${Math.round(lastLoad + bump)} lb`;
-  if (mode === "Reduced volume") return `${Math.round(lastLoad)} lb (hold or trim 5%)`;
-  return `${Math.round(lastLoad)} lb`;
+  const single = Number(cleaned);
+  return Number.isFinite(single) ? single : 8;
+}
+
+function renderLoad(
+  hist: ExerciseHistory | null,
+  bump: number,
+  mode: "Progression" | "Base" | "Reduced volume",
+  reps: string,
+  name: string
+): { load: string; loadBasis: string } {
+  const lastLoad = hist?.lastLoad ?? null;
+  if (lastLoad != null && Number.isFinite(lastLoad) && lastLoad > 0) {
+    if (mode === "Progression" && bump > 0) {
+      return {
+        load: `${Math.round(lastLoad + bump)} lb`,
+        loadBasis: `Load path: last logged ${Math.round(lastLoad)} lb, nudged by ${bump} lb for progression.`
+      };
+    }
+    if (mode === "Reduced volume") {
+      return {
+        load: `${Math.round(lastLoad)} lb`,
+        loadBasis: `Load path: keep last logged ${Math.round(lastLoad)} lb and trim effort or one set if recovery is soft.`
+      };
+    }
+    return {
+      load: `${Math.round(lastLoad)} lb`,
+      loadBasis: `Load path: repeat last logged working load of ${Math.round(lastLoad)} lb.`
+    };
+  }
+
+  const recentBestE1RM = hist?.recentBestE1RM ?? null;
+  if (recentBestE1RM != null && Number.isFinite(recentBestE1RM) && recentBestE1RM > 0) {
+    const targetReps = targetRepsFromRange(reps);
+    const estimate = recentBestE1RM / (1 + targetReps / 30);
+    const increment = estimate >= 100 ? 5 : 2.5;
+    const rounded = nearestIncrement(estimate, increment);
+    const display = Number.isInteger(rounded) ? `${Math.round(rounded)} lb` : `${rounded.toFixed(1)} lb`;
+    return {
+      load: display,
+      loadBasis: `Load path: estimated from recent best e1RM of ${Math.round(recentBestE1RM)} for ~${targetReps.toFixed(1)} reps.`
+    };
+  }
+
+  if (name.includes("Pull-Up") || name.includes("Chin-Up") || name === "Dip") {
+    return {
+      load: "Bodyweight / last good load",
+      loadBasis: "Load path: no stable external load history yet, so use bodyweight or the last clean loading you know is real."
+    };
+  }
+
+  return {
+    load: "Use last good working weight",
+    loadBasis: "Load path: no reliable history yet, so pick the heaviest crisp load that lands in the prescribed rep range."
+  };
 }
 
 function buildExercises(
@@ -209,12 +268,14 @@ function buildExercises(
     const key = hist?.key ?? slot.candidates[0];
     const name = hist?.name ?? DISPLAY_NAME[key] ?? key;
     const sets = mode === "Reduced volume" && (slot.slot === "Finisher" || slot.slot === "Calves") ? "2" : slot.sets;
+    const loadInfo = renderLoad(hist, slot.bump, mode, slot.reps, name);
     return {
       slot: slot.slot,
       name,
       sets,
       reps: slot.reps,
-      load: renderLoad(hist?.lastLoad ?? null, slot.bump, mode, name),
+      load: loadInfo.load,
+      loadBasis: loadInfo.loadBasis,
       note: hist?.lastReps ? `Last time ${Math.round(hist.lastLoad ?? 0)} x ${hist.lastReps}. ${slot.note}` : slot.note
     };
   });
@@ -314,3 +375,4 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
