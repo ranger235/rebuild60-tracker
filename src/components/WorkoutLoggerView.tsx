@@ -98,6 +98,21 @@ type Props = {
   setTimerOn: (updater: any) => void;
   secs: number;
   setSecs: (updater: any) => void;
+  recommendationComparison: {
+    available: boolean;
+    adherenceScore: number;
+    focusAligned: boolean;
+    recommendedFocus: string;
+    actualFocus: string;
+    matchedCount: number;
+    totalRecommended: number;
+    volumeDelta: number | null;
+    loadDeltaAvg: number | null;
+    substitutions: Array<{ recommended: string; actual: string }>;
+    extras: string[];
+    missed: string[];
+    summary: string;
+  } | null;
 };
 
 export default function WorkoutLoggerView(props: Props) {
@@ -152,12 +167,38 @@ export default function WorkoutLoggerView(props: Props) {
     timerOn,
     setTimerOn,
     secs,
-    setSecs
+    setSecs,
+    recommendationComparison
   } = props;
 
   return (
     <>
       <h3>Workout Logger</h3>
+
+      {recommendationComparison && (
+        <div style={{ border: "1px solid #d5d5d5", borderRadius: 10, padding: 12, marginBottom: 12, background: "#fafafa" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 700 }}>Recommendation vs Reality</div>
+            <div style={{ fontWeight: 700 }}>{recommendationComparison.adherenceScore}% match</div>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>{recommendationComparison.summary}</div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
+            <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Focus: {recommendationComparison.recommendedFocus} → {recommendationComparison.actualFocus}</span>
+            <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Exercises: {recommendationComparison.matchedCount}/{recommendationComparison.totalRecommended}</span>
+            {recommendationComparison.volumeDelta != null && (
+              <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Volume {recommendationComparison.volumeDelta >= 0 ? "+" : ""}{recommendationComparison.volumeDelta}%</span>
+            )}
+            {recommendationComparison.loadDeltaAvg != null && (
+              <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Load {recommendationComparison.loadDeltaAvg >= 0 ? "+" : ""}{recommendationComparison.loadDeltaAvg}%</span>
+            )}
+          </div>
+          {recommendationComparison.substitutions.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <strong>Swaps this session:</strong> {recommendationComparison.substitutions.map((s) => `${s.recommended} → ${s.actual}`).join(" • ")}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Templates block */}
       <TemplatesView
@@ -534,6 +575,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
