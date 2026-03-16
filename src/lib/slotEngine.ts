@@ -20,6 +20,22 @@ export type SessionBlueprint = {
   slots: Slot[]
 }
 
+export type CandidateSelectionMode = "Progression" | "Base" | "Reduced volume"
+
+export type CandidateHistoryLite = {
+  key: string
+  recentSets?: number | null
+  lastPerformedDaysAgo?: number | null
+  recentTopSetE1RMs?: number[]
+  recentAvgSetReps?: number[]
+}
+
+export type CandidateScore = {
+  key: string
+  score: number
+  tags: string[]
+}
+
 export const PUSH_BLUEPRINT: SessionBlueprint = {
   focus: "Push",
   slots: [
@@ -180,4 +196,92 @@ export function allSlotsForFocus(focus: string): Array<{ slot: Slot; candidates:
     candidates: candidatesForSlot(slot)
   }))
 }
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n))
+}
+
+function isRecoveryFriendly(key: string): boolean {
+  return key.includes("machine") || key.includes("press") || key.includes("supported") || key.includes("cable") || key.includes("extension") || key.includes("curl") || key.includes("raise")
+}
+
+function hasPositiveTrend(hist?: CandidateHistoryLite | null): boolean {
+  const top = hist?.recentTopSetE1RMs ?? []
+  if (top.length < 3) return false
+  const [a, b, c] = top.slice(-3)
+  const prior = Math.max(a, b)
+  return prior > 0 ? (c - prior) / prior > 0.015 : false
+}
+
+function isStalled(hist?: CandidateHistoryLite | null): boolean {
+  const top = hist?.recentTopSetE1RMs ?? []
+  const avg = hist?.recentAvgSetReps ?? []
+  if (top.length < 3 || avg.length < 3) return false
+  const [t1, t2, t3] = top.slice(-3)
+  const [a1, a2, a3] = avg.slice(-3)
+  const prior = Math.max(t1, t2)
+  const topDelta = prior > 0 ? (t3 - prior) / prior : 0
+  const fatigueRising = a3 < a1 - 0.5 || a3 < a2 - 0.5
+  return topDelta <= 0.01 && fatigueRising
+}
+
+export function scoreCandidateForSlot(
+  slot: Slot,
+  candidateKey: string,
+  histories: CandidateHistoryLite[],
+  mode: CandidateSelectionMode
+): CandidateScore {
+  const hist = histories.find((h) => h.key === candidateKey) ?? null
+  const recentSets = Math.max(0, hist?.recentSets ?? 0)
+  const daysAgo = hist?.lastPerformedDaysAgo ?? 999
+
+  const familiarity = clamp01(recentSets / 12)
+  const freshness = clamp01(Math.min(daysAgo, 28) / 28)
+
+  let score = familiarity * 0.7 + freshness * 0.3
+  const tags: string[] = []
+
+  if (familiarity >= 0.55) tags.push("Familiar")
+  if (freshness >= 0.6) tags.push("Fresh")
+
+  if (isStalled(hist)) {
+    score -= 0.35
+    tags.push("Stall penalty")
+  }
+
+  if (mode === "Progression" && hasPositiveTrend(hist)) {
+    score += 0.18
+    tags.push("Progression path")
+  }
+
+  if (mode === "Reduced volume" && isRecoveryFriendly(candidateKey)) {
+    score += 0.15
+    tags.push("Recovery-friendly")
+  }
+
+  if ((slot === "Pump" || slot === "RearDelts" || slot === "Shoulders" || slot === "Biceps" || slot === "Triceps" || slot === "Calves") && freshness >= 0.65) {
+    score += 0.08
+  }
+
+  if (daysAgo <= 5) {
+    score -= 0.06
+  }
+
+  return {
+    key: candidateKey,
+    score: Math.round(score * 1000) / 1000,
+    tags
+  }
+}
+
+export function pickBestCandidateForSlot(
+  slot: Slot,
+  histories: CandidateHistoryLite[],
+  mode: CandidateSelectionMode
+): CandidateScore[] {
+  return candidatesForSlot(slot)
+    .map((candidateKey) => scoreCandidateForSlot(slot, candidateKey, histories, mode))
+    .sort((a, b) => b.score - a.score)
+}
+
 
