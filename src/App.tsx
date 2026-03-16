@@ -367,6 +367,20 @@ function buildRecommendationFingerprint(brain: BrainSnapshot | null): Recommenda
   };
 }
 
+
+function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
+  const entries: Array<[BrainFocus, number]> = [
+    ["Push", counts.Push],
+    ["Pull", counts.Pull],
+    ["Lower", counts.Lower],
+    ["Mixed", counts.Mixed]
+  ];
+  entries.sort((a, b) => b[1] - a[1]);
+  if (entries[0][1] === 0) return "Mixed";
+  if (entries[1][1] === entries[0][1]) return "Mixed";
+  return entries[0][0];
+}
+
 function compareRecommendationToSession(params: {
   recommendation: RecommendationFingerprint | null;
   exercises: LocalWorkoutExercise[];
@@ -1281,10 +1295,23 @@ async function saveQuickLog() {
   // -----------------------------
   async function loadSessionsForDay(day: string) {
     if (!userId) return;
+
     const rows = await localdb.localSessions
       .where({ user_id: userId, day_date: day })
       .sortBy("started_at");
-    setSessions(rows.reverse());
+
+    const pendingDeletes = await localdb.pendingOps
+      .where("op")
+      .equals("delete_session")
+      .toArray();
+
+    const deletedIds = new Set(
+      pendingDeletes
+        .map((op) => op?.payload?.session_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    );
+
+    setSessions(rows.filter((row) => !deletedIds.has(row.id)).reverse());
   }
 
   async function openSession(sessionId: string) {
@@ -2323,18 +2350,6 @@ function daysBetweenISO(a: string, b: string): number {
 
 
 
-function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
-  const entries: Array<[BrainFocus, number]> = [
-    ["Push", counts.Push],
-    ["Pull", counts.Pull],
-    ["Lower", counts.Lower],
-    ["Mixed", counts.Mixed]
-  ];
-  entries.sort((a, b) => b[1] - a[1]);
-  if (entries[0][1] === 0) return "Mixed";
-  if (entries[1][1] === entries[0][1]) return "Mixed";
-  return entries[0][0];
-}
 
 async function refreshDashboard() {
     if (!userId) return;
@@ -3250,6 +3265,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
