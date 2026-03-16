@@ -92,6 +92,7 @@ type Props = {
   }>;
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
+  startSessionFromRecommendation: () => void;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -194,6 +195,7 @@ export default function DashboardView(props: Props) {
     milestones,
     timelineWeeks,
     brainSnapshot,
+    startSessionFromRecommendation,
     timerOn,
     setTimerOn,
     secs,
@@ -324,7 +326,23 @@ export default function DashboardView(props: Props) {
                 <div style={{ fontSize: 12, opacity: 0.75 }}>Recommended Next Session</div>
                 <div style={{ fontSize: 26, fontWeight: 800 }}>{brainSnapshot.recommendedSession.title}</div>
               </div>
-              <div style={{ fontSize: 16, fontWeight: 800 }}>{brainSnapshot.recommendedSession.bias}</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 16, fontWeight: 800 }}>{brainSnapshot.recommendedSession.bias}</div>
+                <button
+                  onClick={startSessionFromRecommendation}
+                  style={{
+                    border: "1px solid #111",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    fontWeight: 800,
+                    background: "#111",
+                    color: "#fff",
+                    cursor: "pointer"
+                  }}
+                >
+                  Start This Session
+                </button>
+              </div>
             </div>
 
             {brainSnapshot.recommendedSession.alerts?.length ? (
@@ -595,6 +613,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
