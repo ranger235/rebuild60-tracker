@@ -1,4 +1,5 @@
 import { DEFAULT_SEQUENCE } from "./sessionSequence";
+
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
 export type FocusCounts = {
@@ -173,20 +174,11 @@ function nextFocusFromSplit(
   lastFocus: BrainFocus | null,
   sequence: string[]
 ): Exclude<BrainFocus, "Mixed"> {
-
-  if (!sequence || sequence.length === 0) {
-    return "Push";
-  }
-
-  if (!lastFocus) {
-    return sequence[0] as Exclude<BrainFocus, "Mixed">;
-  }
+  if (!sequence || sequence.length === 0) return "Push";
+  if (!lastFocus) return sequence[0] as Exclude<BrainFocus, "Mixed">;
 
   const idx = sequence.indexOf(lastFocus);
-
-  if (idx === -1) {
-    return sequence[0] as Exclude<BrainFocus, "Mixed">;
-  }
+  if (idx === -1) return sequence[0] as Exclude<BrainFocus, "Mixed">;
 
   return sequence[(idx + 1) % sequence.length] as Exclude<BrainFocus, "Mixed">;
 }
@@ -211,14 +203,35 @@ function nearestIncrement(value: number, increment: number): number {
   return Math.round(value / increment) * increment;
 }
 
-function targetRepsFromRange(reps: string): number {
+function parseRepRange(reps: string): { min: number; max: number; target: number } {
   const cleaned = reps.trim();
   if (cleaned.includes("-")) {
     const [a, b] = cleaned.split("-").map((part) => Number(part.trim()));
-    if (Number.isFinite(a) && Number.isFinite(b)) return (a + b) / 2;
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      return { min: a, max: b, target: (a + b) / 2 };
+    }
   }
   const single = Number(cleaned);
-  return Number.isFinite(single) ? single : 8;
+  if (Number.isFinite(single)) {
+    return { min: single, max: single, target: single };
+  }
+  return { min: 8, max: 8, target: 8 };
+}
+
+function incrementForExercise(name: string, baseLoad: number | null, defaultBump: number): number {
+  const lower = name.toLowerCase();
+  if (lower.includes("lateral raise") || lower.includes("curl") || lower.includes("pressdown") || lower.includes("extension")) {
+    return 2.5;
+  }
+  if (lower.includes("pull-up") || lower.includes("chin-up") || lower.includes("dip")) {
+    return defaultBump > 0 ? defaultBump : 5;
+  }
+  if (baseLoad != null && baseLoad < 80) return 2.5;
+  return defaultBump > 0 ? defaultBump : 5;
+}
+
+function formatLoadValue(load: number): string {
+  return Number.isInteger(load) ? `${Math.round(load)} lb` : `${load.toFixed(1)} lb`;
 }
 
 function renderLoad(
@@ -228,36 +241,53 @@ function renderLoad(
   reps: string,
   name: string
 ): { load: string; loadBasis: string } {
+  const repRange = parseRepRange(reps);
   const lastLoad = hist?.lastLoad ?? null;
+  const lastReps = hist?.lastReps ?? null;
+  const daysAgo = hist?.lastPerformedDaysAgo ?? null;
+
   if (lastLoad != null && Number.isFinite(lastLoad) && lastLoad > 0) {
-    if (mode === "Progression" && bump > 0) {
-      return {
-        load: `${Math.round(lastLoad + bump)} lb`,
-        loadBasis: `Load path: last logged ${Math.round(lastLoad)} lb, nudged by ${bump} lb for progression.`
-      };
-    }
+    const increment = incrementForExercise(name, lastLoad, bump);
+    let suggested = lastLoad;
+    let basis = `Load path: repeat last logged working load of ${formatLoadValue(lastLoad)}.`;
+
     if (mode === "Reduced volume") {
-      return {
-        load: `${Math.round(lastLoad)} lb`,
-        loadBasis: `Load path: keep last logged ${Math.round(lastLoad)} lb and trim effort or one set if recovery is soft.`
-      };
+      const reduced = Math.max(0, lastLoad - (increment > 2.5 ? increment : 0));
+      suggested = reduced > 0 ? reduced : lastLoad;
+      basis = suggested < lastLoad
+        ? `Load path: recovery is soft, so pull ${increment} lb off the last logged ${formatLoadValue(lastLoad)} and keep reps clean.`
+        : `Load path: keep last logged ${formatLoadValue(lastLoad)} and trim effort or one set if recovery is soft.`;
+    } else if (lastReps != null) {
+      if (mode === "Progression" && lastReps >= repRange.max && increment > 0) {
+        suggested = lastLoad + increment;
+        basis = `Load path: last time you hit ${formatLoadValue(lastLoad)} for ${lastReps}, which clears the ${reps} target. Nudge to ${formatLoadValue(suggested)}.`;
+      } else if (lastReps < repRange.min) {
+        suggested = lastLoad;
+        basis = `Load path: last time ${formatLoadValue(lastLoad)} only got ${lastReps}, which is under the ${reps} target. Hold the load and earn the reps.`;
+      } else {
+        suggested = lastLoad;
+        basis = `Load path: last time ${formatLoadValue(lastLoad)} landed at ${lastReps} reps, which sits inside the ${reps} target. Repeat it and own it.`;
+      }
     }
+
+    if (daysAgo != null && daysAgo >= 21) {
+      basis += ` It has been ${daysAgo} days since you touched this lift, so treat the first work set as a calibration set.`;
+    }
+
     return {
-      load: `${Math.round(lastLoad)} lb`,
-      loadBasis: `Load path: repeat last logged working load of ${Math.round(lastLoad)} lb.`
+      load: formatLoadValue(suggested),
+      loadBasis: basis
     };
   }
 
   const recentBestE1RM = hist?.recentBestE1RM ?? null;
   if (recentBestE1RM != null && Number.isFinite(recentBestE1RM) && recentBestE1RM > 0) {
-    const targetReps = targetRepsFromRange(reps);
-    const estimate = recentBestE1RM / (1 + targetReps / 30);
-    const increment = estimate >= 100 ? 5 : 2.5;
-    const rounded = nearestIncrement(estimate, increment);
-    const display = Number.isInteger(rounded) ? `${Math.round(rounded)} lb` : `${rounded.toFixed(1)} lb`;
+    const estimate = recentBestE1RM / (1 + repRange.target / 30);
+    const increment = incrementForExercise(name, estimate, bump);
+    const rounded = nearestIncrement(estimate, increment >= 5 ? 5 : 2.5);
     return {
-      load: display,
-      loadBasis: `Load path: estimated from recent best e1RM of ${Math.round(recentBestE1RM)} for ~${targetReps.toFixed(1)} reps.`
+      load: formatLoadValue(rounded),
+      loadBasis: `Load path: estimated from recent best e1RM of ${Math.round(recentBestE1RM)} for a ${reps} target, then rounded to a usable jump.`
     };
   }
 
@@ -392,5 +422,6 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
 
