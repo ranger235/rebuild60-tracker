@@ -1,5 +1,5 @@
 import { DEFAULT_SEQUENCE } from "./sessionSequence";
-import { allSlotsForFocus, type Slot } from "./slotEngine";
+import { allSlotsForFocus, pickBestCandidateForSlot, type Slot } from "./slotEngine";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -526,10 +526,14 @@ function buildExercises(
   return slotDefs.map(({ slot, candidates }) => {
     const program = SLOT_PROGRAMS[slot];
     const primaryHist = findHistory(history, candidates);
-    const memory = analyzeProgressionMemory(primaryHist);
-    const swapHist = memory.stalled ? chooseSiblingVariation(primaryHist, history, candidates) : null;
-    const activeHist = swapHist ?? primaryHist;
-    const key = activeHist?.key ?? candidates[0];
+    const primaryMemory = analyzeProgressionMemory(primaryHist);
+    const scored = pickBestCandidateForSlot(slot, history, mode);
+    const best = scored[0] ?? null;
+    const bestKey = best?.key ?? candidates[0];
+    const bestHist = history.find((h) => h.key === bestKey) ?? null;
+    const activeHist = bestHist ?? primaryHist;
+    const activeMemory = analyzeProgressionMemory(activeHist);
+    const key = activeHist?.key ?? bestKey;
     const name = activeHist?.name ?? DISPLAY_NAME[key] ?? key;
     const sets = mode === "Reduced volume" && (slot === "Pump" || slot === "Calves") ? "2" : program.sets;
     const loadInfo = renderLoad(activeHist, program.bump, mode, program.reps, name);
@@ -541,19 +545,35 @@ function buildExercises(
     let eventTag: string | undefined;
     let swappedFrom: string | null = null;
 
-    if (swapHist && primaryHist) {
-      loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${swapHist.name} from your own logged exercise pool.`;
-      note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${swapHist.name} gets the nod for this block.`;
+    const forcedSwap = !!(primaryHist && bestHist && primaryHist.key !== bestHist.key && primaryMemory.stalled);
+    const scoredRotation = !!(primaryHist && bestHist && primaryHist.key !== bestHist.key && !primaryMemory.stalled);
+
+    if (forcedSwap && primaryHist && bestHist) {
+      loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${bestHist.name} from your own logged exercise pool.`;
+      note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${bestHist.name} gets the nod for this block.`;
       eventTag = "Variation swap";
       swappedFrom = primaryHist.name;
-    } else if (memory.strength === "improving" && memory.fatigue === "stable" && activeHist?.lastReps) {
+    } else if (scoredRotation && primaryHist && bestHist) {
+      loadInfo.loadBasis = `Load path: slot scoring gave ${bestHist.name} the edge today — enough familiarity to be useful, enough freshness to keep things moving.`;
+      note = `${bestHist.name} wins this slot on a 70/30 familiarity-to-freshness score, instead of just repeating ${primaryHist.name} again.`;
+      eventTag = "Fresh rotation";
+      swappedFrom = primaryHist.name;
+    } else if (activeMemory.strength === "improving" && activeMemory.fatigue === "stable" && activeHist?.lastReps) {
       note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
       eventTag = mode === "Progression" ? "Progression push" : "Trend green";
-    } else if (memory.strength === "flat" && memory.fatigue === "rising") {
+    } else if (activeMemory.strength === "flat" && activeMemory.fatigue === "rising") {
       note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
       eventTag = "Hold steady";
     } else if (mode === "Reduced volume") {
-      eventTag = "Reduced volume";
+      eventTag = best?.tags.includes("Recovery-friendly") ? "Recovery-friendly" : "Reduced volume";
+    } else if (best?.tags.includes("Familiar") && !best?.tags.includes("Fresh")) {
+      eventTag = "Familiar anchor";
+    } else if (best?.tags.includes("Fresh")) {
+      eventTag = "Fresh option";
+    }
+
+    if (best && best.tags.length > 0 && !forcedSwap && !scoredRotation) {
+      note = `${note} Slot score: ${best.tags.join(", ")}.`;
     }
 
     return {
@@ -693,6 +713,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
 
 
