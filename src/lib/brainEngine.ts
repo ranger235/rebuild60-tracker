@@ -10,6 +10,7 @@ import {
   type NeedKey,
 } from "./sessionNeedsEngine";
 import { composeAdaptiveSession } from "./sessionComposer";
+import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -836,8 +837,19 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     movementSignals,
   });
 
+  const needWeightProfile = deriveNeedWeightProfile({
+    recentFocusCounts: input.recentFocusCounts,
+    exerciseHistory: input.exerciseHistory.map((h) => ({
+      key: h.key,
+      recentSets: h.recentSets,
+      lastPerformedDaysAgo: h.lastPerformedDaysAgo,
+    })),
+  });
+
+  const weightedNeeds = applyNeedWeightProfile(needSnapshot, needWeightProfile);
+
   const composer = composeAdaptiveSession({
-    needs: needSnapshot,
+    needs: weightedNeeds,
     preferredPairings: {
       row: ["triceps", "verticalPull", "biceps"],
       horizontalPress: ["biceps", "triceps", "delts"],
@@ -845,7 +857,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       hinge: ["calves", "quadDominant"],
     },
     blockedPairings:
-      needSnapshot.recoveryBias === "red"
+      weightedNeeds.recoveryBias === "red"
         ? [["quadDominant", "hinge"]]
         : [],
   });
@@ -918,13 +930,20 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const topNeedsText = composer.topNeeds
     .slice(0, 3)
-    .map((need) => needSnapshot.scores[need]?.key ?? need)
+    .map((need) => weightedNeeds.scores[need]?.key ?? need)
     .join(", ");
 
   const rationaleParts = [
     composer.reasons[0] ?? `${composer.emphasis} won the session build today.`,
     composer.reasons[1] ?? "The slot bundle was built from the highest current needs.",
   ];
+
+  const topWeightedNeed = composer.topNeeds[0];
+  if (topWeightedNeed && (needWeightProfile.weights[topWeightedNeed] ?? 1) > 1.04) {
+    rationaleParts.push(
+      `Need weighting also boosted ${topWeightedNeed} to reflect what this physique currently seems to need most.`
+    );
+  }
 
   if (decision.wasOverride && decision.overrideReason) {
     rationaleParts.unshift(decision.overrideReason);
@@ -943,6 +962,14 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   alerts.push(`Adaptive emphasis: ${composer.emphasis}`);
   if (composer.topNeeds.length > 0) {
     alerts.push(`Top needs: ${composer.topNeeds.slice(0, 3).join(" / ")}`);
+  }
+  const weightedBoosts = composer.topNeeds
+    .map((need) => ({ need, weight: needWeightProfile.weights[need] ?? 1 }))
+    .filter((item) => item.weight > 1.04)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 2);
+  for (const item of weightedBoosts) {
+    alerts.push(`Need weighting favors ${item.need} (${item.weight.toFixed(2)}x)`);
   }
   if (decision.wasOverride) {
     alerts.push(`Opinionated call: ${decision.plannedFocus} delayed, ${decision.focus} gets the nod`);
@@ -981,6 +1008,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
