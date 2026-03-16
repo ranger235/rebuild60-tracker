@@ -2365,6 +2365,38 @@ async function refreshDashboard() {
               if (bestE1 == null || e1 > bestE1) bestE1 = e1;
             }
           }
+
+          const recentTopSetE1RMs: number[] = [];
+          const recentAvgSetReps: number[] = [];
+          for (const scanSession of recentSessions) {
+            const scanExercises = (sessionExercisesMap.get(scanSession.id) ?? []).filter((scanEx) => exerciseKey(scanEx.name) === key);
+            if (scanExercises.length === 0) continue;
+
+            let sessionTopE1: number | null = null;
+            let sessionRepsTotal = 0;
+            let sessionRepCount = 0;
+
+            for (const scanEx of scanExercises) {
+              const scanSets = (setsByExerciseId.get(scanEx.id) ?? []).filter((s) => !s.is_warmup);
+              for (const st of scanSets) {
+                const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
+                const reps = Number(st.reps ?? 0);
+                if (load > 0 && reps > 0) {
+                  const e1 = oneRmEpley(load, reps);
+                  if (sessionTopE1 == null || e1 > sessionTopE1) sessionTopE1 = e1;
+                  sessionRepsTotal += reps;
+                  sessionRepCount += 1;
+                }
+              }
+            }
+
+            if (sessionTopE1 != null) recentTopSetE1RMs.push(sessionTopE1);
+            if (sessionRepCount > 0) recentAvgSetReps.push(sessionRepsTotal / sessionRepCount);
+            if (recentTopSetE1RMs.length >= 3 && recentAvgSetReps.length >= 3) break;
+          }
+          recentTopSetE1RMs.reverse();
+          recentAvgSetReps.reverse();
+
           exerciseHistoryMap.set(key, {
             key,
             name: displayExerciseName(ex.name),
@@ -2373,7 +2405,9 @@ async function refreshDashboard() {
             lastReps,
             recentSets: sets.length,
             recentBestE1RM: bestE1,
-            lastPerformedDaysAgo: daysBetweenISO(session.day_date || isoToDay(session.started_at), today)
+            lastPerformedDaysAgo: daysBetweenISO(session.day_date || isoToDay(session.started_at), today),
+            recentTopSetE1RMs,
+            recentAvgSetReps
           });
         }
       }
@@ -2870,6 +2904,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
