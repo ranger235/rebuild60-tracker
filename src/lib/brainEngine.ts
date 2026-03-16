@@ -9,6 +9,10 @@ import {
   type PreferenceSignals,
 } from "./preferenceLearning";
 import {
+  applyMovementDebtToNeeds,
+  computeMovementDebtSnapshot,
+} from "./movementDebt";
+import {
   computeNeedSnapshot,
   type NeedEngineInput,
   type NeedKey,
@@ -861,8 +865,18 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const preferenceWeightedNeeds = applyPreferenceSignalsToNeeds(weightedNeeds, input.preferenceSignals);
 
+  const movementDebt = computeMovementDebtSnapshot({
+    exerciseHistory: input.exerciseHistory.map((h) => ({
+      key: h.key,
+      recentSets: h.recentSets,
+      lastPerformedDaysAgo: h.lastPerformedDaysAgo,
+    })),
+  });
+
+  const debtWeightedNeeds = applyMovementDebtToNeeds(preferenceWeightedNeeds, movementDebt);
+
   const composer = composeAdaptiveSession({
-    needs: preferenceWeightedNeeds,
+    needs: debtWeightedNeeds,
     preferredPairings: {
       row: [...new Set(["triceps", "verticalPull", "biceps", ...((input.preferenceSignals?.preferredPairings?.row) ?? [])])],
       horizontalPress: [...new Set(["biceps", "triceps", "delts", ...((input.preferenceSignals?.preferredPairings?.horizontalPress) ?? [])])],
@@ -872,7 +886,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       verticalPull: [...new Set([ ...((input.preferenceSignals?.preferredPairings?.verticalPull) ?? [])])],
     },
     blockedPairings:
-      preferenceWeightedNeeds.recoveryBias === "red"
+      debtWeightedNeeds.recoveryBias === "red"
         ? [["quadDominant", "hinge"]]
         : [],
   });
@@ -946,7 +960,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const topNeedsText = composer.topNeeds
     .slice(0, 3)
-    .map((need) => preferenceWeightedNeeds.scores[need]?.key ?? need)
+    .map((need) => debtWeightedNeeds.scores[need]?.key ?? need)
     .join(", ");
 
   const rationaleParts = [
@@ -958,6 +972,13 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   if (topWeightedNeed && (needWeightProfile.weights[topWeightedNeed] ?? 1) > 1.04) {
     rationaleParts.push(
       `Need weighting also boosted ${topWeightedNeed} to reflect what this physique currently seems to need most.`
+    );
+  }
+
+  const topDebtNeed = movementDebt.ranked[0];
+  if (topDebtNeed && topDebtNeed.debtScore >= 12) {
+    rationaleParts.push(
+      `Movement debt is also building in ${topDebtNeed.key}, so the composer is less willing to let that lane keep drifting.`
     );
   }
 
@@ -986,6 +1007,13 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     .slice(0, 2);
   for (const item of weightedBoosts) {
     alerts.push(`Need weighting favors ${item.need} (${item.weight.toFixed(2)}x)`);
+  }
+
+  const topDebtLanes = movementDebt.ranked
+    .filter((lane) => lane.debtScore >= 12)
+    .slice(0, 2);
+  for (const lane of topDebtLanes) {
+    alerts.push(`Movement debt rising: ${lane.key} (+${lane.debtScore})`);
   }
   if (decision.wasOverride) {
     alerts.push(`Opinionated call: ${decision.plannedFocus} delayed, ${decision.focus} gets the nod`);
@@ -1030,6 +1058,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
