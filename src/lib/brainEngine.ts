@@ -1,4 +1,5 @@
 import { DEFAULT_SEQUENCE } from "./sessionSequence";
+import { allSlotsForFocus, type Slot } from "./slotEngine";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -83,15 +84,6 @@ export type BrainSnapshot = {
   recommendedSession: RecommendedSession;
 };
 
-type TemplateSlot = {
-  slot: string;
-  candidates: string[];
-  sets: string;
-  reps: string;
-  bump: number;
-  note: string;
-};
-
 type Decision = {
   plannedFocus: Exclude<BrainFocus, "Mixed">;
   focus: Exclude<BrainFocus, "Mixed">;
@@ -106,59 +98,169 @@ type ProgressionMemory = {
   stalled: boolean;
 };
 
+type SlotProgram = {
+  label: string;
+  sets: string;
+  reps: string;
+  bump: number;
+  note: string;
+};
 
 const DISPLAY_NAME: Record<string, string> = {
   bench_press: "Bench Press",
   incline_bench_press: "Incline Bench Press",
   dumbbell_bench_press: "DB Bench Press",
+  chest_press: "Chest Press",
   overhead_press: "Overhead Press",
+  shoulder_press: "Shoulder Press",
   dip: "Dip",
   lateral_raise: "Lateral Raise",
+  rear_delt_fly: "Rear Delt Fly",
   triceps_pressdown: "Triceps Pressdown",
   overhead_triceps_extension: "Overhead Triceps Extension",
+  skullcrusher: "Skullcrusher",
+  push_up: "Push-Up",
+  pec_deck: "Pec Deck",
   barbell_row: "Barbell Row",
   chest_supported_row: "Chest Supported Row",
   seated_cable_row: "Seated Cable Row",
+  t_bar_row: "T-Bar Row",
+  one_arm_dumbbell_row: "One-Arm DB Row",
   pull_up: "Pull-Up",
   chin_up: "Chin-Up",
   lat_pulldown: "Lat Pulldown",
+  assisted_pull_up: "Assisted Pull-Up",
   face_pull: "Face Pull",
+  reverse_pec_deck: "Reverse Pec Deck",
+  band_pull_apart: "Band Pull-Apart",
   hammer_curl: "Hammer Curl",
   curl: "Curl",
+  incline_dumbbell_curl: "Incline DB Curl",
+  preacher_curl: "Preacher Curl",
   ssb_squat: "SSB Squat",
   squat: "Squat",
   leg_press: "Leg Press",
   hack_squat: "Hack Squat",
   romanian_deadlift: "Romanian Deadlift",
   deadlift: "Deadlift",
+  good_morning: "Good Morning",
   leg_extension: "Leg Extension",
+  split_squat: "Split Squat",
   hamstring_curl: "Hamstring Curl",
-  calf_raise: "Standing Calf Raise"
+  glute_ham_raise: "Glute-Ham Raise",
+  seated_leg_curl: "Seated Leg Curl",
+  calf_raise: "Standing Calf Raise",
+  seated_calf_raise: "Seated Calf Raise",
+  leg_press_calf_raise: "Leg Press Calf Raise"
 };
 
-const PUSH_TEMPLATE: TemplateSlot[] = [
-  { slot: "Primary press", candidates: ["bench_press", "incline_bench_press", "dumbbell_bench_press"], sets: "4", reps: "5-6", bump: 5, note: "Top movement. Push load if bar speed stays honest." },
-  { slot: "Secondary press", candidates: ["incline_bench_press", "overhead_press", "dumbbell_bench_press"], sets: "3", reps: "6-8", bump: 2.5, note: "Leave one clean rep in reserve." },
-  { slot: "Shoulders", candidates: ["overhead_press", "lateral_raise"], sets: "3", reps: "8-12", bump: 2.5, note: "Quality reps over heroics." },
-  { slot: "Chest / triceps", candidates: ["dip", "triceps_pressdown", "overhead_triceps_extension"], sets: "3", reps: "10-15", bump: 0, note: "Chase a pump, not a funeral." },
-  { slot: "Finisher", candidates: ["lateral_raise", "triceps_pressdown", "overhead_triceps_extension"], sets: "2-3", reps: "12-20", bump: 0, note: "Easy on joints. Accumulate clean work." }
-];
-
-const PULL_TEMPLATE: TemplateSlot[] = [
-  { slot: "Primary row", candidates: ["barbell_row", "chest_supported_row", "seated_cable_row"], sets: "4", reps: "6-8", bump: 5, note: "Drive progression here if recovery is green." },
-  { slot: "Vertical pull", candidates: ["pull_up", "chin_up", "lat_pulldown"], sets: "3", reps: "6-10", bump: 0, note: "Own the squeeze at the top." },
-  { slot: "Secondary row", candidates: ["chest_supported_row", "seated_cable_row", "barbell_row"], sets: "3", reps: "8-12", bump: 5, note: "Controlled eccentric." },
-  { slot: "Rear delt / upper back", candidates: ["face_pull", "lat_pulldown"], sets: "3", reps: "12-15", bump: 0, note: "Posture work. Don't rush it." },
-  { slot: "Arms", candidates: ["hammer_curl", "curl"], sets: "3", reps: "10-15", bump: 0, note: "Finish with blood, not ego." }
-];
-
-const LOWER_TEMPLATE: TemplateSlot[] = [
-  { slot: "Primary squat", candidates: ["ssb_squat", "squat", "leg_press", "hack_squat"], sets: "4", reps: "5-6", bump: 5, note: "Main driver. Belt up and move clean." },
-  { slot: "Hinge", candidates: ["romanian_deadlift", "deadlift", "hamstring_curl"], sets: "3", reps: "6-8", bump: 5, note: "Keep hamstrings honest without frying the back." },
-  { slot: "Secondary quad", candidates: ["leg_press", "hack_squat", "leg_extension"], sets: "3", reps: "10-12", bump: 10, note: "Hard but smooth." },
-  { slot: "Hamstrings", candidates: ["hamstring_curl", "romanian_deadlift"], sets: "3", reps: "10-15", bump: 5, note: "Get the squeeze." },
-  { slot: "Calves", candidates: ["calf_raise"], sets: "4", reps: "10-15", bump: 5, note: "Slow stretch, hard lockout." }
-];
+const SLOT_PROGRAMS: Record<Slot, SlotProgram> = {
+  PrimaryPress: {
+    label: "Primary press",
+    sets: "4",
+    reps: "5-6",
+    bump: 5,
+    note: "Top movement. Push load if bar speed stays honest."
+  },
+  SecondaryPress: {
+    label: "Secondary press",
+    sets: "3",
+    reps: "6-8",
+    bump: 2.5,
+    note: "Leave one clean rep in reserve."
+  },
+  Shoulders: {
+    label: "Shoulders",
+    sets: "3",
+    reps: "8-12",
+    bump: 2.5,
+    note: "Quality reps over heroics."
+  },
+  Triceps: {
+    label: "Chest / triceps",
+    sets: "3",
+    reps: "10-15",
+    bump: 0,
+    note: "Chase a pump, not a funeral."
+  },
+  Pump: {
+    label: "Finisher",
+    sets: "2-3",
+    reps: "12-20",
+    bump: 0,
+    note: "Easy on joints. Accumulate clean work."
+  },
+  PrimaryRow: {
+    label: "Primary row",
+    sets: "4",
+    reps: "6-8",
+    bump: 5,
+    note: "Drive progression here if recovery is green."
+  },
+  VerticalPull: {
+    label: "Vertical pull",
+    sets: "3",
+    reps: "6-10",
+    bump: 0,
+    note: "Own the squeeze at the top."
+  },
+  SecondaryRow: {
+    label: "Secondary row",
+    sets: "3",
+    reps: "8-12",
+    bump: 5,
+    note: "Controlled eccentric."
+  },
+  RearDelts: {
+    label: "Rear delt / upper back",
+    sets: "3",
+    reps: "12-15",
+    bump: 0,
+    note: "Posture work. Don't rush it."
+  },
+  Biceps: {
+    label: "Arms",
+    sets: "3",
+    reps: "10-15",
+    bump: 0,
+    note: "Finish with blood, not ego."
+  },
+  PrimarySquat: {
+    label: "Primary squat",
+    sets: "4",
+    reps: "5-6",
+    bump: 5,
+    note: "Main driver. Belt up and move clean."
+  },
+  Hinge: {
+    label: "Hinge",
+    sets: "3",
+    reps: "6-8",
+    bump: 5,
+    note: "Keep hamstrings honest without frying the back."
+  },
+  SecondaryQuad: {
+    label: "Secondary quad",
+    sets: "3",
+    reps: "10-12",
+    bump: 10,
+    note: "Hard but smooth."
+  },
+  Hamstrings: {
+    label: "Hamstrings",
+    sets: "3",
+    reps: "10-15",
+    bump: 5,
+    note: "Get the squeeze."
+  },
+  Calves: {
+    label: "Calves",
+    sets: "4",
+    reps: "10-15",
+    bump: 5,
+    note: "Slow stretch, hard lockout."
+  }
+};
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(n)));
@@ -419,20 +521,22 @@ function buildExercises(
   mode: "Progression" | "Base" | "Reduced volume",
   history: ExerciseHistory[]
 ): RecommendedExercise[] {
-  const template = focus === "Push" ? PUSH_TEMPLATE : focus === "Pull" ? PULL_TEMPLATE : LOWER_TEMPLATE;
-  return template.map((slot) => {
-    const primaryHist = findHistory(history, slot.candidates);
+  const slotDefs = allSlotsForFocus(focus);
+
+  return slotDefs.map(({ slot, candidates }) => {
+    const program = SLOT_PROGRAMS[slot];
+    const primaryHist = findHistory(history, candidates);
     const memory = analyzeProgressionMemory(primaryHist);
-    const swapHist = memory.stalled ? chooseSiblingVariation(primaryHist, history, slot.candidates) : null;
+    const swapHist = memory.stalled ? chooseSiblingVariation(primaryHist, history, candidates) : null;
     const activeHist = swapHist ?? primaryHist;
-    const key = activeHist?.key ?? slot.candidates[0];
+    const key = activeHist?.key ?? candidates[0];
     const name = activeHist?.name ?? DISPLAY_NAME[key] ?? key;
-    const sets = mode === "Reduced volume" && (slot.slot === "Finisher" || slot.slot === "Calves") ? "2" : slot.sets;
-    const loadInfo = renderLoad(activeHist, slot.bump, mode, slot.reps, name);
+    const sets = mode === "Reduced volume" && (slot === "Pump" || slot === "Calves") ? "2" : program.sets;
+    const loadInfo = renderLoad(activeHist, program.bump, mode, program.reps, name);
 
     let note = activeHist?.lastReps
-      ? `Last time ${Math.round(activeHist.lastLoad ?? 0)} x ${activeHist.lastReps}. ${slot.note}`
-      : slot.note;
+      ? `Last time ${Math.round(activeHist.lastLoad ?? 0)} x ${activeHist.lastReps}. ${program.note}`
+      : program.note;
 
     let eventTag: string | undefined;
     let swappedFrom: string | null = null;
@@ -453,10 +557,10 @@ function buildExercises(
     }
 
     return {
-      slot: slot.slot,
+      slot: program.label,
       name,
       sets,
-      reps: slot.reps,
+      reps: program.reps,
       load: loadInfo.load,
       loadBasis: loadInfo.loadBasis,
       note,
@@ -589,6 +693,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     }
   };
 }
+
 
 
 
