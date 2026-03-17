@@ -12,38 +12,25 @@ type OpenAIResponse = any;
 
 function extractOutputText(data: any): string {
   if (!data) return "";
-
-  // Some wrappers provide this convenience field
   if (typeof data.output_text === "string" && data.output_text.trim()) return data.output_text;
 
-  // Official Responses API shape:
-  // { output: [{ content: [{ type: 'output_text', text: '...' }, ...] }, ...] }
   const chunks: string[] = [];
   const out = Array.isArray(data.output) ? data.output : [];
-
   for (const item of out) {
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const c of content) {
-      // Only collect each text chunk ONCE.
       if (typeof c?.text !== "string") continue;
-
       if (c?.type === "output_text") {
         chunks.push(c.text);
         continue;
       }
-
-      // Fallbacks seen in some variants (but avoid double-collecting output_text)
       const t = String(c?.type ?? "");
-      if (t && t.includes("text")) {
-        chunks.push(c.text);
-      }
+      if (t && t.includes("text")) chunks.push(c.text);
     }
   }
 
   const joined = chunks.join("\n").trim();
   if (joined) return joined;
-
-  // Last-ditch fallbacks
   if (typeof data?.text === "string") return data.text;
   if (typeof data?.output === "string") return data.output;
   return "";
@@ -62,29 +49,32 @@ export const handler: Handler = async (event) => {
 
     const body: ReqBody = event.body ? JSON.parse(event.body) : {};
     const images = Array.isArray(body.images) ? body.images.slice(0, 12) : [];
-
     const stats = body.stats ?? {};
     const month = body.month ?? "unknown-month";
     const windowStr = body.startYMD && body.endYMD ? `${body.startYMD} to ${body.endYMD}` : "";
 
     const system = [
-      "You are the Rebuild @ 60 ProgressLab Physique Analyst.",
-      "You receive monthly stats + optional progress photos (first/last anchors per pose).",
+      "You are the Rebuild @ 60 Coach Analysis layer.",
+      "You receive monthly stats, an optional deterministic scorecard snapshot, optional prior vision analysis text, and optional progress photos (first/last anchors per pose).",
       "Give a concise, practical summary in 6-12 bullet points.",
       "Be conservative: do not hallucinate numbers. Use only provided stats and what is visible in images.",
-      "Focus on: waist/weight trend, training recovery, posture/symmetry notes, and next-month action items.",
-      "Tone: direct, supportive, a bit gritty.",
+      "Treat scorecard values as structured signals, vision text as supporting observation, and photos as visual evidence.",
+      "If scorecard or vision context is present, reference it when useful, but do not repeat it mechanically.",
+      "Focus on waist/weight trend, training recovery environment, visible physique changes, momentum, and next-month action items.",
+      "Tone: direct, calm, practical, and a bit gritty.",
     ].join("\n");
 
     const userText = [
       `MONTH: ${month}`,
       windowStr ? `WINDOW: ${windowStr}` : "",
       "",
-      "STATS (may include nulls):",
+      "STATS (may include nulls, and may also include scorecard / vision_context):",
       JSON.stringify(stats, null, 2),
       "",
+      "Use deterministic scorecard signals when present.",
+      "Use vision_context as supporting observation when present.",
       "If photos are present, compare FIRST vs LAST for each pose and note visible changes.",
-      "If photos are missing, rely on stats and give a plan anyway.",
+      "If photos are missing, rely on stats and any included scorecard / vision context and give a plan anyway.",
     ]
       .filter(Boolean)
       .join("\n");
@@ -92,7 +82,6 @@ export const handler: Handler = async (event) => {
     const content: any[] = [{ type: "input_text", text: userText }];
     for (const img of images) {
       content.push({ type: "input_text", text: `IMAGE: ${img.label}` });
-      // Responses API expects the direct URL string for image_url.
       content.push({ type: "input_image", image_url: img.url });
     }
 
@@ -124,10 +113,7 @@ export const handler: Handler = async (event) => {
     if (!text.trim()) {
       return {
         statusCode: 502,
-        body: JSON.stringify({
-          message: "OpenAI returned no text output.",
-          raw: data,
-        }),
+        body: JSON.stringify({ message: "OpenAI returned no text output.", raw: data }),
       };
     }
 
@@ -136,5 +122,6 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
 
 
