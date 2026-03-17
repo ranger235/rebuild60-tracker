@@ -128,6 +128,37 @@ function bannerStyle(kind: "info" | "warn") {
   } as const;
 }
 
+function ProgressSection({
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12, padding: 12, marginBottom: 12, background: "rgba(255,255,255,0.03)" }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: "transparent", border: "none", color: "inherit", padding: 0, textAlign: "left", cursor: "pointer" }}
+      >
+        <div>
+          <div style={{ fontWeight: 800 }}>{title}</div>
+          {subtitle ? <div style={{ marginTop: 4, fontSize: 12, opacity: 0.8 }}>{subtitle}</div> : null}
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>{open ? "−" : "+"}</div>
+      </button>
+      {open ? <div style={{ marginTop: 12 }}>{children}</div> : null}
+    </div>
+  );
+}
+
 export default function ProgressView({
   userId,
   dayDate,
@@ -140,6 +171,10 @@ export default function ProgressView({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const [mode, setMode] = useState<"photos" | "measures">("photos");
+  const [weeklyOpen, setWeeklyOpen] = useState(true);
+  const [scorecardOpen, setScorecardOpen] = useState(true);
+  const [flipbookOpen, setFlipbookOpen] = useState(false);
+  const [compareSectionOpen, setCompareSectionOpen] = useState(false);
 
   // Settings
   const [checkinDow, setCheckinDowState] = useState<number>(() => getCheckinDow(userId));
@@ -1289,7 +1324,12 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
       {mode === "photos" && (
         <div>
-          {/* Weekly Check-in Meter */}
+          <ProgressSection
+            title="Weekly Check-In"
+            subtitle="Weekly ritual for anchor photos, weight, waist, and notes."
+            open={weeklyOpen}
+            onToggle={() => setWeeklyOpen((v) => !v)}
+          >
           <div style={{ ...bannerStyle(weekComplete ? "info" : "warn"), marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
@@ -1307,11 +1347,11 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
                 {!weekComplete ? (
                   <div style={{ marginTop: 8, opacity: 0.9 }}>
-                    Upload all 3 poses to unlock: <strong>Compare mode</strong>, <strong>Flipbook</strong>, and <strong>Monthly highlights</strong>.
+                    Upload all 3 poses to unlock the rest of Progress: <strong>Compare</strong>, <strong>Flipbook</strong>, and <strong>Monthly highlights</strong>.
                   </div>
                 ) : (
                   <div style={{ marginTop: 8, opacity: 0.9 }}>
-                    ✅ Week complete. Your future self is going to love this.
+                    ✅ Week complete. Check-in is ready to feed the rest of Progress.
                   </div>
                 )}
               </div>
@@ -1441,12 +1481,20 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
           </div>
 
           <hr />
+          </ProgressSection>
+
+          <ProgressSection
+            title="Monthly Scorecard"
+            subtitle="Structured monthly evaluation built from Quick Log, measurements, anchors, and coach interpretation."
+            open={scorecardOpen}
+            onToggle={() => setScorecardOpen((v) => !v)}
+          >
 
           {/* AI Physique Insight (Monthly report + AI) */}
           <div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
               <div>
-                <strong>AI Physique Insight</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
+                <strong>Monthly Scorecard + Coach Analysis</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
                 <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
                   Window: {monthStats.startYMD} → {monthStats.endYMD}
                   {monthReportBusy ? " • loading…" : ""}
@@ -1664,7 +1712,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               {aiInsight ? (
                 <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <strong>AI output</strong>
+                    <strong>Coach Analysis</strong>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>
                       {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
                     </div>
@@ -1685,7 +1733,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
                   {aiShowHistory && aiInsightHistory.length > 0 ? (
                     <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
-                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous runs (click to load):</div>
+                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous coach runs (click to load):</div>
                       <div style={{ display: "grid", gap: 6 }}>
                         {aiInsightHistory.map((h) => (
                           <button
@@ -1711,7 +1759,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               {visionText ? (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
-                    <strong>Vision Physique Change Detection</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"}, {visionFocus})
+                    <strong>Vision Analysis</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"}, {visionFocus})
                   </div>
                   <pre
                     style={{
@@ -1760,6 +1808,14 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
             </div>
           </div>
 
+          </ProgressSection>
+
+          <ProgressSection
+            title="Flipbook"
+            subtitle="Chronological visual proof of change, one pose at a time."
+            open={flipbookOpen}
+            onToggle={() => setFlipbookOpen((v) => !v)}
+          >
           {/* Flipbook + Monthly highlights (keep controls, image, and timeline contiguous) */}
           <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
             <div style={{ ...bannerStyle("info") }}>
@@ -2009,9 +2065,17 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
             </div>
           </div>
 
+          </ProgressSection>
+
+          <ProgressSection
+            title="Compare"
+            subtitle="Inspect anchor photos side by side. Use Compare on any anchor in the library below."
+            open={compareSectionOpen}
+            onToggle={() => setCompareSectionOpen((v) => !v)}
+          >
           {/* Gallery */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <h3 style={{ margin: 0 }}>Gallery</h3>
+            <h3 style={{ margin: 0 }}>Compare Library</h3>
             <button onClick={refreshGallery} disabled={galleryBusy}>
               {galleryBusy ? "Refreshing..." : "Refresh"}
             </button>
@@ -2355,6 +2419,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
               </div>
             </div>
           ) : null}
+          </ProgressSection>
         </div>
       )}
 
@@ -2416,6 +2481,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
