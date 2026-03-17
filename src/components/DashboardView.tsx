@@ -2,8 +2,9 @@ import { useMemo, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
 import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
 import { buildReadinessContext } from "../lib/readiness";
-import { formatReadinessLabel } from "../lib/readinessFormat";
+import { formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
 import type { ReadinessInput } from "../lib/readinessTypes";
+import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
 
 export type Point = { xLabel: string; y: number };
 
@@ -96,6 +97,7 @@ type Props = {
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
   startSessionFromRecommendation: () => void;
+  preferenceHistory: PreferenceHistoryEntry[];
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -186,7 +188,7 @@ function fmtTrend(value: string) {
   return "Unknown";
 }
 
-function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[]): ReadinessInput {
+function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], preferenceHistory: PreferenceHistoryEntry[]): ReadinessInput {
   return {
     workouts: setsSeries.map((p) => ({
       date: p.xLabel,
@@ -198,7 +200,12 @@ function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[]): 
         date: p.xLabel,
         weight: Number(p.y)
       })),
-    scorecards: []
+    scorecards: [],
+    preferenceHistory: preferenceHistory.map((entry) => ({
+      timestamp: entry.timestamp,
+      fidelityScore: typeof entry.fidelityScore === "number" ? entry.fidelityScore : null,
+      sessionOutcome: entry.sessionOutcome
+    }))
   };
 }
 
@@ -235,6 +242,7 @@ export default function DashboardView(props: Props) {
     timelineWeeks,
     brainSnapshot,
     startSessionFromRecommendation,
+    preferenceHistory,
     timerOn,
     setTimerOn,
     secs,
@@ -254,8 +262,8 @@ export default function DashboardView(props: Props) {
   ];
 
   const readinessInput = useMemo(
-    () => mapSeriesToReadinessInput(setsSeries, weightSeries),
-    [setsSeries, weightSeries]
+    () => mapSeriesToReadinessInput(setsSeries, weightSeries, preferenceHistory),
+    [setsSeries, weightSeries, preferenceHistory]
   );
 
   const readiness = useMemo(
@@ -316,10 +324,48 @@ export default function DashboardView(props: Props) {
             <div style={{ fontSize: 12, opacity: 0.75 }}>Scorecard Trend</div>
             <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtTrend(readiness.metrics.scorecardTrend)}</div>
           </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Recent Fidelity</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>
+              {readiness.metrics.recentFidelityAvg != null ? `${Math.round(readiness.metrics.recentFidelityAvg)}%` : "—"}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Prescription Trust</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPrescriptionTrust(readiness.metrics.prescriptionTrust)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Fidelity Trend</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtTrend(readiness.metrics.fidelityTrend)}</div>
+          </div>
         </div>
 
+        {(readiness.drivers.length > 0 || readiness.watchFlags.length > 0) && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginTop: 12 }}>
+            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Context Drivers</div>
+              {readiness.drivers.length > 0 ? readiness.drivers.map((driver) => (
+                <div key={driver.key} style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 700 }}>{driver.label}</div>
+                  {driver.detail && <div style={{ fontSize: 12, opacity: 0.78, marginTop: 2 }}>{driver.detail}</div>}
+                </div>
+              )) : <div style={{ fontSize: 12, opacity: 0.7 }}>No strong drivers yet.</div>}
+            </div>
+
+            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Watch Items</div>
+              {readiness.watchFlags.length > 0 ? readiness.watchFlags.map((flag) => (
+                <div key={flag.key} style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 700 }}>{flag.label}</div>
+                  <div style={{ fontSize: 12, opacity: 0.72, marginTop: 2, textTransform: "capitalize" }}>{flag.severity}</div>
+                </div>
+              )) : <div style={{ fontSize: 12, opacity: 0.7 }}>Nothing flashing red right now.</div>}
+            </div>
+          </div>
+        )}
+
         <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
-          First pass is deliberately conservative: workout density + bodyweight signal are live; scorecard integration will plug in next so the whole dashboard tells one story instead of three drunken stories in a trench coat.
+          Readiness now includes how faithfully recent sessions matched prescription, so Dashboard and Workout stop telling different stories like a couple of drunks at last call.
         </div>
       </div>
 
@@ -702,6 +748,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
