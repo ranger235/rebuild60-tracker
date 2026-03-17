@@ -3544,6 +3544,7 @@ async function syncNow() {
           aiCoachErr={aiCoachErr}
           aiCoach={aiCoach}
           milestones={milestones}
+          preferenceHistory={preferenceHistory}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           startSessionFromRecommendation={startSessionFromRecommendation}
@@ -3652,6 +3653,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
