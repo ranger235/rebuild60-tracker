@@ -705,7 +705,28 @@ async function buildInsightPayload() {
     month: key,
     startYMD,
     endYMD,
-    stats: monthStats,
+    stats: {
+      ...monthStats,
+      scorecard: scorecard
+        ? {
+            conditioning: scorecard.conditioning,
+            muscularity: scorecard.muscularity,
+            symmetry: scorecard.symmetry,
+            waist_control: scorecard.waist_control,
+            consistency: scorecard.consistency,
+            momentum: scorecard.momentum,
+            notes: scorecard.notes ?? null,
+          }
+        : null,
+      vision_context: visionText?.trim()
+        ? {
+            pose: visionPose,
+            scope: visionScope,
+            focus: visionFocus,
+            text: visionText.trim(),
+          }
+        : null,
+    },
     images,
   };
 }
@@ -1492,50 +1513,16 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
 
           {/* AI Physique Insight (Monthly report + AI) */}
           <div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-              <div>
-                <strong>Monthly Scorecard + Coach Analysis</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
-                <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
-                  Window: {monthStats.startYMD} → {monthStats.endYMD}
-                  {monthReportBusy ? " • loading…" : ""}
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+                <div>
+                  <strong>Monthly Scorecard + Coach Analysis</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
+                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
+                    Window: {monthStats.startYMD} → {monthStats.endYMD}
+                    {monthReportBusy ? " • loading…" : ""}
+                  </div>
                 </div>
-              </div>
 
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <button onClick={generatePhysiqueScorecard} disabled={scoreBusy} title="Generate a 1–10 monthly scorecard">
-                  {scoreBusy ? "Scoring…" : "Scorecard"}
-                </button>
-                <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
-                  {aiBusy ? "Generating AI…" : "Run AI"}
-                </button>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
-                  <input type="checkbox" checked={aiAppendMode} onChange={(e) => setAiAppendMode(e.target.checked)} />
-                  Append
-                </label>
-                <button
-                  onClick={() => setAiShowHistory((s) => !s)}
-                  disabled={aiInsightHistory.length === 0}
-                  title="Show previous AI runs"
-                >
-                  {aiShowHistory ? "Hide history" : "History"}
-                </button>
-                <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
-                  Clear
-                </button>
-                <button
-                  onClick={() => setScorecard(null)}
-                  disabled={!scorecard}
-                  title="Clear the current scorecard display"
-                >
-                  Clear score
-                </button>
-                <button
-                  onClick={() => setScoreShowHistory((s) => !s)}
-                  disabled={scoreHistory.length === 0}
-                  title="Show previous scorecards"
-                >
-                  {scoreShowHistory ? "Hide scores" : "Scores"}
-                </button>
                 <button
                   onClick={() => {
                     const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
@@ -1549,55 +1536,82 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                 >
                   Export JSON
                 </button>
+              </div>
 
-                <span style={{ width: 1, height: 18, background: "rgba(255,255,255,0.15)", display: "inline-block" }} />
+              <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <div>
+                    <strong>Advanced Analysis Tools</strong>
+                    <div style={{ marginTop: 4, opacity: 0.8, fontSize: 12 }}>
+                      Manual analysis actions. Keep these when you want a fresh structured score, a new coach read, or a vision pass.
+                    </div>
+                  </div>
 
-                <label style={{ fontSize: 12, opacity: 0.9 }}>
-                  Vision pose:{" "}
-                  <select value={visionPose} onChange={(e) => setVisionPose(e.target.value as Pose)} style={{ padding: 6 }}>
-                    <option value="front">Front</option>
-                    <option value="quarter">Quarter Turn</option>
-                    <option value="side">Side</option>
-                    <option value="back">Back</option>
-                  </select>
-                </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button onClick={generatePhysiqueScorecard} disabled={scoreBusy} title="Generate a 1–10 monthly scorecard">
+                      {scoreBusy ? "Scoring…" : "Run Scorecard"}
+                    </button>
+                    <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
+                      {aiBusy ? "Generating AI…" : "Run AI"}
+                    </button>
+                    <button onClick={runVisionPhysiqueAnalysis} disabled={visionBusy} title="Compare two photos with Vision AI">
+                      {visionBusy ? "Vision…" : "Run Vision"}
+                    </button>
+                    <button onClick={() => setScoreShowHistory((s) => !s)} disabled={scoreHistory.length === 0} title="Show previous scorecards">
+                      {scoreShowHistory ? "Hide scores" : "Scores"}
+                    </button>
+                    <button onClick={() => setAiShowHistory((s) => !s)} disabled={aiInsightHistory.length === 0} title="Show previous AI runs">
+                      {aiShowHistory ? "Hide AI history" : "AI history"}
+                    </button>
+                    <button onClick={() => setVisionShowHistory((s) => !s)} disabled={visionHistory.length === 0} title="Show previous Vision runs">
+                      {visionShowHistory ? "Hide vision" : "Vision history"}
+                    </button>
+                    <button onClick={() => setScorecard(null)} disabled={!scorecard} title="Clear the current scorecard display">
+                      Clear score
+                    </button>
+                    <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
+                      Clear AI
+                    </button>
+                    <button onClick={() => setVisionText("")} disabled={!visionText} title="Clear the current Vision output">
+                      Clear vision
+                    </button>
+                  </div>
+                </div>
 
-                <label style={{ fontSize: 12, opacity: 0.9 }}>
-                  Scope:{" "}
-                  <select value={visionScope} onChange={(e) => setVisionScope(e.target.value as any)} style={{ padding: 6 }}>
-                    <option value="month">This month (first → last)</option>
-                    <option value="last2">Last 2 anchors</option>
-                  </select>
-                </label>
-
-                <label style={{ fontSize: 12, opacity: 0.9 }}>
-                  Focus:{" "}
-                  <select value={visionFocus} onChange={(e) => setVisionFocus(e.target.value as any)} style={{ padding: 6 }}>
-                    <option value="balanced">Balanced</option>
-                    <option value="lower">Lower Body Priority</option>
-                    <option value="upper">Upper Body Priority</option>
-                  </select>
-                </label>
-
-                <button onClick={runVisionPhysiqueAnalysis} disabled={visionBusy} title="Compare two photos with Vision AI">
-                  {visionBusy ? "Vision…" : "Run Vision"}
-                </button>
-
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
-                  <input type="checkbox" checked={visionAppendMode} onChange={(e) => setVisionAppendMode(e.target.checked)} />
-                  Append
-                </label>
-
-                <button
-                  onClick={() => setVisionShowHistory((s) => !s)}
-                  disabled={visionHistory.length === 0}
-                  title="Show previous Vision runs"
-                >
-                  {visionShowHistory ? "Hide vision" : "Vision history"}
-                </button>
-                <button onClick={() => setVisionText("")} disabled={!visionText} title="Clear the current Vision output">
-                  Clear vision
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                    <input type="checkbox" checked={aiAppendMode} onChange={(e) => setAiAppendMode(e.target.checked)} />
+                    Append AI runs
+                  </label>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                    <input type="checkbox" checked={visionAppendMode} onChange={(e) => setVisionAppendMode(e.target.checked)} />
+                    Append Vision runs
+                  </label>
+                  <label style={{ fontSize: 12, opacity: 0.9 }}>
+                    Vision pose:{" "}
+                    <select value={visionPose} onChange={(e) => setVisionPose(e.target.value as Pose)} style={{ padding: 6 }}>
+                      <option value="front">Front</option>
+                      <option value="quarter">Quarter Turn</option>
+                      <option value="side">Side</option>
+                      <option value="back">Back</option>
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12, opacity: 0.9 }}>
+                    Scope:{" "}
+                    <select value={visionScope} onChange={(e) => setVisionScope(e.target.value as any)} style={{ padding: 6 }}>
+                      <option value="month">This month (first → last)</option>
+                      <option value="last2">Last 2 anchors</option>
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 12, opacity: 0.9 }}>
+                    Focus:{" "}
+                    <select value={visionFocus} onChange={(e) => setVisionFocus(e.target.value as any)} style={{ padding: 6 }}>
+                      <option value="balanced">Balanced</option>
+                      <option value="lower">Lower Body Priority</option>
+                      <option value="upper">Upper Body Priority</option>
+                    </select>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -2481,6 +2495,8 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
+
 
 
 
