@@ -72,3 +72,97 @@ export function derivePrimaryOutcome(params: {
 
   return "matched";
 }
+
+
+export type SessionFidelityBreakdown = {
+  score: number;
+  exerciseMatch: number;
+  setCompletion: number;
+  substitutionPenalty: number;
+  anchorQuality: number;
+  label: "High" | "Moderate" | "Low";
+  note: string;
+};
+
+export function computeSessionFidelity(params: {
+  matchedCount: number;
+  totalRecommended: number;
+  substitutionCount: number;
+  missedCount: number;
+  extrasCount: number;
+  exerciseFidelity: Array<{
+    recommendedSets: number | null;
+    actualSets: number;
+  }>;
+  primaryOutcome: PrimaryOutcome;
+  sessionOutcome: SessionOutcome;
+}): SessionFidelityBreakdown {
+  const {
+    matchedCount,
+    totalRecommended,
+    substitutionCount,
+    missedCount,
+    extrasCount,
+    exerciseFidelity,
+    primaryOutcome,
+    sessionOutcome,
+  } = params;
+
+  const exerciseMatch = totalRecommended > 0
+    ? Math.max(0, Math.min(1, matchedCount / totalRecommended))
+    : sessionOutcome === "abandoned"
+      ? 0
+      : 1;
+
+  let prescribedSets = 0;
+  let completedSets = 0;
+  for (const row of exerciseFidelity || []) {
+    const rec = typeof row.recommendedSets === "number" && Number.isFinite(row.recommendedSets)
+      ? Math.max(0, row.recommendedSets)
+      : 0;
+    const actual = typeof row.actualSets === "number" && Number.isFinite(row.actualSets)
+      ? Math.max(0, row.actualSets)
+      : 0;
+    prescribedSets += rec;
+    completedSets += rec > 0 ? Math.min(actual, rec) : actual;
+  }
+  const setCompletion = prescribedSets > 0
+    ? Math.max(0, Math.min(1, completedSets / prescribedSets))
+    : exerciseMatch;
+
+  const substitutionPressure = totalRecommended > 0
+    ? (substitutionCount + missedCount * 1.25 + extrasCount * 0.5) / totalRecommended
+    : 0;
+  const substitutionPenalty = Math.max(0, Math.min(1, 1 - substitutionPressure));
+
+  const anchorQuality = (
+    primaryOutcome === "progressed" ? 1 :
+    primaryOutcome === "matched" ? 0.9 :
+    primaryOutcome === "unknown" ? 0.75 :
+    0.45
+  );
+
+  let score = Math.round((exerciseMatch * 0.35 + setCompletion * 0.30 + substitutionPenalty * 0.20 + anchorQuality * 0.15) * 100);
+
+  if (sessionOutcome === "abandoned") score = Math.min(score, 20);
+  if (sessionOutcome === "partial") score = Math.min(score, 74);
+  score = Math.max(0, Math.min(100, score));
+
+  const label = score >= 85 ? "High" : score >= 65 ? "Moderate" : "Low";
+  const note = label === "High"
+    ? "Recommendation landed cleanly enough to trust the signal."
+    : label === "Moderate"
+      ? "Useful signal, but reality trimmed or bent parts of the prescription."
+      : "Reality drifted far enough from plan that the brain should stay cautious.";
+
+  return {
+    score,
+    exerciseMatch: Math.round(exerciseMatch * 100),
+    setCompletion: Math.round(setCompletion * 100),
+    substitutionPenalty: Math.round(substitutionPenalty * 100),
+    anchorQuality: Math.round(anchorQuality * 100),
+    label,
+    note,
+  };
+}
+
