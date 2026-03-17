@@ -113,6 +113,9 @@ type Props = {
     substitutions: Array<{ recommended: string; actual: string }>;
     extras: string[];
     missed: string[];
+    fidelityScore?: number;
+    fidelityLabel?: "High" | "Moderate" | "Low";
+    fidelityNote?: string;
     summary: string;
   } | null;
   coachSessionSeed: {
@@ -203,7 +206,7 @@ export default function WorkoutLoggerView(props: Props) {
         <div style={{ border: "1px solid #d5d5d5", borderRadius: 10, padding: 12, marginBottom: 12, background: "#fafafa" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ fontWeight: 700 }}>Recommendation vs Reality</div>
-            <div style={{ fontWeight: 700 }}>{recommendationComparison.adherenceScore}% match</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><div style={{ fontWeight: 700 }}>{recommendationComparison.adherenceScore}% match</div>{typeof recommendationComparison.fidelityScore === "number" && (<div style={{ fontWeight: 700 }}>Fidelity {recommendationComparison.fidelityScore}%</div>)}</div>
           </div>
           <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>{recommendationComparison.summary}</div>
           <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
@@ -215,7 +218,15 @@ export default function WorkoutLoggerView(props: Props) {
             {recommendationComparison.loadDeltaAvg != null && (
               <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Load {recommendationComparison.loadDeltaAvg >= 0 ? "+" : ""}{recommendationComparison.loadDeltaAvg}%</span>
             )}
+            {typeof recommendationComparison.fidelityScore === "number" && (
+              <span style={{ padding: "4px 8px", border: "1px solid #ddd", borderRadius: 999 }}>Fidelity {recommendationComparison.fidelityScore}% {recommendationComparison.fidelityLabel ? `(${recommendationComparison.fidelityLabel})` : ""}</span>
+            )}
           </div>
+          {recommendationComparison.fidelityNote && (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <strong>Session fidelity:</strong> {recommendationComparison.fidelityNote}
+            </div>
+          )}
           {recommendationComparison.substitutions.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12 }}>
               <strong>Swaps this session:</strong> {recommendationComparison.substitutions.map((s) => `${s.recommended} → ${s.actual}`).join(" • ")}
@@ -647,6 +658,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
