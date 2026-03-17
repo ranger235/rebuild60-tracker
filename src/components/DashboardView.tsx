@@ -1,6 +1,9 @@
-import type { CSSProperties, RefObject } from "react";
+import { useMemo, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
 import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
+import { buildReadinessContext } from "../lib/readiness";
+import { formatReadinessLabel } from "../lib/readinessFormat";
+import type { ReadinessInput } from "../lib/readinessTypes";
 
 export type Point = { xLabel: string; y: number };
 
@@ -163,6 +166,42 @@ function eventTagTone(text?: string) {
   return { bg: "#f4f4f4", border: "#d9d9d9" };
 }
 
+function readinessTone(status: string) {
+  if (status === "ready_to_push") return { bg: "#ebf8ee", border: "#b8dfc0" };
+  if (status === "watch_fatigue") return { bg: "#fff8ea", border: "#ebd39e" };
+  if (status === "recovery_constrained") return { bg: "#fff3e8", border: "#efc9a8" };
+  if (status === "low_signal_confidence") return { bg: "#f4f4f4", border: "#d9d9d9" };
+  return { bg: "#eef7ff", border: "#c9dcf5" };
+}
+
+function fmtPct(value: number | null) {
+  if (value == null) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
+function fmtTrend(value: string) {
+  if (value === "up") return "Up";
+  if (value === "down") return "Down";
+  if (value === "flat") return "Flat";
+  return "Unknown";
+}
+
+function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[]): ReadinessInput {
+  return {
+    workouts: setsSeries.map((p) => ({
+      date: p.xLabel,
+      completed: Number(p.y) > 0
+    })),
+    bodyweight: weightSeries
+      .filter((p) => Number.isFinite(Number(p.y)) && Number(p.y) > 0)
+      .map((p) => ({
+        date: p.xLabel,
+        weight: Number(p.y)
+      })),
+    scorecards: []
+  };
+}
+
 export default function DashboardView(props: Props) {
   const {
     dashBusy,
@@ -214,6 +253,18 @@ export default function DashboardView(props: Props) {
     { label: "Deadlift / RDL", points: dlSeries }
   ];
 
+  const readinessInput = useMemo(
+    () => mapSeriesToReadinessInput(setsSeries, weightSeries),
+    [setsSeries, weightSeries]
+  );
+
+  const readiness = useMemo(
+    () => buildReadinessContext(readinessInput),
+    [readinessInput]
+  );
+
+  const readinessChip = readinessTone(readiness.status);
+
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
@@ -227,6 +278,48 @@ export default function DashboardView(props: Props) {
           <button onClick={refreshDashboard} disabled={dashBusy}>{dashBusy ? "Refreshing…" : "Refresh"}</button>
           <button onClick={exportBackup} disabled={backupBusy}>{backupBusy ? "Exporting…" : "Export Backup"}</button>
           <button onClick={() => importFileRef.current?.click()}>Import Backup</button>
+        </div>
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 14, background: readinessChip.bg, border: `1px solid ${readinessChip.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Readiness Snapshot — Phase 4E</div>
+            <div style={{ fontSize: 28, fontWeight: 800, marginTop: 2 }}>{formatReadinessLabel(readiness.status)}</div>
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{readiness.summary.reasonShort}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Signal Confidence</div>
+            <div style={{ fontSize: 22, fontWeight: 800, textTransform: "capitalize" }}>{readiness.confidence}</div>
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>Coverage: {Math.round(readiness.metrics.signalCoverage * 100)}%</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginTop: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Adherence (7d)</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtPct(readiness.metrics.adherence7d)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Adherence (28d)</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtPct(readiness.metrics.adherence28d)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Session Density (7d)</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{readiness.metrics.sessionDensity7d ?? "—"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Bodyweight Trend (14d)</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtTrend(readiness.metrics.bodyweightTrend14d)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Scorecard Trend</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtTrend(readiness.metrics.scorecardTrend)}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
+          First pass is deliberately conservative: workout density + bodyweight signal are live; scorecard integration will plug in next so the whole dashboard tells one story instead of three drunken stories in a trench coat.
         </div>
       </div>
 
@@ -521,98 +614,95 @@ export default function DashboardView(props: Props) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginTop: 18 }}>
-        <div style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-            <div style={{ fontWeight: 800 }}>Dashboard Notes</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>Quick Log lives on the main landing page now</div>
-          </div>
-          <div style={{ fontSize: 13, lineHeight: 1.4, marginTop: 10 }}>
-            Cleaner command-center view: the dashboard reads the system, and the Quick Log handles data entry on first load where it belongs.
-          </div>
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-            Weight, waist, sleep, protein, calories, Zone 2, and notes still feed these dashboard trends — they just are not duplicated here anymore.
-          </div>
-          {milestones.length > 0 ? (
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.12)" }}>
-              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Latest milestone</div>
-              <div style={{ fontWeight: 800 }}>{milestones[0].label}</div>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-                {milestones[0].achieved_on} • {milestones[0].milestone_type}
-              </div>
-            </div>
-          ) : (
-            <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75 }}>
-              No milestones logged yet — the board will start showing them as PRs and streak markers land.
-            </div>
-          )}
-        </div>
+      <h4 style={{ marginTop: 18, marginBottom: 8 }}>Milestones</h4>
+      <div style={{ ...cardStyle, padding: milestones.length ? 0 : 12, overflowX: milestones.length ? "auto" : undefined }}>
+        {milestones.length ? (
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+            <thead>
+              <tr style={{ background: "#f3f3f3" }}>
+                {["Date", "Type", "Label"].map((h) => (
+                  <th key={h} style={{ textAlign: "left", padding: 10, fontSize: 12, opacity: 0.8, borderBottom: "1px solid #ddd" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {milestones.map((m) => (
+                <tr key={m.id}>
+                  <td style={{ padding: 10, borderBottom: "1px solid #eee", fontWeight: 700 }}>{m.achieved_on}</td>
+                  <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{m.milestone_type}</td>
+                  <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{m.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ fontSize: 12, opacity: 0.75 }}>No milestones logged yet.</div>
+        )}
+      </div>
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 18 }}>
         <div style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-            <div style={{ fontWeight: 800 }}>Band Equivalent Weights</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>Local-first defaults</div>
+          <div style={{ fontWeight: 800 }}>Quick Log Pad</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>Fast capture still lives here so the rest of the app stays fed.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
+            <label style={{ fontSize: 12 }}>Weight<input value={props.weight} onChange={(e) => props.setWeight(e.target.value)} style={{ width: "100%" }} /></label>
+            <label style={{ fontSize: 12 }}>Waist<input value={props.waist} onChange={(e) => props.setWaist(e.target.value)} style={{ width: "100%" }} /></label>
+            <label style={{ fontSize: 12 }}>Sleep<input value={props.sleepHours} onChange={(e) => props.setSleepHours(e.target.value)} style={{ width: "100%" }} /></label>
+            <label style={{ fontSize: 12 }}>Calories<input value={props.calories} onChange={(e) => props.setCalories(e.target.value)} style={{ width: "100%" }} /></label>
+            <label style={{ fontSize: 12 }}>Protein<input value={props.protein} onChange={(e) => props.setProtein(e.target.value)} style={{ width: "100%" }} /></label>
+            <label style={{ fontSize: 12 }}>Zone 2<input value={props.z2Minutes} onChange={(e) => props.setZ2Minutes(e.target.value)} style={{ width: "100%" }} /></label>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(50px, 1fr))", gap: 8, marginTop: 10 }}>
-            {(["1", "2", "3", "4", "5"] as const).map((k) => (
-              <div key={k} style={{ display: "grid", gap: 4 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>L{k}</div>
-                <input
-                  value={String(bandEquivMap[k] ?? "")}
-                  onChange={(e) => {
-                    const raw = e.target.value.trim();
-                    const num = raw === "" ? 0 : Number(raw);
-                    setBandEquivMap({ ...bandEquivMap, [k]: Number.isFinite(num) ? num : bandEquivMap[k] });
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Combined factor</div>
-            <input
-              value={String(bandComboFactor ?? "")}
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                const num = raw === "" ? NaN : Number(raw);
-                if (Number.isFinite(num)) setBandComboFactor(num);
-              }}
-            />
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button onClick={() => saveBandEquiv(bandEquivMap, bandComboFactor)}>Save</button>
-            <button onClick={loadBandEquiv}>Reload</button>
-          </div>
+          <label style={{ display: "block", fontSize: 12, marginTop: 8 }}>Notes<textarea value={props.notes} onChange={(e) => props.setNotes(e.target.value)} rows={3} style={{ width: "100%", resize: "vertical" }} /></label>
+          <button onClick={props.saveQuickLog} style={{ marginTop: 10 }}>Save Quick Log</button>
         </div>
 
         <div style={cardStyle}>
           <div style={{ fontWeight: 800 }}>Rest Timer</div>
-          <div style={{ fontSize: 32, fontWeight: 800, marginTop: 8 }}>{fmtClock(secs)}</div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 34, fontWeight: 800, marginTop: 8 }}>{fmtClock(secs)}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
             <button onClick={() => setTimerOn((prev) => !prev)}>{timerOn ? "Pause" : "Start"}</button>
-            <button onClick={() => { setSecs(180); setTimerOn(false); }}>3:00</button>
-            <button onClick={() => { setSecs(300); setTimerOn(false); }}>5:00</button>
-            <button onClick={() => { setSecs(0); setTimerOn(false); }}>Reset</button>
+            <button onClick={() => { setTimerOn(false); setSecs(0); }}>Reset</button>
+            <button onClick={() => setSecs((prev) => prev + 60)}>+1 min</button>
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>Handy little workhorse, not glamorous, but neither is a torque wrench and you still want one.</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ fontWeight: 800 }}>Band Equivalency</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>Keep the resistance map honest so analytics and progression aren’t drunk.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
+            {["1", "2", "3", "4", "5"].map((band) => (
+              <label key={band} style={{ fontSize: 12 }}>
+                Band {band}
+                <input
+                  value={String(bandEquivMap[band] ?? "")}
+                  onChange={(e) => {
+                    const next = { ...bandEquivMap, [band]: Number(e.target.value || 0) };
+                    setBandEquivMap(next);
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </label>
+            ))}
+            <label style={{ fontSize: 12 }}>
+              Combo factor
+              <input
+                value={String(bandComboFactor)}
+                onChange={(e) => setBandComboFactor(Number(e.target.value || 0))}
+                style={{ width: "100%" }}
+              />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <button onClick={loadBandEquiv}>Load</button>
+            <button onClick={() => saveBandEquiv(bandEquivMap, bandComboFactor)}>Save</button>
           </div>
         </div>
       </div>
-
-      <h4 style={{ marginTop: 18, marginBottom: 8 }}>Recent Milestones</h4>
-      {milestones.length === 0 ? (
-        <div style={{ fontSize: 13, opacity: 0.75 }}>No milestone records yet.</div>
-      ) : (
-        <div style={{ display: "grid", gap: 6 }}>
-          {milestones.map((m) => (
-            <div key={m.id} style={cardStyle}>
-              <div style={{ fontWeight: 700 }}>{m.label}</div>
-              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{m.achieved_on} · {m.milestone_type}</div>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }
+
 
 
 
