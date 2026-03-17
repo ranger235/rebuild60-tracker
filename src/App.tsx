@@ -19,6 +19,7 @@ import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
+import { classifySessionOutcome, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 
 function todayISO(): string {
@@ -281,6 +282,19 @@ type RecommendationExerciseFingerprint = {
   slot: string;
   sets: number | null;
   loadLbs: number | null;
+  repsTarget: string | null;
+};
+
+type ExerciseFidelityRecord = {
+  recommendedKey: string;
+  actualKey: string | null;
+  status: "matched" | "substituted" | "partial" | "missed";
+  recommendedSets: number | null;
+  actualSets: number;
+  recommendedLoadLbs: number | null;
+  actualTopLoadLbs: number | null;
+  recommendedReps: string | null;
+  actualTopReps: number | null;
 };
 
 type RecommendationFingerprint = {
@@ -307,6 +321,11 @@ type RecommendationComparison = {
   extrasKeys: string[];
   missed: string[];
   missedKeys: string[];
+  exerciseFidelity: ExerciseFidelityRecord[];
+  sessionOutcome: "as_prescribed" | "modified" | "partial" | "abandoned";
+  daysSinceRecommendation: number | null;
+  daysSinceLastTrainingSession: number | null;
+  primaryOutcome: "progressed" | "matched" | "regressed" | "unknown";
   summary: string;
 };
 
@@ -383,7 +402,8 @@ function buildRecommendationFingerprint(brain: BrainSnapshot | null): Recommenda
       name: ex.name,
       slot: ex.slot,
       sets: parseRecommendedSetCount(ex.sets),
-      loadLbs: firstNumberFromText(ex.load)
+      loadLbs: firstNumberFromText(ex.load),
+      repsTarget: parseRecommendedRepTarget(ex.reps) || null
     }))
   };
 }
@@ -404,16 +424,17 @@ function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
 
 function compareRecommendationToSession(params: {
   recommendation: RecommendationFingerprint | null;
+  coachSessionSeed?: CoachSessionSeed | null;
   exercises: LocalWorkoutExercise[];
   sets: LocalWorkoutSet[];
 }): RecommendationComparison | null {
-  const { recommendation, exercises, sets } = params;
+  const { recommendation, coachSessionSeed, exercises, sets } = params;
   if (!recommendation) return null;
 
   const sessionExercises = exercises || [];
   const sessionSets = sets || [];
   const actualCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-  const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null }>();
+  const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null; topReps: number | null }>();
 
   for (const ex of sessionExercises) {
     const key = exerciseKey(ex.name);
@@ -421,14 +442,22 @@ function compareRecommendationToSession(params: {
     actualCounts[focus] += 1;
     const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
     let topLoad: number | null = null;
+    let topReps: number | null = null;
     for (const st of workSets) {
       const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
-      if (load > 0 && (topLoad == null || load > topLoad)) topLoad = load;
+      const reps = Number(st.reps ?? 0);
+      if (load > 0 && (topLoad == null || load > topLoad || (load === topLoad && reps > Number(topReps ?? 0)))) {
+        topLoad = load;
+        topReps = reps > 0 ? reps : null;
+      } else if ((topLoad == null || topLoad <= 0) && reps > 0 && (topReps == null || reps > topReps)) {
+        topReps = reps;
+      }
     }
     actualByKey.set(key, {
       name: displayExerciseName(ex.name),
       workSets: workSets.length,
-      topLoad
+      topLoad,
+      topReps
     });
   }
 
@@ -476,11 +505,71 @@ function compareRecommendationToSession(params: {
   const loadScore = loadDeltaAvg == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(loadDeltaAvg) / 30));
   const adherenceScore = Math.round((exerciseScore * 0.5 + (focusAligned ? 0.25 : 0) + volumeScore * 0.15 + loadScore * 0.10) * 100);
 
+  const coachByRecommendedKey = new Map((coachSessionSeed?.exercises || []).map((ex) => [exerciseKey(ex.name), ex]));
+  const usedActualKeys = new Set<string>();
+  const exerciseFidelity: ExerciseFidelityRecord[] = recExercises.map((rec) => {
+    const exact = actualByKey.get(rec.key);
+    if (exact) {
+      usedActualKeys.add(rec.key);
+      return {
+        recommendedKey: rec.key,
+        actualKey: rec.key,
+        status: rec.sets != null && exact.workSets > 0 && exact.workSets < rec.sets ? "partial" : "matched",
+        recommendedSets: rec.sets,
+        actualSets: exact.workSets,
+        recommendedLoadLbs: rec.loadLbs,
+        actualTopLoadLbs: exact.topLoad,
+        recommendedReps: coachByRecommendedKey.get(rec.key)?.reps ?? rec.repsTarget,
+        actualTopReps: exact.topReps
+      };
+    }
+
+    const substitution = extras.find((extra) => !usedActualKeys.has(extra.key));
+    if (substitution) {
+      usedActualKeys.add(substitution.key);
+      return {
+        recommendedKey: rec.key,
+        actualKey: substitution.key,
+        status: "substituted",
+        recommendedSets: rec.sets,
+        actualSets: substitution.workSets,
+        recommendedLoadLbs: rec.loadLbs,
+        actualTopLoadLbs: substitution.topLoad,
+        recommendedReps: coachByRecommendedKey.get(rec.key)?.reps ?? rec.repsTarget,
+        actualTopReps: substitution.topReps
+      };
+    }
+
+    return {
+      recommendedKey: rec.key,
+      actualKey: null,
+      status: "missed",
+      recommendedSets: rec.sets,
+      actualSets: 0,
+      recommendedLoadLbs: rec.loadLbs,
+      actualTopLoadLbs: null,
+      recommendedReps: coachByRecommendedKey.get(rec.key)?.reps ?? rec.repsTarget,
+      actualTopReps: null
+    };
+  });
+
+  const hasWork = sessionExercises.some((ex) => sessionSets.some((s) => s.exercise_id === ex.id && !s.is_warmup));
+  const sessionOutcome = classifySessionOutcome({
+    hasWork,
+    adherenceScore,
+    matchedCount: matched.length,
+    totalRecommended: recExercises.length,
+    substitutionCount: substitutionKeys.length,
+    missedCount: missed.length,
+    volumeDelta
+  });
+
   let summary = `${matched.length}/${recExercises.length} recommended exercises matched`;
   if (!focusAligned && sessionExercises.length > 0) summary += `, focus drifted to ${actualFocus}`;
   else if (sessionExercises.length > 0) summary += `, focus stayed on ${recommendation.focus}`;
   else summary += `, waiting for logged work`;
   if (volumeDelta != null && sessionExercises.length > 0) summary += `, volume ${volumeDelta >= 0 ? "+" : ""}${volumeDelta}% vs plan`;
+  summary += `, outcome ${sessionOutcome.replace(/_/g, " ")}`;
 
   return {
     available: true,
@@ -498,6 +587,11 @@ function compareRecommendationToSession(params: {
     extrasKeys: extras.map((x) => x.key),
     missed: missed.map((x) => x.name),
     missedKeys: missed.map((x) => x.key),
+    exerciseFidelity,
+    sessionOutcome,
+    daysSinceRecommendation: null,
+    daysSinceLastTrainingSession: null,
+    primaryOutcome: "unknown",
     summary
   };
 }
@@ -2885,7 +2979,8 @@ async function refreshDashboard() {
       let preferenceSignals = null;
       try {
         const prefRow = userId
-          ? await localdb.localSettings.get([userId, "recommendation_history_v1"])
+          ? (await localdb.localSettings.get([userId, "recommendation_feedback_v2"]))
+            ?? (await localdb.localSettings.get([userId, "recommendation_history_v1"]))
           : null;
         const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
         const prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
@@ -3015,10 +3110,11 @@ async function syncNow() {
   useEffect(() => {
     setRecommendationComparison(compareRecommendationToSession({
       recommendation: recommendationFingerprint,
+      coachSessionSeed,
       exercises,
       sets
     }));
-  }, [recommendationFingerprint, exercises, sets]);
+  }, [recommendationFingerprint, coachSessionSeed, exercises, sets]);
 
   useEffect(() => {
     if (!userId || !openSessionId) {
@@ -3040,16 +3136,103 @@ async function syncNow() {
     if (!hasWork) return;
 
     void (async () => {
-      const existing = await localdb.localSettings.get([userId, "recommendation_history_v1"]);
-      let history: PreferenceHistoryEntry[] = [];
+      const existingV2 = await localdb.localSettings.get([userId, "recommendation_feedback_v2"]);
+      const existingV1 = await localdb.localSettings.get([userId, "recommendation_history_v1"]);
+      let historyV2: PreferenceHistoryEntry[] = [];
+      let historyV1: PreferenceHistoryEntry[] = [];
       try {
-        history = existing?.value ? JSON.parse(existing.value) : [];
-        if (!Array.isArray(history)) history = [];
+        historyV2 = existingV2?.value ? JSON.parse(existingV2.value) : [];
+        if (!Array.isArray(historyV2)) historyV2 = [];
       } catch {
-        history = [];
+        historyV2 = [];
+      }
+      try {
+        historyV1 = existingV1?.value ? JSON.parse(existingV1.value) : [];
+        if (!Array.isArray(historyV1)) historyV1 = [];
+      } catch {
+        historyV1 = [];
       }
 
-      const entry: PreferenceHistoryEntry = {
+      const sessionRow = await localdb.localSessions.get(openSessionId);
+      const sessionDay = sessionRow?.day_date ?? selectedDayDate;
+      const generatedDay = isoToDayString(recommendationFingerprint?.generatedAt) ?? sessionDay;
+      const daysSinceRecommendation = daysBetweenDayStrings(sessionDay, generatedDay);
+
+      const priorSessions = (await localdb.localSessions.where("user_id").equals(userId).toArray())
+        .filter((session) => session.id !== openSessionId && session.day_date < sessionDay)
+        .sort((a, b) => b.day_date.localeCompare(a.day_date));
+
+      let previousTrainingDay: string | null = null;
+      for (const session of priorSessions) {
+        const priorExercises = await localdb.localExercises.where({ session_id: session.id }).toArray();
+        if (priorExercises.length === 0) continue;
+        let hasPriorWork = false;
+        for (const ex of priorExercises) {
+          const priorWorkSets = await localdb.localSets.where({ exercise_id: ex.id }).filter((st) => !st.is_warmup).toArray();
+          if (priorWorkSets.length > 0) {
+            hasPriorWork = true;
+            break;
+          }
+        }
+        if (hasPriorWork) {
+          previousTrainingDay = session.day_date;
+          break;
+        }
+      }
+      const daysSinceLastTrainingSession = daysBetweenDayStrings(sessionDay, previousTrainingDay);
+
+      const primaryTarget = coachSessionSeed?.exercises?.[0]?.name
+        ?? recommendationFingerprint?.exercises?.[0]?.name
+        ?? null;
+      let primaryOutcome: RecommendationComparison["primaryOutcome"] = "unknown";
+      if (primaryTarget) {
+        const primaryKey = exerciseKey(primaryTarget);
+        const fidelity = recommendationComparison.exerciseFidelity.find((row) => row.recommendedKey === primaryKey);
+        if (fidelity?.actualKey) {
+          const actualExercise = exercises.find((ex) => exerciseKey(ex.name) === fidelity.actualKey) ?? null;
+          if (actualExercise) {
+            const currentWorkSets = sets.filter((st) => st.exercise_id === actualExercise.id && !st.is_warmup);
+            let currentTopLoad: number | null = null;
+            let currentTopReps: number | null = null;
+            for (const st of currentWorkSets) {
+              const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
+              const reps = Number(st.reps ?? 0);
+              if (load > 0 && (currentTopLoad == null || load > currentTopLoad || (load === currentTopLoad && reps > Number(currentTopReps ?? 0)))) {
+                currentTopLoad = load;
+                currentTopReps = reps > 0 ? reps : null;
+              } else if ((currentTopLoad == null || currentTopLoad <= 0) && reps > 0 && (currentTopReps == null || reps > currentTopReps)) {
+                currentTopReps = reps;
+              }
+            }
+
+            const prevLocal = await getLocalLastForExerciseName(actualExercise.name, openSessionId);
+            const prevCloud = prevLocal ? null : await getCloudLastForExerciseName(actualExercise.name);
+            const prevSummary = prevLocal ?? prevCloud;
+            if (prevSummary) {
+              let prevTopLoad: number | null = null;
+              let prevTopReps: number | null = null;
+              for (const st of prevSummary.sets.filter((setRow) => !setRow.is_warmup)) {
+                const load = Number(st.weight_lbs ?? st.band_est_lbs ?? 0);
+                const reps = Number(st.reps ?? 0);
+                if (load > 0 && (prevTopLoad == null || load > prevTopLoad || (load === prevTopLoad && reps > Number(prevTopReps ?? 0)))) {
+                  prevTopLoad = load;
+                  prevTopReps = reps > 0 ? reps : null;
+                } else if ((prevTopLoad == null || prevTopLoad <= 0) && reps > 0 && (prevTopReps == null || reps > prevTopReps)) {
+                  prevTopReps = reps;
+                }
+              }
+              primaryOutcome = derivePrimaryOutcome({
+                currentTopLoadLbs: currentTopLoad,
+                currentTopReps,
+                previousTopLoadLbs: prevTopLoad,
+                previousTopReps: prevTopReps,
+              });
+            }
+          }
+        }
+      }
+
+      const entryV2: PreferenceHistoryEntry = {
         sessionId: openSessionId,
         timestamp: Date.now(),
         recommendedFocus: recommendationComparison.recommendedFocus,
@@ -3060,18 +3243,50 @@ async function syncNow() {
         missedKeys: recommendationComparison.missedKeys,
         volumeDelta: recommendationComparison.volumeDelta,
         loadDeltaAvg: recommendationComparison.loadDeltaAvg,
+        sessionOutcome: recommendationComparison.sessionOutcome,
+        daysSinceRecommendation,
+        daysSinceLastTrainingSession,
+        exerciseFidelity: recommendationComparison.exerciseFidelity,
+        primaryOutcome,
       };
 
-      const next = [entry, ...history.filter((h) => h.sessionId !== openSessionId)].slice(0, 30);
+      const entryV1: PreferenceHistoryEntry = {
+        sessionId: openSessionId,
+        timestamp: entryV2.timestamp,
+        recommendedFocus: entryV2.recommendedFocus,
+        actualFocus: entryV2.actualFocus,
+        adherenceScore: entryV2.adherenceScore,
+        substitutionKeys: entryV2.substitutionKeys,
+        extrasKeys: entryV2.extrasKeys,
+        missedKeys: entryV2.missedKeys,
+        volumeDelta: entryV2.volumeDelta,
+        loadDeltaAvg: entryV2.loadDeltaAvg,
+      };
+
+      const nextV2 = [entryV2, ...historyV2.filter((h) => h.sessionId !== openSessionId)].slice(0, 30);
+      const nextV1 = [entryV1, ...historyV1.filter((h) => h.sessionId !== openSessionId)].slice(0, 30);
+
+      await localdb.localSettings.put({
+        user_id: userId,
+        key: "recommendation_feedback_v2",
+        value: JSON.stringify(nextV2),
+        updatedAt: Date.now(),
+      });
       await localdb.localSettings.put({
         user_id: userId,
         key: "recommendation_history_v1",
-        value: JSON.stringify(next),
+        value: JSON.stringify(nextV1),
         updatedAt: Date.now(),
       });
-      setPreferenceHistory(next);
+      setPreferenceHistory(nextV2);
+      setRecommendationComparison((prev) => prev ? {
+        ...prev,
+        daysSinceRecommendation,
+        daysSinceLastTrainingSession,
+        primaryOutcome,
+      } : prev);
     })();
-  }, [userId, openSessionId, recommendationComparison, exercises, sets]);
+  }, [userId, openSessionId, recommendationComparison, recommendationFingerprint, coachSessionSeed, exercises, sets, selectedDayDate]);
 
   // refresh dashboard when opening the dashboard tab
   useEffect(() => {
@@ -3406,6 +3621,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
