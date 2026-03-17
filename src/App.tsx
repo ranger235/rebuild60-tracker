@@ -19,7 +19,7 @@ import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
-import { classifySessionOutcome, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString } from "./lib/recommendationFeedback";
+import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 
 function todayISO(): string {
@@ -326,6 +326,9 @@ type RecommendationComparison = {
   daysSinceRecommendation: number | null;
   daysSinceLastTrainingSession: number | null;
   primaryOutcome: "progressed" | "matched" | "regressed" | "unknown";
+  fidelityScore: number;
+  fidelityLabel: SessionFidelityBreakdown["label"];
+  fidelityNote: string;
   summary: string;
 };
 
@@ -563,6 +566,16 @@ function compareRecommendationToSession(params: {
     missedCount: missed.length,
     volumeDelta
   });
+  const fidelity = computeSessionFidelity({
+    matchedCount: matched.length,
+    totalRecommended: recExercises.length,
+    substitutionCount: substitutionKeys.length,
+    missedCount: missed.length,
+    extrasCount: extras.length,
+    exerciseFidelity,
+    primaryOutcome: "unknown",
+    sessionOutcome,
+  });
 
   let summary = `${matched.length}/${recExercises.length} recommended exercises matched`;
   if (!focusAligned && sessionExercises.length > 0) summary += `, focus drifted to ${actualFocus}`;
@@ -592,6 +605,9 @@ function compareRecommendationToSession(params: {
     daysSinceRecommendation: null,
     daysSinceLastTrainingSession: null,
     primaryOutcome: "unknown",
+    fidelityScore: fidelity.score,
+    fidelityLabel: fidelity.label,
+    fidelityNote: fidelity.note,
     summary
   };
 }
@@ -3232,6 +3248,17 @@ async function syncNow() {
         }
       }
 
+      const fidelity = computeSessionFidelity({
+        matchedCount: recommendationComparison.matchedCount,
+        totalRecommended: recommendationComparison.totalRecommended,
+        substitutionCount: recommendationComparison.substitutionKeys.length,
+        missedCount: recommendationComparison.missedKeys.length,
+        extrasCount: recommendationComparison.extrasKeys.length,
+        exerciseFidelity: recommendationComparison.exerciseFidelity,
+        primaryOutcome,
+        sessionOutcome: recommendationComparison.sessionOutcome,
+      });
+
       const entryV2: PreferenceHistoryEntry = {
         sessionId: openSessionId,
         timestamp: Date.now(),
@@ -3248,6 +3275,7 @@ async function syncNow() {
         daysSinceLastTrainingSession,
         exerciseFidelity: recommendationComparison.exerciseFidelity,
         primaryOutcome,
+        fidelityScore: fidelity.score,
       };
 
       const entryV1: PreferenceHistoryEntry = {
@@ -3284,6 +3312,9 @@ async function syncNow() {
         daysSinceRecommendation,
         daysSinceLastTrainingSession,
         primaryOutcome,
+        fidelityScore: fidelity.score,
+        fidelityLabel: fidelity.label,
+        fidelityNote: fidelity.note,
       } : prev);
     })();
   }, [userId, openSessionId, recommendationComparison, recommendationFingerprint, coachSessionSeed, exercises, sets, selectedDayDate]);
@@ -3621,6 +3652,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
