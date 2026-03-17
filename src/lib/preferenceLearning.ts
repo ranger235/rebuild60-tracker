@@ -11,6 +11,21 @@ export type PreferenceHistoryEntry = {
   missedKeys: string[];
   volumeDelta: number | null;
   loadDeltaAvg: number | null;
+  sessionOutcome?: "as_prescribed" | "modified" | "partial" | "abandoned";
+  daysSinceRecommendation?: number | null;
+  daysSinceLastTrainingSession?: number | null;
+  exerciseFidelity?: Array<{
+    recommendedKey: string;
+    actualKey: string | null;
+    status: "matched" | "substituted" | "partial" | "missed";
+    recommendedSets: number | null;
+    actualSets: number;
+    recommendedLoadLbs: number | null;
+    actualTopLoadLbs: number | null;
+    recommendedReps: string | null;
+    actualTopReps: number | null;
+  }>;
+  primaryOutcome?: "progressed" | "matched" | "regressed" | "unknown";
 };
 
 export type PreferenceSignals = {
@@ -19,6 +34,8 @@ export type PreferenceSignals = {
   preferredPairings: Partial<Record<NeedKey, NeedKey[]>>;
   needBiases: Partial<Record<NeedKey, number>>;
   volumeTolerance: "lower" | "normal" | "higher";
+  anchorCompliance: "weak" | "normal" | "strong";
+  delaySensitivity: "normal" | "high";
   reasons: string[];
 };
 
@@ -136,6 +153,8 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
       preferredPairings,
       needBiases,
       volumeTolerance: "normal",
+      anchorCompliance: "normal",
+      delaySensitivity: "normal",
       reasons,
     };
   }
@@ -150,10 +169,36 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
   const missedNeedCounts = new Map<NeedKey, number>();
   const pairingCounts = new Map<string, number>();
   const volumeDeltas: number[] = [];
+  let partialCount = 0;
+  let abandonedCount = 0;
+  let modifiedCount = 0;
+  let delayedCount = 0;
+  let anchorProgressedCount = 0;
+  let anchorRegressedCount = 0;
+  let anchorUnknownCount = 0;
 
   for (const entry of recent) {
     if (typeof entry.volumeDelta === "number" && Number.isFinite(entry.volumeDelta)) {
       volumeDeltas.push(entry.volumeDelta);
+    }
+
+    if (entry.sessionOutcome === "partial") partialCount += 1;
+    if (entry.sessionOutcome === "abandoned") abandonedCount += 1;
+    if (entry.sessionOutcome === "modified") modifiedCount += 1;
+    if (typeof entry.daysSinceLastTrainingSession === "number" && entry.daysSinceLastTrainingSession >= 3) delayedCount += 1;
+    if (entry.primaryOutcome === "progressed") anchorProgressedCount += 1;
+    else if (entry.primaryOutcome === "regressed") anchorRegressedCount += 1;
+    else if (entry.primaryOutcome === "unknown") anchorUnknownCount += 1;
+
+    for (const fidelity of entry.exerciseFidelity || []) {
+      const need = classifyNeed(fidelity.recommendedKey);
+      if (fidelity.status === "missed" || fidelity.status === "partial") {
+        missedNeedCounts.set(need, (missedNeedCounts.get(need) ?? 0) + 1);
+      }
+      if (fidelity.status === "substituted" && fidelity.actualKey) {
+        const actualNeed = classifyNeed(fidelity.actualKey);
+        extraNeedCounts.set(actualNeed, (extraNeedCounts.get(actualNeed) ?? 0) + 1);
+      }
     }
 
     for (const sub of entry.substitutionKeys || []) {
@@ -222,13 +267,37 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
       ? volumeDeltas.reduce((a, b) => a + b, 0) / volumeDeltas.length
       : 0;
 
-  const volumeTolerance =
+  let volumeTolerance: "lower" | "normal" | "higher" =
     avgVolumeDelta >= 10 ? "higher" : avgVolumeDelta <= -10 ? "lower" : "normal";
+
+  if (partialCount >= 3 || abandonedCount >= 2) volumeTolerance = "lower";
 
   if (volumeTolerance === "higher") {
     reasons.push("Recommendation history says you often do a bit more work than prescribed, so the brain can tolerate a slightly denser session.");
   } else if (volumeTolerance === "lower") {
     reasons.push("Recommendation history says you often trim volume, so the brain will keep one eye on session density.");
+  }
+
+  const anchorCompliance: "weak" | "normal" | "strong" =
+    anchorRegressedCount >= 3
+      ? "weak"
+      : anchorProgressedCount >= 3 && anchorUnknownCount <= Math.max(2, Math.floor(recent.length / 3))
+        ? "strong"
+        : "normal";
+
+  if (anchorCompliance === "weak") {
+    reasons.push("Primary lift reality has been inconsistent, so progression confidence should stay a touch conservative.");
+  } else if (anchorCompliance === "strong") {
+    reasons.push("Primary lift reality has been landing well, which supports steadier progression confidence.");
+  }
+
+  const delaySensitivity: "normal" | "high" = delayedCount >= 4 ? "high" : "normal";
+  if (delaySensitivity === "high") {
+    reasons.push("Recent sessions have been spreading out more than planned, so stale-session drift should be treated as real context.");
+  }
+
+  if (modifiedCount >= 4) {
+    reasons.push("Reality checks show you regularly modify sessions, which is useful signal rather than noise for future recommendations.");
   }
 
   return {
@@ -237,6 +306,8 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
     preferredPairings,
     needBiases,
     volumeTolerance,
+    anchorCompliance,
+    delaySensitivity,
     reasons: unique(reasons).slice(0, 8),
   };
 }
@@ -270,3 +341,4 @@ export function applyPreferenceSignalsToNeeds(
     recoveryBias: snapshot.recoveryBias,
   };
 }
+
