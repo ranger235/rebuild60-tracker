@@ -168,6 +168,9 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
   const extraNeedCounts = new Map<NeedKey, number>();
   const missedNeedCounts = new Map<NeedKey, number>();
   const pairingCounts = new Map<string, number>();
+  const completionBiasCounts = new Map<string, number>();
+  const completedNeedCounts = new Map<NeedKey, number>();
+  const trimmedNeedCounts = new Map<NeedKey, number>();
   const volumeDeltas: number[] = [];
   let partialCount = 0;
   let abandonedCount = 0;
@@ -192,12 +195,28 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
 
     for (const fidelity of entry.exerciseFidelity || []) {
       const need = classifyNeed(fidelity.recommendedKey);
+      const recommendedSets = fidelity.recommendedSets ?? 0;
+      const actualSets = fidelity.actualSets ?? 0;
+
       if (fidelity.status === "missed" || fidelity.status === "partial") {
         missedNeedCounts.set(need, (missedNeedCounts.get(need) ?? 0) + 1);
       }
+
+      if (recommendedSets > 0 && actualSets > 0 && actualSets < recommendedSets) {
+        trimmedNeedCounts.set(need, (trimmedNeedCounts.get(need) ?? 0) + 1);
+      }
+
+      if (fidelity.status === "matched" && actualSets > 0) {
+        const completedKey = fidelity.actualKey ?? fidelity.recommendedKey;
+        completionBiasCounts.set(completedKey, (completionBiasCounts.get(completedKey) ?? 0) + 1);
+        completedNeedCounts.set(need, (completedNeedCounts.get(need) ?? 0) + 1);
+      }
+
       if (fidelity.status === "substituted" && fidelity.actualKey) {
         const actualNeed = classifyNeed(fidelity.actualKey);
         extraNeedCounts.set(actualNeed, (extraNeedCounts.get(actualNeed) ?? 0) + 1);
+        completionBiasCounts.set(fidelity.actualKey, (completionBiasCounts.get(fidelity.actualKey) ?? 0) + 1);
+        completedNeedCounts.set(actualNeed, (completedNeedCounts.get(actualNeed) ?? 0) + 1);
       }
     }
 
@@ -232,23 +251,39 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
     }
   }
 
+  for (const [exerciseKey, count] of completionBiasCounts.entries()) {
+    if (count < 2) continue;
+    const bias = count >= 4 ? 10 : count >= 3 ? 8 : 6;
+    preferredExerciseBias[exerciseKey] = Math.max(preferredExerciseBias[exerciseKey] ?? 0, bias);
+  }
+
   for (const [recommendedKey, actualKey] of Object.entries(preferredSubstitutions)) {
     preferredExerciseBias[actualKey] = Math.max(preferredExerciseBias[actualKey] ?? 0, 12);
     reasons.push(`Reality check: you often turn ${recommendedKey} into ${actualKey}, so the brain will lean that way when it fits.`);
   }
 
+  if ([...completionBiasCounts.values()].some((count) => count >= 3)) {
+    reasons.push("Reality checks now reward exercises you consistently finish cleanly, not just the ones you swap into.");
+  }
+
   for (const key of NEED_KEYS) {
     const extra = extraNeedCounts.get(key) ?? 0;
     const missed = missedNeedCounts.get(key) ?? 0;
+    const completed = completedNeedCounts.get(key) ?? 0;
+    const trimmed = trimmedNeedCounts.get(key) ?? 0;
     let bias = 1;
 
-    if (extra >= 3) {
+    if (extra >= 3 || completed >= 4) {
       bias += 0.08;
-      reasons.push(`Preference learning: you keep adding or preserving ${key} work, so that lane gets a small positive bias.`);
+      reasons.push(`Preference learning: you keep adding or successfully landing ${key} work, so that lane gets a small positive bias.`);
     }
     if (missed >= 3) {
       bias -= 0.06;
       reasons.push(`Preference learning: ${key} work gets skipped often enough to soften that lane a touch.`);
+    }
+    if (trimmed >= 3 && missed < 3) {
+      bias -= 0.04;
+      reasons.push(`Preference learning: ${key} work often gets trimmed once the session starts, so that lane gets a small realism discount.`);
     }
 
     if (bias !== 1) {
@@ -267,10 +302,20 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
       ? volumeDeltas.reduce((a, b) => a + b, 0) / volumeDeltas.length
       : 0;
 
+  const partialRate = partialCount / Math.max(1, recent.length);
+  const modifiedRate = modifiedCount / Math.max(1, recent.length);
+  const delayRate = delayedCount / Math.max(1, recent.length);
+  const regressionRate = anchorRegressedCount / Math.max(1, recent.length);
+  const progressionRate = anchorProgressedCount / Math.max(1, recent.length);
+
   let volumeTolerance: "lower" | "normal" | "higher" =
     avgVolumeDelta >= 10 ? "higher" : avgVolumeDelta <= -10 ? "lower" : "normal";
 
-  if (partialCount >= 3 || abandonedCount >= 2) volumeTolerance = "lower";
+  if (partialRate >= 0.3 || abandonedCount >= 2 || (modifiedRate >= 0.45 && avgVolumeDelta <= 0)) {
+    volumeTolerance = "lower";
+  } else if (volumeTolerance === "higher" && (partialRate >= 0.2 || abandonedCount > 0)) {
+    volumeTolerance = "normal";
+  }
 
   if (volumeTolerance === "higher") {
     reasons.push("Recommendation history says you often do a bit more work than prescribed, so the brain can tolerate a slightly denser session.");
@@ -279,9 +324,9 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
   }
 
   const anchorCompliance: "weak" | "normal" | "strong" =
-    anchorRegressedCount >= 3
+    regressionRate >= 0.3
       ? "weak"
-      : anchorProgressedCount >= 3 && anchorUnknownCount <= Math.max(2, Math.floor(recent.length / 3))
+      : progressionRate >= 0.35 && anchorRegressedCount === 0 && anchorUnknownCount <= Math.max(2, Math.floor(recent.length / 3))
         ? "strong"
         : "normal";
 
@@ -291,12 +336,12 @@ export function derivePreferenceSignals(history: PreferenceHistoryEntry[]): Pref
     reasons.push("Primary lift reality has been landing well, which supports steadier progression confidence.");
   }
 
-  const delaySensitivity: "normal" | "high" = delayedCount >= 4 ? "high" : "normal";
+  const delaySensitivity: "normal" | "high" = delayedCount >= 4 || delayRate >= 0.33 ? "high" : "normal";
   if (delaySensitivity === "high") {
     reasons.push("Recent sessions have been spreading out more than planned, so stale-session drift should be treated as real context.");
   }
 
-  if (modifiedCount >= 4) {
+  if (modifiedCount >= 4 || modifiedRate >= 0.45) {
     reasons.push("Reality checks show you regularly modify sessions, which is useful signal rather than noise for future recommendations.");
   }
 
@@ -341,4 +386,5 @@ export function applyPreferenceSignalsToNeeds(
     recoveryBias: snapshot.recoveryBias,
   };
 }
+
 
