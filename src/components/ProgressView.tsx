@@ -529,6 +529,14 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
 
+  const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
+    { key: "conditioning", label: "Conditioning" },
+    { key: "muscularity", label: "Muscularity" },
+    { key: "symmetry", label: "Symmetry" },
+    { key: "waist_control", label: "Waist Control" },
+    { key: "consistency", label: "Consistency" },
+  ];
+
   // Vision AI (photo-to-photo) analysis
   const [visionBusy, setVisionBusy] = useState(false);
   const [visionPose, setVisionPose] = useState<Pose>("front");
@@ -678,6 +686,61 @@ const monthStats = useMemo(() => {
     avgZone2: avg("zone2_minutes"),
   };
 }, [dayDate, monthDaily, monthMeas]);
+
+const previousScorecard = useMemo<Scorecard | null>(() => {
+  if (!scorecard || scoreHistory.length === 0) return null;
+  const byNewest = [...scoreHistory].sort((a, b) => b.ts.localeCompare(a.ts));
+  const idx = byNewest.findIndex((s) => s.ts === scorecard.ts);
+  if (idx >= 0) return byNewest[idx + 1] ?? null;
+
+  const older = byNewest.find((s) => s.ts < scorecard.ts);
+  return older ?? byNewest[0] ?? null;
+}, [scorecard, scoreHistory]);
+
+const scorecardDeltaSummary = useMemo(() => {
+  if (!scorecard || !previousScorecard) return null;
+
+  const deltas = scorecardMetrics.map((metric) => {
+    const currentVal = Number(scorecard[metric.key] ?? 0);
+    const previousVal = Number(previousScorecard[metric.key] ?? 0);
+    const delta = Number((currentVal - previousVal).toFixed(1));
+    return { ...metric, delta };
+  });
+
+  const improving = deltas.filter((d) => d.delta > 0).length;
+  const flat = deltas.filter((d) => d.delta === 0).length;
+  const down = deltas.filter((d) => d.delta < 0).length;
+
+  return { deltas, improving, flat, down };
+}, [scorecard, previousScorecard, scorecardMetrics]);
+
+function formatDelta(delta: number) {
+  if (delta > 0) return `+${delta.toFixed(1)}`;
+  if (delta < 0) return `${delta.toFixed(1)}`;
+  return `0.0`;
+}
+
+function deltaTone(delta: number): React.CSSProperties {
+  if (delta > 0) {
+    return {
+      color: "#0f766e",
+      background: "rgba(16, 185, 129, 0.12)",
+      border: "1px solid rgba(16, 185, 129, 0.28)",
+    };
+  }
+  if (delta < 0) {
+    return {
+      color: "#b45309",
+      background: "rgba(245, 158, 11, 0.12)",
+      border: "1px solid rgba(245, 158, 11, 0.28)",
+    };
+  }
+  return {
+    color: "rgba(255,255,255,0.9)",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.12)",
+  };
+}
 
 async function buildInsightPayload() {
   const key = monthKey(dayDate);
@@ -1672,16 +1735,53 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         <div style={{ opacity: 0.75, fontSize: 12 }}>Generated: {scorecard.ts.replace("T", " ").slice(0, 19)}Z</div>
                       </div>
 
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
-                        <div style={{ opacity: 0.9 }}>Conditioning</div><div><strong>{scorecard.conditioning.toFixed(1)}</strong></div>
-                        <div style={{ opacity: 0.9 }}>Muscularity</div><div><strong>{scorecard.muscularity.toFixed(1)}</strong></div>
-                        <div style={{ opacity: 0.9 }}>Symmetry</div><div><strong>{scorecard.symmetry.toFixed(1)}</strong></div>
-                        <div style={{ opacity: 0.9 }}>Waist Control</div><div><strong>{scorecard.waist_control.toFixed(1)}</strong></div>
-                        <div style={{ opacity: 0.9 }}>Consistency</div><div><strong>{scorecard.consistency.toFixed(1)}</strong></div>
+                      {scorecardDeltaSummary ? (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                          <strong>Scorecard Trend</strong>
+                          <span style={{ fontSize: 12, opacity: 0.9 }}>vs {previousScorecard?.monthKey}</span>
+                          <span style={{ fontSize: 12, opacity: 0.9 }}>Improving: <strong>{scorecardDeltaSummary.improving}</strong></span>
+                          <span style={{ fontSize: 12, opacity: 0.9 }}>Flat: <strong>{scorecardDeltaSummary.flat}</strong></span>
+                          <span style={{ fontSize: 12, opacity: 0.9 }}>Down: <strong>{scorecardDeltaSummary.down}</strong></span>
+                        </div>
+                      ) : null}
+
+                      <div style={{ display: "grid", gridTemplateColumns: scorecardDeltaSummary ? "1fr auto auto" : "1fr auto", gap: 6, alignItems: "center" }}>
+                        {scorecardMetrics.map((metric) => {
+                          const value = Number(scorecard[metric.key] ?? 0);
+                          const delta = scorecardDeltaSummary?.deltas.find((d) => d.key === metric.key)?.delta ?? null;
+                          return (
+                            <React.Fragment key={metric.key}>
+                              <div style={{ opacity: 0.9 }}>{metric.label}</div>
+                              <div><strong>{value.toFixed(1)}</strong></div>
+                              {scorecardDeltaSummary ? (
+                                <div>
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      minWidth: 52,
+                                      padding: "2px 8px",
+                                      borderRadius: 999,
+                                      fontSize: 12,
+                                      fontWeight: 700,
+                                      ...deltaTone(delta ?? 0),
+                                    }}
+                                  >
+                                    {formatDelta(delta ?? 0)}
+                                  </span>
+                                </div>
+                              ) : null}
+                            </React.Fragment>
+                          );
+                        })}
                       </div>
 
                       <div style={{ opacity: 0.9 }}>
                         Momentum: <strong>{scorecard.momentum === "up" ? "↑ Improving" : scorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong>
+                        {previousScorecard ? (
+                          <span style={{ opacity: 0.8 }}> • Previous: <strong>{previousScorecard.momentum === "up" ? "↑ Improving" : previousScorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong></span>
+                        ) : null}
                       </div>
 
                       {scorecard.notes ? (
@@ -2495,6 +2595,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
