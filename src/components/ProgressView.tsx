@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
 import { localdb } from "../localdb";
 
@@ -175,6 +175,8 @@ export default function ProgressView({
   const [scorecardOpen, setScorecardOpen] = useState(true);
   const [flipbookOpen, setFlipbookOpen] = useState(false);
   const [compareSectionOpen, setCompareSectionOpen] = useState(false);
+  const [comparePoseFilter, setComparePoseFilter] = useState<"all" | Pose>("all");
+  const [compareAnchorsOnly, setCompareAnchorsOnly] = useState(false);
 
   // Settings
   const [checkinDow, setCheckinDowState] = useState<number>(() => getCheckinDow(userId));
@@ -391,6 +393,24 @@ export default function ProgressView({
     return by;
   }, [rows]);
 
+  const compareRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (compareAnchorsOnly && !r.is_anchor) return false;
+      if (comparePoseFilter !== "all" && r.pose !== comparePoseFilter) return false;
+      return true;
+    });
+  }, [rows, compareAnchorsOnly, comparePoseFilter]);
+
+  function openQuickCompareByPose(pose: Pose) {
+    const anchorsDesc = anchorsByPose[pose] ?? [];
+    if (anchorsDesc.length < 2) {
+      alert(`Need at least two anchor photos for ${pose.toUpperCase()} to compare.`);
+      return;
+    }
+    const latest = anchorsDesc[0];
+    openCompareForRow(latest);
+  }
+
   const flipList = useMemo(() => {
     const list = (anchorsByPose[flipPose] ?? []).slice().reverse();
     return list;
@@ -528,14 +548,6 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
-
-  const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
-    { key: "conditioning", label: "Conditioning" },
-    { key: "muscularity", label: "Muscularity" },
-    { key: "symmetry", label: "Symmetry" },
-    { key: "waist_control", label: "Waist Control" },
-    { key: "consistency", label: "Consistency" },
-  ];
 
   // Vision AI (photo-to-photo) analysis
   const [visionBusy, setVisionBusy] = useState(false);
@@ -686,61 +698,6 @@ const monthStats = useMemo(() => {
     avgZone2: avg("zone2_minutes"),
   };
 }, [dayDate, monthDaily, monthMeas]);
-
-const previousScorecard = useMemo<Scorecard | null>(() => {
-  if (!scorecard || scoreHistory.length === 0) return null;
-  const byNewest = [...scoreHistory].sort((a, b) => b.ts.localeCompare(a.ts));
-  const idx = byNewest.findIndex((s) => s.ts === scorecard.ts);
-  if (idx >= 0) return byNewest[idx + 1] ?? null;
-
-  const older = byNewest.find((s) => s.ts < scorecard.ts);
-  return older ?? byNewest[0] ?? null;
-}, [scorecard, scoreHistory]);
-
-const scorecardDeltaSummary = useMemo(() => {
-  if (!scorecard || !previousScorecard) return null;
-
-  const deltas = scorecardMetrics.map((metric) => {
-    const currentVal = Number(scorecard[metric.key] ?? 0);
-    const previousVal = Number(previousScorecard[metric.key] ?? 0);
-    const delta = Number((currentVal - previousVal).toFixed(1));
-    return { ...metric, delta };
-  });
-
-  const improving = deltas.filter((d) => d.delta > 0).length;
-  const flat = deltas.filter((d) => d.delta === 0).length;
-  const down = deltas.filter((d) => d.delta < 0).length;
-
-  return { deltas, improving, flat, down };
-}, [scorecard, previousScorecard, scorecardMetrics]);
-
-function formatDelta(delta: number) {
-  if (delta > 0) return `+${delta.toFixed(1)}`;
-  if (delta < 0) return `${delta.toFixed(1)}`;
-  return `0.0`;
-}
-
-function deltaTone(delta: number): React.CSSProperties {
-  if (delta > 0) {
-    return {
-      color: "#0f766e",
-      background: "rgba(16, 185, 129, 0.12)",
-      border: "1px solid rgba(16, 185, 129, 0.28)",
-    };
-  }
-  if (delta < 0) {
-    return {
-      color: "#b45309",
-      background: "rgba(245, 158, 11, 0.12)",
-      border: "1px solid rgba(245, 158, 11, 0.28)",
-    };
-  }
-  return {
-    color: "rgba(255,255,255,0.9)",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.12)",
-  };
-}
 
 async function buildInsightPayload() {
   const key = monthKey(dayDate);
@@ -1735,53 +1692,16 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                         <div style={{ opacity: 0.75, fontSize: 12 }}>Generated: {scorecard.ts.replace("T", " ").slice(0, 19)}Z</div>
                       </div>
 
-                      {scorecardDeltaSummary ? (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                          <strong>Scorecard Trend</strong>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>vs {previousScorecard?.monthKey}</span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Improving: <strong>{scorecardDeltaSummary.improving}</strong></span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Flat: <strong>{scorecardDeltaSummary.flat}</strong></span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Down: <strong>{scorecardDeltaSummary.down}</strong></span>
-                        </div>
-                      ) : null}
-
-                      <div style={{ display: "grid", gridTemplateColumns: scorecardDeltaSummary ? "1fr auto auto" : "1fr auto", gap: 6, alignItems: "center" }}>
-                        {scorecardMetrics.map((metric) => {
-                          const value = Number(scorecard[metric.key] ?? 0);
-                          const delta = scorecardDeltaSummary?.deltas.find((d) => d.key === metric.key)?.delta ?? null;
-                          return (
-                            <React.Fragment key={metric.key}>
-                              <div style={{ opacity: 0.9 }}>{metric.label}</div>
-                              <div><strong>{value.toFixed(1)}</strong></div>
-                              {scorecardDeltaSummary ? (
-                                <div>
-                                  <span
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      minWidth: 52,
-                                      padding: "2px 8px",
-                                      borderRadius: 999,
-                                      fontSize: 12,
-                                      fontWeight: 700,
-                                      ...deltaTone(delta ?? 0),
-                                    }}
-                                  >
-                                    {formatDelta(delta ?? 0)}
-                                  </span>
-                                </div>
-                              ) : null}
-                            </React.Fragment>
-                          );
-                        })}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
+                        <div style={{ opacity: 0.9 }}>Conditioning</div><div><strong>{scorecard.conditioning.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Muscularity</div><div><strong>{scorecard.muscularity.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Symmetry</div><div><strong>{scorecard.symmetry.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Waist Control</div><div><strong>{scorecard.waist_control.toFixed(1)}</strong></div>
+                        <div style={{ opacity: 0.9 }}>Consistency</div><div><strong>{scorecard.consistency.toFixed(1)}</strong></div>
                       </div>
 
                       <div style={{ opacity: 0.9 }}>
                         Momentum: <strong>{scorecard.momentum === "up" ? "↑ Improving" : scorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong>
-                        {previousScorecard ? (
-                          <span style={{ opacity: 0.8 }}> • Previous: <strong>{previousScorecard.momentum === "up" ? "↑ Improving" : previousScorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong></span>
-                        ) : null}
                       </div>
 
                       {scorecard.notes ? (
@@ -2012,8 +1932,28 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                     <div style={{ opacity: 0.9 }}>
                       <strong>Timeline</strong> — {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
                     </div>
-                    <div style={{ opacity: 0.75, fontSize: 12 }}>
-                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ opacity: 0.75, fontSize: 12 }}>
+                        Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
+                      </div>
+                      <button onClick={() => setFlipIdx((i) => Math.max(0, i - 1))} disabled={flipIdx <= 0}>Prev</button>
+                      <button onClick={() => setFlipIdx((i) => Math.min(flipList.length - 1, i + 1))} disabled={!flipList.length || flipIdx >= flipList.length - 1}>Next</button>
+                      <button onClick={() => setFlipIdx(Math.max(0, flipList.length - 1))} disabled={!flipList.length}>Latest</button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+                    <div style={{ padding: 8, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>Oldest anchor</div>
+                      <div><strong>{flipList[0]?.taken_on ?? "—"}</strong></div>
+                    </div>
+                    <div style={{ padding: 8, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>Current frame</div>
+                      <div><strong>{flipList[flipIdx]?.taken_on ?? "—"}</strong></div>
+                    </div>
+                    <div style={{ padding: 8, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>Latest anchor</div>
+                      <div><strong>{flipList[flipList.length - 1]?.taken_on ?? "—"}</strong></div>
                     </div>
                   </div>
 
@@ -2187,17 +2127,51 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
             open={compareSectionOpen}
             onToggle={() => setCompareSectionOpen((v) => !v)}
           >
-          {/* Gallery */}
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <h3 style={{ margin: 0 }}>Compare Library</h3>
-            <button onClick={refreshGallery} disabled={galleryBusy}>
-              {galleryBusy ? "Refreshing..." : "Refresh"}
-            </button>
-            <span style={{ opacity: 0.75 }}>{rows.length} photos</span>
-          </div>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+              <strong>Quick Compare by Pose</strong>
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {CORE_POSES.map((p) => (
+                  <button key={p} onClick={() => openQuickCompareByPose(p)} disabled={(anchorsByPose[p] ?? []).length < 2}>
+                    {p.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>Opens the two most recent anchors for the selected pose.</div>
+            </div>
 
-          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-            {rows.map((r) => (
+            {/* Gallery */}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <h3 style={{ margin: 0 }}>Compare Library</h3>
+              <button onClick={refreshGallery} disabled={galleryBusy}>
+                {galleryBusy ? "Refreshing..." : "Refresh"}
+              </button>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                Pose:
+                <select value={comparePoseFilter} onChange={(e) => setComparePoseFilter(e.target.value as any)} style={{ padding: 6 }}>
+                  <option value="all">All</option>
+                  <option value="front">Front</option>
+                  <option value="quarter">Quarter</option>
+                  <option value="side">Side</option>
+                  <option value="back">Back</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+                <input type="checkbox" checked={compareAnchorsOnly} onChange={(e) => setCompareAnchorsOnly(e.target.checked)} />
+                Anchors only
+              </label>
+              <span style={{ opacity: 0.75 }}>Showing {compareRows.length} of {rows.length} photos</span>
+            </div>
+
+            {compareRows.length === 0 ? (
+              <div style={{ padding: 12, borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", opacity: 0.85 }}>
+                No photos match the current Compare filters.
+              </div>
+            ) : null}
+
+            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+              {compareRows.map((r) => (
               <div
                 key={r.id}
                 style={{
@@ -2595,6 +2569,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
