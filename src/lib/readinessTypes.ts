@@ -30,12 +30,17 @@ export type WatchFlag = {
   severity: "info" | "watch" | "high";
 };
 
+export type PrescriptionTrustLevel = "high" | "moderate" | "low" | "unknown";
+
 export type ReadinessMetrics = {
   adherence7d: number | null;
   adherence28d: number | null;
   sessionDensity7d: number | null;
   bodyweightTrend14d: TrendDirection;
   scorecardTrend: TrendDirection;
+  recentFidelityAvg: number | null;
+  fidelityTrend: TrendDirection;
+  prescriptionTrust: PrescriptionTrustLevel;
   signalCoverage: number;
 };
 
@@ -71,8 +76,16 @@ export type ScorecardItem = {
   score: number;
 };
 
+export type ReadinessPreferenceHistoryItem = {
+  timestamp: number;
+  fidelityScore?: number | null;
+  sessionOutcome?: "as_prescribed" | "modified" | "partial" | "abandoned";
+};
+
 export type ReadinessInput = {
   workouts: WorkoutHistoryItem[];
   bodyweight: BodyweightItem[];
   scorecards: ScorecardItem[];
+  preferenceHistory?: ReadinessPreferenceHistoryItem[];
 };
+;
