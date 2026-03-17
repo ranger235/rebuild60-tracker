@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "../supabase";
-import { localdb } from "../localdb";
-import ProgressScorecard from "./progress/ProgressScorecard";
+import { supabase } from "../../supabase";
+import { localdb } from "../../localdb";
+import ProgressScorecard from "./ProgressScorecard";
+import ProgressFlipbook from "./ProgressFlipbook";
+import ProgressCompare from "./ProgressCompare";
 
 type Pose = "front" | "quarter" | "side" | "back" | "other";
 
@@ -1646,726 +1648,76 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
             deltaTone={deltaTone}
           />
 
-          <ProgressSection
-            title="Flipbook"
-            subtitle="Chronological visual proof of change, one pose at a time."
-            open={flipbookOpen}
+          <ProgressFlipbook
+            ProgressSection={ProgressSection}
+            bannerStyle={bannerStyle}
+            flipbookOpen={flipbookOpen}
             onToggle={() => setFlipbookOpen((v) => !v)}
-          >
-          {/* Flipbook + Monthly highlights (keep controls, image, and timeline contiguous) */}
-          <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
-            <div style={{ ...bannerStyle("info") }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div>
-                  <strong>Flipbook</strong>
-                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <label>
-                      Pose:{" "}
-                      <select value={flipPose} onChange={(e) => setFlipPose(e.target.value as Pose)} style={{ padding: 6 }}>
-                        <option value="front">Front</option>
-                        <option value="quarter">Quarter Turn</option>
-                        <option value="side">Side</option>
-                        <option value="back">Back</option>
-                      </select>
-                    </label>
-                    <button onClick={() => setFlipIdx((i) => Math.max(0, i - 1))} disabled={!flipList.length || flipIdx <= 0}>
-                      Prev
-                    </button>
-                    <button onClick={() => setFlipPlaying((p) => !p)} disabled={flipList.length < 2}>
-                      {flipPlaying ? "Stop" : "Play"}
-                    </button>
-                    <button onClick={() => setFlipIdx((i) => Math.min(Math.max(0, flipList.length - 1), i + 1))} disabled={!flipList.length || flipIdx >= flipList.length - 1}>
-                      Next
-                    </button>
-                    <button onClick={() => setFlipIdx(Math.max(0, flipList.length - 1))} disabled={!flipList.length}>
-                      Latest
-                    </button>
-                    <label>
-                      View:{" "}
-                      <select value={flipView} onChange={(e) => setFlipView(e.target.value as any)} style={{ padding: 6 }}>
-                        <option value="normal">Normal</option>
-                        <option value="ghost">Ghost overlay</option>
-                        <option value="diff">Difference heatmap</option>
-                        <option value="map">Physique change map</option>
-                      </select>
-                    </label>
-                    {flipView !== "normal" ? (
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
-                        {flipView === "ghost" ? "Opacity" : flipView === "diff" ? "Intensity" : "Map strength"}
-                        <input
-                          type="range"
-                          min={5}
-                          max={85}
-                          value={ghostOpacity}
-                          onChange={(e) => setGhostOpacity(Number(e.target.value))}
-                          style={{ width: 140 }}
-                        />
-                        <span style={{ width: 34, textAlign: "right" }}>{ghostOpacity}%</span>
-                      </label>
-                    ) : null}
-                    <span style={{ opacity: 0.75 }}>
-                      {flipList.length
-                        ? flipList.length === 1
-                          ? "1 anchor (log one more week to play)"
-                          : `${flipList.length} anchors`
-                        : "No anchors yet"}
-                    </span>
-                    <span style={{ opacity: 0.85 }}>
-                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
-                    </span>
-                  </div>
-                </div>
+            flipPose={flipPose}
+            setFlipPose={setFlipPose}
+            flipList={flipList}
+            flipIdx={flipIdx}
+            setFlipIdx={setFlipIdx}
+            flipPlaying={flipPlaying}
+            setFlipPlaying={setFlipPlaying}
+            flipView={flipView}
+            setFlipView={setFlipView}
+            ghostOpacity={ghostOpacity}
+            setGhostOpacity={setGhostOpacity}
+            monthlyHighlights={monthlyHighlights}
+            CORE_POSES={CORE_POSES}
+            thumbs={thumbs}
+            alignGrid={alignGrid}
+            alignX={alignX}
+            alignY={alignY}
+            diffCanvasRef={diffCanvasRef}
+            nudgeAlign={nudgeAlign}
+            resetAlign={resetAlign}
+            setAlignGrid={setAlignGrid}
+            flipKeysArmed={flipKeysArmed}
+            setFlipKeysArmed={setFlipKeysArmed}
+            copyPrevAlignToCurrent={copyPrevAlignToCurrent}
+          />
 
-                <div>
-                  <strong>Monthly highlights</strong>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>Month: {monthlyHighlights.key}</div>
-                  <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
-                    {CORE_POSES.map((p) => {
-                      const h = (monthlyHighlights.highlights as any)[p] as { first?: ProgressPhotoRow; last?: ProgressPhotoRow };
-                      if (!h?.first || !h?.last) {
-                        return (
-                          <div key={p} style={{ opacity: 0.75 }}>
-                            {p.toUpperCase()}: —
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={p}>
-                          {p.toUpperCase()}: {h.first.taken_on} → {h.last.taken_on}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-{flipList.length ? (
-                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-                    {[
-                      { label: "Oldest anchor", row: flipList[0] },
-                      { label: "Current frame", row: flipList[flipIdx] },
-                      { label: "Latest anchor", row: flipList[flipList.length - 1] },
-                    ].map((card) => (
-                      <div
-                        key={card.label}
-                        style={{
-                          border: "1px solid rgba(255,255,255,0.12)",
-                          borderRadius: 10,
-                          padding: 10,
-                          background: "rgba(255,255,255,0.04)"
-                        }}
-                      >
-                        <div style={{ fontSize: 12, opacity: 0.75 }}>{card.label}</div>
-                        {card.row ? (
-                          <>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>{card.row.taken_on}</div>
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
-                              {card.row.pose.toUpperCase()} • {card.row.weight_lbs ?? "—"} lb • {card.row.waist_in ?? "—"} in
-                            </div>
-                          </>
-                        ) : (
-                          <div style={{ marginTop: 4, opacity: 0.75 }}>—</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Video-editor style scrubber */}
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-                    <div style={{ opacity: 0.9 }}>
-                      <strong>Timeline</strong> — {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
-                    </div>
-                    <div style={{ opacity: 0.75, fontSize: 12 }}>
-                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
-                    </div>
-                  </div>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, flipList.length - 1)}
-                    value={flipIdx}
-                    onChange={(e) => setFlipIdx(Number(e.target.value))}
-                    style={{ width: "100%" }}
-                    disabled={!flipList.length}
-                  />
-
-                  {/* Clickable markers */}
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto", paddingBottom: 4 }}>
-                    {flipList.map((r, idx) => (
-                      <button
-                        key={r.id}
-                        onClick={() => setFlipIdx(idx)}
-                        title={r.taken_on}
-                        style={{
-                          minWidth: 10,
-                          height: 10,
-                          borderRadius: 999,
-                          border: "1px solid rgba(255,255,255,0.35)",
-                          background: idx === flipIdx ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.15)",
-                          cursor: "pointer"
-                        }}
-                        aria-label={`Jump to ${r.taken_on}`}
-                      />
-                    ))}
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.65, fontSize: 12 }}>
-                    <span>{flipList[0]?.taken_on ?? ""}</span>
-                    <span>{flipList[flipList.length - 1]?.taken_on ?? ""}</span>
-                  </div>
-                </div>
-              ) : null}
-
-                            {flipList[flipIdx] && thumbs[flipList[flipIdx].id] ? (
-                <div style={{ marginTop: 10 }}>
-                  <div
-                    style={{
-                      width: 320,
-                      borderRadius: 12,
-                      border: "1px solid rgba(255,255,255,0.12)",
-                      overflow: "hidden",
-                      position: "relative",
-                      background: "rgba(0,0,0,0.25)"
-                    }}
-                  >
-                    {alignGrid ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          pointerEvents: "none",
-                          backgroundImage:
-                            "linear-gradient(rgba(255,255,255,0.10) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.10) 1px, transparent 1px)",
-                          backgroundSize: "50px 50px",
-                          opacity: 0.35
-                        }}
-                      />
-                    ) : null}
-
-                    {/* Current frame */}
-                    <img
-                      src={thumbs[flipList[flipIdx].id]}
-                      alt={`Flipbook  taken_on`}
-                      style={{ width: "100%", display: "block", objectFit: "contain", transform: `translate(${alignX}px, ${alignY}px)` }}
-                    />
-
-                    {/* Ghost overlay of previous frame */}
-                    {flipView === "ghost" && flipIdx > 0 ? (
-                      thumbs[flipList[flipIdx - 1]?.id] ? (
-                        <img
-                          src={thumbs[flipList[flipIdx - 1].id]}
-                          alt={`Ghost  taken_on`}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            opacity: ghostOpacity / 100,
-                            transform: `translate(${(flipList[flipIdx - 1].align_x ?? 0) as number}px, ${(flipList[flipIdx - 1].align_y ?? 0) as number}px)`,
-                            pointerEvents: "none"
-                          }}
-                        />
-                      ) : null
-                    ) : null}
-
-                    {/* Difference heatmap overlay */}
-                    {(flipView === "diff" || flipView === "map") && flipIdx > 0 ? (
-                      <canvas
-                        ref={diffCanvasRef}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          opacity: 0.85,
-                          pointerEvents: "none",
-                          mixBlendMode: "screen"
-                        }}
-                      />
-                    ) : null}
-                  </div>
-
-                  {/* Alignment controls (Flipbook) */}
-                  <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? -10 : -2)} title="Nudge up (Shift = 10px)">↑</button>
-                      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                        <button onClick={(e) => nudgeAlign(e.shiftKey ? -10 : -2, 0)} title="Nudge left (Shift = 10px)">←</button>
-                        <button onClick={resetAlign} title="Reset alignment">Reset</button>
-                        <button onClick={(e) => nudgeAlign(e.shiftKey ? 10 : 2, 0)} title="Nudge right (Shift = 10px)">→</button>
-                      </div>
-                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? 10 : 2)} title="Nudge down (Shift = 10px)">↓</button>
-                    </div>
-
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <input type="checkbox" checked={alignGrid} onChange={(e) => setAlignGrid(e.target.checked)} />
-                        Show grid
-                      </label>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <input type="checkbox" checked={flipKeysArmed} onChange={(e) => setFlipKeysArmed(e.target.checked)} />
-                        Keyboard nudges
-                      </label>
-                    </div>
-
-                    {flipIdx > 0 ? (
-                      <button onClick={copyPrevAlignToCurrent} title="Copy previous frame alignment to this frame">
-                        Copy prev alignment
-                      </button>
-                    ) : (
-                      <button disabled title="Log another week to copy alignment">Copy prev alignment</button>
-                    )}
-
-                    <div style={{ opacity: 0.8, fontSize: 12 }}>
-                      {flipKeysArmed ? "Keys: ← ↑ ↓ → (Shift=10px), R=reset" : "Enable keyboard nudges for arrow keys"}
-                      <div>
-                        Current offset: <strong>{alignX}</strong>, <strong>{alignY}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {flipView !== "normal" && flipIdx > 0 ? (
-                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      {flipView === "ghost" ? "Ghost" : flipView === "diff" ? "Heatmap" : "Change map"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
-                    </div>
-                  ) : null}
-
-                  {flipList.length < 2 ? (
-                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      Flipbook needs <strong>2+</strong> anchor weeks for this pose. Log next week’s {flipPose.toUpperCase()} to unlock playback.
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          </ProgressSection>
-
-          <ProgressSection
-            title="Compare"
-            subtitle="Inspect anchor photos side by side. Use Compare on any anchor in the library below."
-            open={compareSectionOpen}
+          <ProgressCompare
+            ProgressSection={ProgressSection}
+            bannerStyle={bannerStyle}
+            compareSectionOpen={compareSectionOpen}
             onToggle={() => setCompareSectionOpen((v) => !v)}
-          >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ ...bannerStyle("info") }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <h3 style={{ margin: 0 }}>Compare Library</h3>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <button onClick={refreshGallery} disabled={galleryBusy}>
-                    {galleryBusy ? "Refreshing..." : "Refresh"}
-                  </button>
-                  <span style={{ opacity: 0.75 }}>{rows.length} photos</span>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10 }}>
-                <strong>Quick Compare by Pose</strong>
-                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-                  {CORE_POSES.map((p) => {
-                    const pair = latestAnchorPairByPose[p];
-                    return (
-                      <div
-                        key={p}
-                        style={{
-                          border: "1px solid rgba(255,255,255,0.12)",
-                          borderRadius: 10,
-                          padding: 10,
-                          background: "rgba(255,255,255,0.04)",
-                          display: "grid",
-                          gap: 8
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{p === "front" ? "Front" : p === "side" ? "Side" : "Back"}</div>
-                          {pair ? (
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.85 }}>
-                              Latest anchor pair: {pair.previous.taken_on} → {pair.latest.taken_on}
-                            </div>
-                          ) : (
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                              Need 2 anchor weeks for one-click compare.
-                            </div>
-                          )}
-                        </div>
-                        <button onClick={() => pair && openComparePair(pair.previous, pair.latest)} disabled={!pair}>
-                          Open latest pair
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <label>
-                  Pose filter{" "}
-                  <select value={comparePoseFilter} onChange={(e) => setComparePoseFilter(e.target.value as "all" | Pose)} style={{ padding: 6 }}>
-                    <option value="all">All poses</option>
-                    <option value="front">Front</option>
-                    <option value="quarter">Quarter Turn</option>
-                    <option value="side">Side</option>
-                    <option value="back">Back</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" checked={compareAnchorsOnly} onChange={(e) => setCompareAnchorsOnly(e.target.checked)} />
-                  Anchors only
-                </label>
-                <span style={{ opacity: 0.8 }}>Showing <strong>{compareRowsFiltered.length}</strong> of {rows.length}</span>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 10 }}>
-              {compareRowsFiltered.length ? (
-                compareRowsFiltered.map((r) => (
-                  <div
-                    key={r.id}
-                    style={{
-                      border: "1px solid rgba(255,255,255,0.15)",
-                      borderRadius: 10,
-                      padding: 10,
-                      display: "grid",
-                      gap: 8
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div>
-                        <strong>{r.taken_on}</strong> — {r.pose.toUpperCase()}
-                        {r.is_anchor ? <span style={{ marginLeft: 8 }}>(Anchor)</span> : null}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {r.is_anchor && CORE_POSES.includes(r.pose) ? (
-                          <button onClick={() => openCompareForRow(r)}>Compare</button>
-                        ) : null}
-                        <button onClick={() => handleDelete(r)}>Delete</button>
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      {thumbs[r.id] ? (
-                        <img
-                          src={thumbs[r.id]}
-                          alt={`${r.pose} ${r.taken_on}`}
-                          style={{ width: 200, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)" }}
-                        />
-                      ) : (
-                        <button
-                          onClick={async () => {
-                            try {
-                              await ensureThumb(r.id, r.storage_path);
-                            } catch (e: any) {
-                              alert(e?.message ?? String(e));
-                            }
-                          }}
-                        >
-                          Load preview
-                        </button>
-                      )}
-
-                      <div style={{ minWidth: 260 }}>
-                        <div>Weight: {r.weight_lbs ?? "—"} lbs</div>
-                        <div>Waist: {r.waist_in ?? "—"} in</div>
-                        {r.notes ? <div style={{ marginTop: 6, opacity: 0.9 }}>Notes: {r.notes}</div> : null}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ ...bannerStyle("warn") }}>
-                  No photos match the current Compare filters. Change the pose filter or turn off anchors-only.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Compare modal */}
-          {compareOpen && compareA && compareB ? (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.6)",
-                display: "grid",
-                placeItems: "center",
-                padding: 16,
-                zIndex: 9999
-              }}
-              onClick={() => setCompareOpen(false)}
-            >
-              <div
-                style={{
-                  width: "min(860px, 95vw)",
-                  background: "#111",
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  borderRadius: 14,
-                  padding: 14
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <strong>Compare</strong> — {compareB.pose.toUpperCase()} ({compareA.taken_on} → {compareB.taken_on})
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <label style={{ fontSize: 12, opacity: 0.9 }}>
-                      View:{" "}
-                      <select value={compareView} onChange={(e) => setCompareView(e.target.value as any)} style={{ padding: 6 }}>
-                        <option value="slider">Slider wipe</option>
-                        <option value="ghost">Ghost overlay</option>
-                        <option value="map">Change map</option>
-                      </select>
-                    </label>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await copyAlignBetweenPhotos(compareA.id, compareB.id);
-                        } catch (e: any) {
-                          alert(e?.message ?? String(e));
-                        }
-                      }}
-                      title="Copy BEFORE alignment to AFTER"
-                    >
-                      Copy prev alignment
-                    </button>
-                    <button onClick={() => setCompareOpen(false)}>Close</button>
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                  <div
-                    style={{
-                      position: "relative",
-                      width: "100%",
-                      aspectRatio: "16/10",
-                      overflow: "hidden",
-                      borderRadius: 12,
-                      border: "1px solid #ccc",
-                      background: "#111",
-                      userSelect: "none"
-                    }}
-                  >
-                    {/* Base (A) */}
-                    <img
-                      src={thumbs[compareA.id]}
-                      alt={`Before ${compareA.taken_on}`}
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`,
-                        opacity: compareView === "map" ? 0.08 : 1
-                      }}
-                    />
-
-                    {compareView === "slider" ? (
-                      <>
-                        <div
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
-                            WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
-                          }}
-                        >
-                          <img
-                            src={thumbs[compareB.id]}
-                            alt={`After ${compareB.taken_on}`}
-                            onPointerDown={(e) => {
-                              (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                              compareDragRef.current = {
-                                active: true,
-                                sx: e.clientX,
-                                sy: e.clientY,
-                                ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                                ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                              };
-                            }}
-                            onPointerMove={(e) => {
-                              const st = compareDragRef.current;
-                              if (!st?.active || !compareB) return;
-                              const dx = e.clientX - st.sx;
-                              const dy = e.clientY - st.sy;
-                              const nx = st.ax + dx;
-                              const ny = st.ay + dy;
-                              setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                              updateLocalAlign(compareB.id, nx, ny);
-                              schedulePersistAlign(compareB.id, nx, ny);
-                            }}
-                            onPointerUp={() => {
-                              if (compareDragRef.current) compareDragRef.current.active = false;
-                            }}
-                            onPointerCancel={() => {
-                              if (compareDragRef.current) compareDragRef.current.active = false;
-                            }}
-                            style={{
-                              position: "absolute",
-                              inset: 0,
-                              width: "100%",
-                              height: "100%",
-                              objectFit: "contain",
-                              transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                              transition: "transform 0.02s linear",
-                              cursor: "grab",
-                              touchAction: "none"
-                            }}
-                          />
-                        </div>
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: 0,
-                            bottom: 0,
-                            left: `${compareMix}%`,
-                            width: 2,
-                            background: "rgba(255,255,255,0.85)"
-                          }}
-                        />
-                      </>
-                    ) : compareView === "ghost" ? (
-                      <img
-                        src={thumbs[compareB.id]}
-                        alt={`After ${compareB.taken_on}`}
-                        onPointerDown={(e) => {
-                          (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                          compareDragRef.current = {
-                            active: true,
-                            sx: e.clientX,
-                            sy: e.clientY,
-                            ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                            ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                          };
-                        }}
-                        onPointerMove={(e) => {
-                          const st = compareDragRef.current;
-                          if (!st?.active || !compareB) return;
-                          const dx = e.clientX - st.sx;
-                          const dy = e.clientY - st.sy;
-                          const nx = st.ax + dx;
-                          const ny = st.ay + dy;
-                          setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                          updateLocalAlign(compareB.id, nx, ny);
-                          schedulePersistAlign(compareB.id, nx, ny);
-                        }}
-                        onPointerUp={() => {
-                          if (compareDragRef.current) compareDragRef.current.active = false;
-                        }}
-                        onPointerCancel={() => {
-                          if (compareDragRef.current) compareDragRef.current.active = false;
-                        }}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          opacity: compareOpacity / 100,
-                          transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                          transition: "transform 0.02s linear",
-                          cursor: "grab",
-                          touchAction: "none"
-                        }}
-                      />
-                    ) : (
-                      <>
-                        <img
-                          src={thumbs[compareB.id]}
-                          alt={`After ${compareB.taken_on}`}
-                          onPointerDown={(e) => {
-                            (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                            compareDragRef.current = {
-                              active: true,
-                              sx: e.clientX,
-                              sy: e.clientY,
-                              ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                              ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                            };
-                          }}
-                          onPointerMove={(e) => {
-                            const st = compareDragRef.current;
-                            if (!st?.active || !compareB) return;
-                            const dx = e.clientX - st.sx;
-                            const dy = e.clientY - st.sy;
-                            const nx = st.ax + dx;
-                            const ny = st.ay + dy;
-                            setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                            updateLocalAlign(compareB.id, nx, ny);
-                            schedulePersistAlign(compareB.id, nx, ny);
-                          }}
-                          onPointerUp={() => {
-                            if (compareDragRef.current) compareDragRef.current.active = false;
-                          }}
-                          onPointerCancel={() => {
-                            if (compareDragRef.current) compareDragRef.current.active = false;
-                          }}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            opacity: 0.06,
-                            transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                            transition: "transform 0.02s linear",
-                            cursor: "grab",
-                            touchAction: "none"
-                          }}
-                        />
-                        <canvas
-                          ref={compareMapCanvasRef}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            opacity: 0.96,
-                            pointerEvents: "none",
-                            mixBlendMode: "screen"
-                          }}
-                        />
-                      </>
-                    )}
-                  </div>
-
-                  {/* Alignment controls */}
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ fontSize: 12, opacity: 0.85 }}>
-                      <b>Align:</b> drag the top photo, or nudge with buttons (double‑click = bigger). “Reset” zeros alignment for the top photo.
-                    </div>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <button className="btn" onClick={() => compareNudge(0, -2)} onDoubleClick={() => compareNudge(0, -10)} title="Up">↑</button>
-                      <button className="btn" onClick={() => compareNudge(-2, 0)} onDoubleClick={() => compareNudge(-10, 0)} title="Left">←</button>
-                      <button className="btn" onClick={() => compareNudge(2, 0)} onDoubleClick={() => compareNudge(10, 0)} title="Right">→</button>
-                      <button className="btn" onClick={() => compareNudge(0, 2)} onDoubleClick={() => compareNudge(0, 10)} title="Down">↓</button>
-                      <button className="btn" onClick={compareReset} title="Reset alignment">Reset</button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ opacity: 0.85 }}>{compareA.taken_on}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={compareView === "slider" ? compareMix : compareOpacity}
-                      onChange={(e) => compareView === "slider" ? setCompareMix(Number(e.target.value)) : setCompareOpacity(Number(e.target.value))}
-                      style={{ width: 320 }}
-                    />
-                    <span style={{ opacity: 0.85 }}>{compareView === "slider" ? `Wipe ${compareMix}%` : compareView === "ghost" ? `Opacity ${compareOpacity}%` : `Map ${compareOpacity}%`}</span>
-                    <span style={{ opacity: 0.85 }}>{compareB.taken_on}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          </ProgressSection>
+            refreshGallery={refreshGallery}
+            galleryBusy={galleryBusy}
+            rows={rows}
+            CORE_POSES={CORE_POSES}
+            latestAnchorPairByPose={latestAnchorPairByPose}
+            openComparePair={openComparePair}
+            comparePoseFilter={comparePoseFilter}
+            setComparePoseFilter={setComparePoseFilter}
+            compareAnchorsOnly={compareAnchorsOnly}
+            setCompareAnchorsOnly={setCompareAnchorsOnly}
+            compareRowsFiltered={compareRowsFiltered}
+            openCompareForRow={openCompareForRow}
+            handleDelete={handleDelete}
+            thumbs={thumbs}
+            ensureThumb={ensureThumb}
+            compareOpen={compareOpen}
+            compareA={compareA}
+            compareB={compareB}
+            setCompareOpen={setCompareOpen}
+            compareView={compareView}
+            setCompareView={setCompareView}
+            copyAlignBetweenPhotos={copyAlignBetweenPhotos}
+            compareMix={compareMix}
+            setCompareMix={setCompareMix}
+            compareOpacity={compareOpacity}
+            setCompareOpacity={setCompareOpacity}
+            compareDragRef={compareDragRef}
+            setCompareB={setCompareB}
+            updateLocalAlign={updateLocalAlign}
+            schedulePersistAlign={schedulePersistAlign}
+            compareMapCanvasRef={compareMapCanvasRef}
+            compareNudge={compareNudge}
+            compareReset={compareReset}
+          />
         </div>
       )}
 
@@ -2427,4 +1779,5 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
