@@ -40,19 +40,19 @@ async function processOp(op: PendingOp["op"], payload: any) {
       return;
 
     case "create_workout":
-      await must(supabase.from("workout_sessions").insert(payload));
+      await must(supabase.from("workout_sessions").upsert(payload, { onConflict: "id" }));
       return;
 
     case "insert_exercise":
-      await must(supabase.from("workout_exercises").insert(payload));
+      await must(supabase.from("workout_exercises").upsert(payload, { onConflict: "id" }));
       return;
 
     case "insert_set":
-      await must(supabase.from("workout_sets").insert(payload));
+      await must(supabase.from("workout_sets").upsert(payload, { onConflict: "id" }));
       return;
 
     case "create_template":
-      await must(supabase.from("workout_templates").insert(payload));
+      await must(supabase.from("workout_templates").upsert(payload, { onConflict: "id" }));
       return;
 
     case "update_template":
@@ -68,7 +68,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
     }
 
     case "insert_template_exercise":
-      await must(supabase.from("workout_template_exercises").insert(payload));
+      await must(supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" }));
       return;
 
     case "update_template_exercise":
@@ -234,6 +234,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
