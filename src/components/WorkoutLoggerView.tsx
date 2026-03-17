@@ -1,4 +1,6 @@
 import React from "react";
+import CoachInsightsPanel from "./CoachInsightsPanel";
+import { buildSessionCoachInsights } from "../lib/sessionCoach";
 import TemplatesView from "./TemplatesView";
 import { CoachBoundary } from "../CoachPanel";
 import type { LocalWorkoutTemplate } from "../localdb";
@@ -188,6 +190,11 @@ export default function WorkoutLoggerView(props: Props) {
     coachSessionSeed
   } = props;
 
+  const sessionCoachInsights = buildSessionCoachInsights({
+    coachSessionSeed,
+    recommendationComparison,
+  });
+
   return (
     <>
       <h3>Workout Logger</h3>
@@ -232,6 +239,8 @@ export default function WorkoutLoggerView(props: Props) {
           </div>
         </div>
       )}
+
+      <CoachInsightsPanel insights={sessionCoachInsights} defaultOpen={false} />
 
       {/* Templates block */}
       <TemplatesView
@@ -638,6 +647,8 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
+
 
 
 
