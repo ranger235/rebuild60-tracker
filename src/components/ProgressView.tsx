@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
-import { localdb } from "../localdb";
+import { localdb, type LocalDailyMetrics, type LocalNutritionDaily, type LocalWorkoutExercise, type LocalWorkoutSession, type LocalWorkoutSet, type LocalZone2Daily } from "../localdb";
+import { buildProgressSignals } from "../lib/progressSignals";
+import ProgressScorecard from "./progress/ProgressScorecard";
+import ProgressFlipbook from "./progress/ProgressFlipbook";
+import ProgressCompare from "./progress/ProgressCompare";
 
 type Pose = "front" | "quarter" | "side" | "back" | "other";
 
@@ -522,12 +526,17 @@ function monthKey(ymd: string) {
 
 // Monthly report (Quick Log + Measurements + Anchors)
 const [monthReportBusy, setMonthReportBusy] = useState(false);
-const [monthDaily, setMonthDaily] = useState<any[]>([]);
+const [monthDaily, setMonthDaily] = useState<LocalDailyMetrics[]>([]);
+const [monthNutrition, setMonthNutrition] = useState<LocalNutritionDaily[]>([]);
+const [monthZone2, setMonthZone2] = useState<LocalZone2Daily[]>([]);
 const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
+const [monthSessions, setMonthSessions] = useState<LocalWorkoutSession[]>([]);
+const [monthExercises, setMonthExercises] = useState<LocalWorkoutExercise[]>([]);
+const [monthSets, setMonthSets] = useState<LocalWorkoutSet[]>([]);
 const [aiBusy, setAiBusy] = useState(false);
   const [aiInsight, setAiInsight] = useState<string>("");
   const [aiInsightHistory, setAiInsightHistory] = useState<
-    { id: string; ts: string; text: string }[]
+    { id: string; ts: string; monthKey?: string; text: string }[]
   >([]);
   const [aiAppendMode, setAiAppendMode] = useState<boolean>(false);
   const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
@@ -543,12 +552,15 @@ const [aiBusy, setAiBusy] = useState(false);
     consistency: number;
     momentum: "up" | "down" | "flat";
     notes?: string;
+    signals_used?: any | null;
   };
 
   const [scoreBusy, setScoreBusy] = useState(false);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
+  const [lastScoreSignals, setLastScoreSignals] = useState<any | null>(null);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
+  const [showSignalDebug, setShowSignalDebug] = useState(false);
 
   const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
     { key: "conditioning", label: "Conditioning" },
@@ -567,7 +579,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
   const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
   const [visionHistory, setVisionHistory] = useState<
-    { id: string; ts: string; pose: Pose; scope: string; text: string }[]
+    { id: string; ts: string; monthKey?: string; pose: Pose; scope: string; text: string }[]
   >([]);
 
 function monthStartEnd(ymd: string) {
@@ -578,6 +590,25 @@ function monthStartEnd(ymd: string) {
   return { startYMD: toYMD(start), endYMD: toYMD(end) };
 }
 
+
+function safeMonthKeyFromIso(isoLike?: string | null): string | undefined {
+  const raw = String(isoLike ?? "").trim();
+  if (!raw) return undefined;
+  const m = raw.match(/^(\d{4}-\d{2})/);
+  return m ? m[1] : undefined;
+}
+
+function normalizeMonthScopedHistory<T extends { monthKey?: string; ts?: string; text?: string; pose?: string; scope?: string }>(rows: T[]): T[] {
+  return rows.map((row) => {
+    const monthKey = row.monthKey ?? safeMonthKeyFromIso(row.ts);
+    return monthKey ? { ...row, monthKey } : row;
+  });
+}
+
+function matchesVisionArtifact(row: { monthKey?: string; pose?: string; scope?: string }, activeMonth: string, pose: Pose, scope: "last2" | "month") {
+  return row.monthKey === activeMonth && row.pose === pose && row.scope === scope;
+}
+
 useEffect(() => {
   (async () => {
     if (!userId) return;
@@ -585,12 +616,44 @@ useEffect(() => {
     try {
       const { startYMD, endYMD } = monthStartEnd(dayDate);
 
-      // Quick Log from local Dexie (dailyMetrics)
-      const daily = await localdb.dailyMetrics
-        .where("[user_id+day_date]")
-        .between([userId, startYMD], [userId, endYMD], true, true)
-        .sortBy("day_date");
+      // Quick Log + training data from local Dexie
+      const [daily, nutrition, zone2, sessions] = await Promise.all([
+        localdb.dailyMetrics
+          .where("[user_id+day_date]")
+          .between([userId, startYMD], [userId, endYMD], true, true)
+          .sortBy("day_date"),
+        localdb.nutritionDaily
+          .where("[user_id+day_date]")
+          .between([userId, startYMD], [userId, endYMD], true, true)
+          .sortBy("day_date"),
+        localdb.zone2Daily
+          .where("[user_id+day_date]")
+          .between([userId, startYMD], [userId, endYMD], true, true)
+          .sortBy("day_date"),
+        localdb.localSessions
+          .where("user_id")
+          .equals(userId)
+          .filter((row) => row.day_date >= startYMD && row.day_date <= endYMD)
+          .sortBy("day_date"),
+      ]);
       setMonthDaily(daily ?? []);
+      setMonthNutrition(nutrition ?? []);
+      setMonthZone2(zone2 ?? []);
+      setMonthSessions(sessions ?? []);
+
+      const sessionIds = new Set((sessions ?? []).map((row) => row.id));
+      if (sessionIds.size > 0) {
+        const exercises = (await localdb.localExercises.toArray()).filter((row) => sessionIds.has(row.session_id));
+        setMonthExercises(exercises);
+        const exerciseIds = new Set(exercises.map((row) => row.id));
+        const sets = exerciseIds.size > 0
+          ? (await localdb.localSets.toArray()).filter((row) => exerciseIds.has(row.exercise_id))
+          : [];
+        setMonthSets(sets);
+      } else {
+        setMonthExercises([]);
+        setMonthSets([]);
+      }
 
       // Measurements from Supabase
       const { data: mdata, error: merr } = await supabase
@@ -621,7 +684,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setScoreHistory(parsed);
+      if (Array.isArray(parsed)) setScoreHistory(normalizeMonthScopedHistory(parsed));
     }
   } catch {
     // ignore
@@ -633,11 +696,37 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_scorecards_${userId}`;
-    localStorage.setItem(key, JSON.stringify(scoreHistory.slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(scoreHistory).slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, scoreHistory]);
+
+// Load/save AI history (local only)
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_progress_ai_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setAiInsightHistory(normalizeMonthScopedHistory(parsed));
+    }
+  } catch {
+    // ignore
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_progress_ai_${userId}`;
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(aiInsightHistory).slice(0, 24)));
+  } catch {
+    // ignore
+  }
+}, [userId, aiInsightHistory]);
 
 // Load/save Vision history (local only)
 useEffect(() => {
@@ -647,7 +736,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setVisionHistory(parsed);
+      if (Array.isArray(parsed)) setVisionHistory(normalizeMonthScopedHistory(parsed));
     }
   } catch {
     // ignore
@@ -659,11 +748,34 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_vision_${userId}`;
-    localStorage.setItem(key, JSON.stringify(visionHistory.slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(visionHistory).slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, visionHistory]);
+useEffect(() => {
+  const activeMonth = monthKey(dayDate);
+  const latestScore = scoreHistory
+    .filter((row) => row.monthKey === activeMonth)
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
+  setScorecard(latestScore);
+  setLastScoreSignals(latestScore?.signals_used ?? null);
+
+  const latestAi = aiInsightHistory
+    .filter((row) => row.monthKey === activeMonth)
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
+  setAiInsight(latestAi?.text ?? "");
+
+  const latestVision = visionHistory
+    .filter((row) => matchesVisionArtifact(row, activeMonth, visionPose, visionScope))
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0]
+    ?? visionHistory
+      .filter((row) => row.monthKey === activeMonth)
+      .sort((a, b) => b.ts.localeCompare(a.ts))[0]
+    ?? null;
+  setVisionText(latestVision?.text ?? "");
+}, [dayDate, scoreHistory, aiInsightHistory, visionHistory, visionPose, visionScope]);
+
 
 const monthStats = useMemo(() => {
   const { startYMD, endYMD } = monthStartEnd(dayDate);
@@ -677,13 +789,8 @@ const monthStats = useMemo(() => {
     return { first: vals[0], last: vals[vals.length - 1], delta: vals[vals.length - 1] - vals[0] };
   };
 
-  const qWeight = firstLast(monthDaily, "weight_lbs");
-  const qWaist = firstLast(monthDaily, "waist_in");
-  const mWeight = firstLast(monthMeas, "weight_lbs");
-  const mWaist = firstLast(monthMeas, "waist_in");
-
-  const avg = (key: string) => {
-    const vals = monthDaily
+  const avg = (arr: any[], key: string) => {
+    const vals = arr
       .map((r) => r?.[key])
       .filter((v) => v != null && v !== "" && !Number.isNaN(Number(v)))
       .map((v) => Number(v));
@@ -691,22 +798,65 @@ const monthStats = useMemo(() => {
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   };
 
+  const signals = buildProgressSignals({
+    monthKey: monthKey(dayDate),
+    startYMD,
+    endYMD,
+    monthDaily,
+    monthNutrition,
+    monthZone2,
+    monthMeasurements: monthMeas,
+    monthPhotos: rows.filter((r) => r.taken_on >= startYMD && r.taken_on <= endYMD),
+    monthSessions,
+    monthExercises,
+    monthSets,
+    visionText,
+  });
+
   return {
     monthKey: monthKey(dayDate),
     startYMD,
     endYMD,
     quicklogDays: monthDaily.length,
     measDays: monthMeas.length,
-    qWeight,
-    qWaist,
-    mWeight,
-    mWaist,
-    avgSleep: avg("sleep_hours"),
-    avgCalories: avg("calories"),
-    avgProtein: avg("protein_g"),
-    avgZone2: avg("zone2_minutes"),
+    qWeight: firstLast(monthDaily, "weight_lbs"),
+    qWaist: firstLast(monthDaily, "waist_in"),
+    mWeight: firstLast(monthMeas, "weight_lbs"),
+    mWaist: firstLast(monthMeas, "waist_in"),
+    avgSleep: avg(monthDaily, "sleep_hours"),
+    avgCalories: avg(monthNutrition, "calories"),
+    avgProtein: avg(monthNutrition, "protein_g"),
+    avgZone2: avg(monthZone2, "minutes"),
+    workoutsCompleted: signals.workoutsCompleted,
+    hardSets: signals.hardSets,
+    anchorDays: signals.anchorDays,
+    adherenceScore: signals.adherenceScore,
+    progressionHits: signals.progressionHits,
+    pushPullBalance: signals.pushPullBalance,
+    signals,
   };
-}, [dayDate, monthDaily, monthMeas]);
+}, [dayDate, monthDaily, monthNutrition, monthZone2, monthMeas, monthSessions, monthExercises, monthSets, rows, visionText]);
+
+const visibleScoreHistory = useMemo(() => {
+  const activeMonth = monthKey(dayDate);
+  return scoreHistory
+    .filter((row) => row.monthKey === activeMonth)
+    .sort((a, b) => b.ts.localeCompare(a.ts));
+}, [dayDate, scoreHistory]);
+
+const visibleAiHistory = useMemo(() => {
+  const activeMonth = monthKey(dayDate);
+  return aiInsightHistory
+    .filter((row) => row.monthKey === activeMonth)
+    .sort((a, b) => b.ts.localeCompare(a.ts));
+}, [dayDate, aiInsightHistory]);
+
+const visibleVisionHistory = useMemo(() => {
+  const activeMonth = monthKey(dayDate);
+  return visionHistory
+    .filter((row) => matchesVisionArtifact(row, activeMonth, visionPose, visionScope))
+    .sort((a, b) => b.ts.localeCompare(a.ts));
+}, [dayDate, visionHistory, visionPose, visionScope]);
 
 const previousScorecard = useMemo<Scorecard | null>(() => {
   if (!scorecard || scoreHistory.length === 0) return null;
@@ -763,9 +913,29 @@ function deltaTone(delta: number): React.CSSProperties {
   };
 }
 
+function getDeterministicSignals() {
+  if (monthStats?.signals) return monthStats.signals;
+  const { startYMD, endYMD } = monthStartEnd(dayDate);
+  return buildProgressSignals({
+    monthKey: monthKey(dayDate),
+    startYMD,
+    endYMD,
+    monthDaily,
+    monthNutrition,
+    monthZone2,
+    monthMeasurements: monthMeas,
+    monthPhotos: rows.filter((r) => r.taken_on >= startYMD && r.taken_on <= endYMD),
+    monthSessions,
+    monthExercises,
+    monthSets,
+    visionText,
+  });
+}
+
 async function buildInsightPayload() {
   const key = monthKey(dayDate);
   const { startYMD, endYMD } = monthStartEnd(dayDate);
+  const basisSignals = lastScoreSignals ?? getDeterministicSignals();
 
   const images: { label: string; url: string }[] = [];
   const addImg = async (label: string, row?: ProgressPhotoRow) => {
@@ -802,6 +972,20 @@ async function buildInsightPayload() {
             notes: scorecard.notes ?? null,
           }
         : null,
+      previous_scorecard: previousScorecard
+        ? {
+            conditioning: previousScorecard.conditioning,
+            muscularity: previousScorecard.muscularity,
+            symmetry: previousScorecard.symmetry,
+            waist_control: previousScorecard.waist_control,
+            consistency: previousScorecard.consistency,
+            momentum: previousScorecard.momentum,
+            notes: previousScorecard.notes ?? null,
+          }
+        : null,
+      scorecard_delta_summary: scorecardDeltaSummary ?? null,
+      signals: basisSignals ?? null,
+      scorecard_basis_signals: basisSignals ?? null,
       vision_context: visionText?.trim()
         ? {
             pose: visionPose,
@@ -834,7 +1018,7 @@ async function generateAiPhysiqueInsight() {
 
     // Always keep a small history of runs.
     if (nextText) {
-      setAiInsightHistory((prev) => [{ id, ts, text: nextText }, ...prev].slice(0, 12));
+      setAiInsightHistory((prev) => [{ id, ts, monthKey: monthStats.monthKey, text: nextText }, ...prev].slice(0, 12));
     }
 
     // Prevent accidental duplicates (double-click, rerender, etc.)
@@ -856,7 +1040,17 @@ async function generatePhysiqueScorecard() {
   if (scoreBusy) return;
   setScoreBusy(true);
   try {
+    const basisSignals = getDeterministicSignals();
+    if (!basisSignals) throw new Error("Could not build deterministic progress signals for this month.");
+    setLastScoreSignals(basisSignals);
+
     const payload = await buildInsightPayload();
+    payload.stats = {
+      ...(payload.stats ?? {}),
+      signals: basisSignals,
+      scorecard_basis_signals: basisSignals,
+    };
+
     const resp = await fetch("/.netlify/functions/progress-scorecard", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -867,6 +1061,8 @@ async function generatePhysiqueScorecard() {
 
     const sc = data?.scorecard as any;
     if (!sc) throw new Error("No scorecard returned");
+    const persistedSignals = data?.signals_used ?? basisSignals ?? monthStats.signals ?? null;
+    setLastScoreSignals(persistedSignals);
 
     const next: Scorecard = {
       monthKey: monthStats.monthKey,
@@ -878,6 +1074,7 @@ async function generatePhysiqueScorecard() {
       consistency: Number(sc.consistency ?? 0),
       momentum: (sc.momentum === "up" || sc.momentum === "down" || sc.momentum === "flat") ? sc.momentum : "flat",
       notes: String(sc.notes ?? "").trim() || undefined,
+      signals_used: persistedSignals,
     };
 
     setScorecard(next);
@@ -982,7 +1179,7 @@ async function runVisionPhysiqueAnalysis() {
     const id = `${ts}-${Math.random().toString(16).slice(2)}`;
 
     // Keep a small local history
-    setVisionHistory((prev) => [{ id, ts, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
+    setVisionHistory((prev) => [{ id, ts, monthKey: monthStats.monthKey, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
 
     setVisionText((prev) => {
       const prevTrim = (prev || "").trim();
@@ -1601,1083 +1798,123 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
           <hr />
           </ProgressSection>
 
-          <ProgressSection
-            title="Monthly Scorecard"
-            subtitle="Structured monthly evaluation built from Quick Log, measurements, anchors, and coach interpretation."
-            open={scorecardOpen}
+          <ProgressScorecard
+            scorecardOpen={scorecardOpen}
             onToggle={() => setScorecardOpen((v) => !v)}
-          >
+            monthStats={monthStats}
+            monthReportBusy={monthReportBusy}
+            monthlyHighlights={monthlyHighlights}
+            generatePhysiqueScorecard={generatePhysiqueScorecard}
+            scoreBusy={scoreBusy}
+            generateAiPhysiqueInsight={generateAiPhysiqueInsight}
+            aiBusy={aiBusy}
+            runVisionPhysiqueAnalysis={runVisionPhysiqueAnalysis}
+            visionBusy={visionBusy}
+            scoreShowHistory={scoreShowHistory}
+            setScoreShowHistory={setScoreShowHistory}
+            scoreHistory={visibleScoreHistory}
+            aiShowHistory={aiShowHistory}
+            setAiShowHistory={setAiShowHistory}
+            aiInsightHistory={visibleAiHistory}
+            visionShowHistory={visionShowHistory}
+            setVisionShowHistory={setVisionShowHistory}
+            visionHistory={visibleVisionHistory}
+            scorecard={scorecard}
+            setScorecard={setScorecard}
+            aiInsight={aiInsight}
+            setAiInsight={setAiInsight}
+            visionText={visionText}
+            setVisionText={setVisionText}
+            aiAppendMode={aiAppendMode}
+            setAiAppendMode={setAiAppendMode}
+            visionAppendMode={visionAppendMode}
+            setVisionAppendMode={setVisionAppendMode}
+            visionPose={visionPose}
+            setVisionPose={setVisionPose}
+            visionScope={visionScope}
+            setVisionScope={setVisionScope}
+            visionFocus={visionFocus}
+            setVisionFocus={setVisionFocus}
+            scorecardDeltaSummary={scorecardDeltaSummary}
+            previousScorecard={previousScorecard}
+            scorecardMetrics={scorecardMetrics}
+            formatDelta={formatDelta}
+            deltaTone={deltaTone}
+            lastScoreSignals={lastScoreSignals ?? monthStats.signals ?? null}
+            showSignalDebug={showSignalDebug}
+            setShowSignalDebug={setShowSignalDebug}
+          />
 
-          {/* AI Physique Insight (Monthly report + AI) */}
-          <div style={{ marginTop: 12, padding: 12, border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12 }}>
-            <div style={{ display: "grid", gap: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-                <div>
-                  <strong>Monthly Scorecard + Coach Analysis</strong> <span style={{ opacity: 0.8 }}>({monthStats.monthKey})</span>
-                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
-                    Window: {monthStats.startYMD} → {monthStats.endYMD}
-                    {monthReportBusy ? " • loading…" : ""}
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => {
-                    const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `rebuild60-monthly-report-${monthStats.monthKey}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  Export JSON
-                </button>
-              </div>
-
-              <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-                  <div>
-                    <strong>Advanced Analysis Tools</strong>
-                    <div style={{ marginTop: 4, opacity: 0.8, fontSize: 12 }}>
-                      Manual analysis actions. Keep these when you want a fresh structured score, a new coach read, or a vision pass.
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button onClick={generatePhysiqueScorecard} disabled={scoreBusy} title="Generate a 1–10 monthly scorecard">
-                      {scoreBusy ? "Scoring…" : "Run Scorecard"}
-                    </button>
-                    <button onClick={generateAiPhysiqueInsight} disabled={aiBusy}>
-                      {aiBusy ? "Generating AI…" : "Run AI"}
-                    </button>
-                    <button onClick={runVisionPhysiqueAnalysis} disabled={visionBusy} title="Compare two photos with Vision AI">
-                      {visionBusy ? "Vision…" : "Run Vision"}
-                    </button>
-                    <button onClick={() => setScoreShowHistory((s) => !s)} disabled={scoreHistory.length === 0} title="Show previous scorecards">
-                      {scoreShowHistory ? "Hide scores" : "Scores"}
-                    </button>
-                    <button onClick={() => setAiShowHistory((s) => !s)} disabled={aiInsightHistory.length === 0} title="Show previous AI runs">
-                      {aiShowHistory ? "Hide AI history" : "AI history"}
-                    </button>
-                    <button onClick={() => setVisionShowHistory((s) => !s)} disabled={visionHistory.length === 0} title="Show previous Vision runs">
-                      {visionShowHistory ? "Hide vision" : "Vision history"}
-                    </button>
-                    <button onClick={() => setScorecard(null)} disabled={!scorecard} title="Clear the current scorecard display">
-                      Clear score
-                    </button>
-                    <button onClick={() => setAiInsight("")} disabled={!aiInsight} title="Clear the current AI output">
-                      Clear AI
-                    </button>
-                    <button onClick={() => setVisionText("")} disabled={!visionText} title="Clear the current Vision output">
-                      Clear vision
-                    </button>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
-                    <input type="checkbox" checked={aiAppendMode} onChange={(e) => setAiAppendMode(e.target.checked)} />
-                    Append AI runs
-                  </label>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
-                    <input type="checkbox" checked={visionAppendMode} onChange={(e) => setVisionAppendMode(e.target.checked)} />
-                    Append Vision runs
-                  </label>
-                  <label style={{ fontSize: 12, opacity: 0.9 }}>
-                    Vision pose:{" "}
-                    <select value={visionPose} onChange={(e) => setVisionPose(e.target.value as Pose)} style={{ padding: 6 }}>
-                      <option value="front">Front</option>
-                      <option value="quarter">Quarter Turn</option>
-                      <option value="side">Side</option>
-                      <option value="back">Back</option>
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 12, opacity: 0.9 }}>
-                    Scope:{" "}
-                    <select value={visionScope} onChange={(e) => setVisionScope(e.target.value as any)} style={{ padding: 6 }}>
-                      <option value="month">This month (first → last)</option>
-                      <option value="last2">Last 2 anchors</option>
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 12, opacity: 0.9 }}>
-                    Focus:{" "}
-                    <select value={visionFocus} onChange={(e) => setVisionFocus(e.target.value as any)} style={{ padding: 6 }}>
-                      <option value="balanced">Balanced</option>
-                      <option value="lower">Lower Body Priority</option>
-                      <option value="upper">Upper Body Priority</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
-                  <strong>Quick Log</strong>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>Days logged: {monthStats.quicklogDays}</div>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>
-                    Weight:{" "}
-                    {monthStats.qWeight.first == null
-                      ? "—"
-                      : `${monthStats.qWeight.first.toFixed(1)} → ${monthStats.qWeight.last?.toFixed(1)} (${monthStats.qWeight.delta! >= 0 ? "+" : ""}${monthStats.qWeight.delta!.toFixed(1)})`}
-                  </div>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>
-                    Waist:{" "}
-                    {monthStats.qWaist.first == null
-                      ? "—"
-                      : `${monthStats.qWaist.first.toFixed(1)} → ${monthStats.qWaist.last?.toFixed(1)} (${monthStats.qWaist.delta! >= 0 ? "+" : ""}${monthStats.qWaist.delta!.toFixed(1)})`}
-                  </div>
-                  <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
-                    Avg sleep: {monthStats.avgSleep == null ? "—" : monthStats.avgSleep.toFixed(1)}h • Avg protein:{" "}
-                    {monthStats.avgProtein == null ? "—" : Math.round(monthStats.avgProtein)}g • Avg Zone2:{" "}
-                    {monthStats.avgZone2 == null ? "—" : Math.round(monthStats.avgZone2)}m
-                  </div>
-                </div>
-
-                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
-                  <strong>Measurements</strong>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>Entries: {monthStats.measDays}</div>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>
-                    Weight:{" "}
-                    {monthStats.mWeight.first == null
-                      ? "—"
-                      : `${monthStats.mWeight.first.toFixed(1)} → ${monthStats.mWeight.last?.toFixed(1)} (${monthStats.mWeight.delta! >= 0 ? "+" : ""}${monthStats.mWeight.delta!.toFixed(1)})`}
-                  </div>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>
-                    Waist:{" "}
-                    {monthStats.mWaist.first == null
-                      ? "—"
-                      : `${monthStats.mWaist.first.toFixed(1)} → ${monthStats.mWaist.last?.toFixed(1)} (${monthStats.mWaist.delta! >= 0 ? "+" : ""}${monthStats.mWaist.delta!.toFixed(1)})`}
-                  </div>
-                  <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
-                    Tip: Quick Log is your “daily signal.” Measurements are your “official tape.”
-                  </div>
-                </div>
-
-                <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.06)" }}>
-                  <strong>Physique Scorecard</strong>
-                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 12 }}>
-                    1–10 ratings for this month. Use it to see trajectory, not perfection.
-                  </div>
-
-                  {scorecard ? (
-                    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ opacity: 0.9 }}>Month: <strong>{scorecard.monthKey}</strong></div>
-                        <div style={{ opacity: 0.75, fontSize: 12 }}>Generated: {scorecard.ts.replace("T", " ").slice(0, 19)}Z</div>
-                      </div>
-
-                      {scorecardDeltaSummary ? (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                          <strong>Scorecard Trend</strong>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>vs {previousScorecard?.monthKey}</span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Improving: <strong>{scorecardDeltaSummary.improving}</strong></span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Flat: <strong>{scorecardDeltaSummary.flat}</strong></span>
-                          <span style={{ fontSize: 12, opacity: 0.9 }}>Down: <strong>{scorecardDeltaSummary.down}</strong></span>
-                        </div>
-                      ) : null}
-
-                      <div style={{ display: "grid", gridTemplateColumns: scorecardDeltaSummary ? "1fr auto auto" : "1fr auto", gap: 6, alignItems: "center" }}>
-                        {scorecardMetrics.map((metric) => {
-                          const value = Number(scorecard[metric.key] ?? 0);
-                          const delta = scorecardDeltaSummary?.deltas.find((d) => d.key === metric.key)?.delta ?? null;
-                          return (
-                            <React.Fragment key={metric.key}>
-                              <div style={{ opacity: 0.9 }}>{metric.label}</div>
-                              <div><strong>{value.toFixed(1)}</strong></div>
-                              {scorecardDeltaSummary ? (
-                                <div>
-                                  <span
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      minWidth: 52,
-                                      padding: "2px 8px",
-                                      borderRadius: 999,
-                                      fontSize: 12,
-                                      fontWeight: 700,
-                                      ...deltaTone(delta ?? 0),
-                                    }}
-                                  >
-                                    {formatDelta(delta ?? 0)}
-                                  </span>
-                                </div>
-                              ) : null}
-                            </React.Fragment>
-                          );
-                        })}
-                      </div>
-
-                      <div style={{ opacity: 0.9 }}>
-                        Momentum: <strong>{scorecard.momentum === "up" ? "↑ Improving" : scorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong>
-                        {previousScorecard ? (
-                          <span style={{ opacity: 0.8 }}> • Previous: <strong>{previousScorecard.momentum === "up" ? "↑ Improving" : previousScorecard.momentum === "down" ? "↓ Slipping" : "→ Flat"}</strong></span>
-                        ) : null}
-                      </div>
-
-                      {scorecard.notes ? (
-                        <div style={{ opacity: 0.9, fontSize: 12, lineHeight: 1.35 }}>
-                          <strong>Notes:</strong> {scorecard.notes}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div style={{ marginTop: 8, opacity: 0.85 }}>
-                      No scorecard yet. Hit <strong>Scorecard</strong> above.
-                    </div>
-                  )}
-
-                  {scoreShowHistory && scoreHistory.length > 0 ? (
-                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
-                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous scorecards (click to load):</div>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        {scoreHistory.map((h) => (
-                          <button
-                            key={h.ts}
-                            style={{
-                              textAlign: "left",
-                              padding: "6px 10px",
-                              borderRadius: 10,
-                              background: "rgba(255,255,255,0.06)"
-                            }}
-                            onClick={() => setScorecard(h)}
-                            title="Load this scorecard"
-                          >
-                            <span style={{ fontSize: 12, opacity: 0.9 }}>
-                              {h.monthKey} • {h.ts.replace("T", " ").slice(0, 19)}Z • {h.momentum === "up" ? "↑" : h.momentum === "down" ? "↓" : "→"}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {aiInsight ? (
-                <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                    <strong>Coach Analysis</strong>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
-                    </div>
-                  </div>
-                  <pre
-                    style={{
-                      marginTop: 8,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      fontFamily: "inherit",
-                      fontSize: 13,
-                      lineHeight: 1.35,
-                      opacity: 0.95
-                    }}
-                  >
-                    {aiInsight}
-                  </pre>
-
-                  {aiShowHistory && aiInsightHistory.length > 0 ? (
-                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
-                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous coach runs (click to load):</div>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        {aiInsightHistory.map((h) => (
-                          <button
-                            key={h.id}
-                            style={{
-                              textAlign: "left",
-                              padding: "6px 10px",
-                              borderRadius: 10,
-                              background: "rgba(255,255,255,0.06)"
-                            }}
-                            onClick={() => setAiInsight(h.text)}
-                            title="Load this run into the viewer"
-                          >
-                            <span style={{ fontSize: 12, opacity: 0.9 }}>{h.ts.replace("T", " ").slice(0, 19)}Z</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {visionText ? (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>
-                    <strong>Vision Analysis</strong> — {visionPose.toUpperCase()} ({visionScope === "month" ? "month" : "last 2"}, {visionFocus})
-                  </div>
-                  <pre
-                    style={{
-                      whiteSpace: "pre-wrap",
-                      padding: 10,
-                      borderRadius: 12,
-                      background: "rgba(255,255,255,0.06)",
-                      border: "1px solid rgba(255,255,255,0.12)",
-                      margin: 0,
-                      opacity: 0.95,
-                    }}
-                  >
-                    {visionText}
-                  </pre>
-
-                  {visionShowHistory && visionHistory.length > 0 ? (
-                    <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10 }}>
-                      <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 6 }}>Previous Vision runs (click to load):</div>
-                      <div style={{ display: "grid", gap: 6 }}>
-                        {visionHistory.map((h) => (
-                          <button
-                            key={h.id}
-                            style={{
-                              textAlign: "left",
-                              padding: "6px 10px",
-                              borderRadius: 10,
-                              background: "rgba(255,255,255,0.06)",
-                            }}
-                            onClick={() => {
-                              setVisionPose(h.pose);
-                              setVisionScope(h.scope as any);
-                              setVisionText(h.text);
-                            }}
-                            title="Load this Vision run into the viewer"
-                          >
-                            <span style={{ fontSize: 12, opacity: 0.9 }}>
-                              {h.ts.replace("T", " ").slice(0, 19)}Z • {h.pose.toUpperCase()} • {h.scope}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          </ProgressSection>
-
-          <ProgressSection
-            title="Flipbook"
-            subtitle="Chronological visual proof of change, one pose at a time."
-            open={flipbookOpen}
+          <ProgressFlipbook
+            ProgressSection={ProgressSection}
+            bannerStyle={bannerStyle}
+            flipbookOpen={flipbookOpen}
             onToggle={() => setFlipbookOpen((v) => !v)}
-          >
-          {/* Flipbook + Monthly highlights (keep controls, image, and timeline contiguous) */}
-          <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
-            <div style={{ ...bannerStyle("info") }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div>
-                  <strong>Flipbook</strong>
-                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <label>
-                      Pose:{" "}
-                      <select value={flipPose} onChange={(e) => setFlipPose(e.target.value as Pose)} style={{ padding: 6 }}>
-                        <option value="front">Front</option>
-                        <option value="quarter">Quarter Turn</option>
-                        <option value="side">Side</option>
-                        <option value="back">Back</option>
-                      </select>
-                    </label>
-                    <button onClick={() => setFlipIdx((i) => Math.max(0, i - 1))} disabled={!flipList.length || flipIdx <= 0}>
-                      Prev
-                    </button>
-                    <button onClick={() => setFlipPlaying((p) => !p)} disabled={flipList.length < 2}>
-                      {flipPlaying ? "Stop" : "Play"}
-                    </button>
-                    <button onClick={() => setFlipIdx((i) => Math.min(Math.max(0, flipList.length - 1), i + 1))} disabled={!flipList.length || flipIdx >= flipList.length - 1}>
-                      Next
-                    </button>
-                    <button onClick={() => setFlipIdx(Math.max(0, flipList.length - 1))} disabled={!flipList.length}>
-                      Latest
-                    </button>
-                    <label>
-                      View:{" "}
-                      <select value={flipView} onChange={(e) => setFlipView(e.target.value as any)} style={{ padding: 6 }}>
-                        <option value="normal">Normal</option>
-                        <option value="ghost">Ghost overlay</option>
-                        <option value="diff">Difference heatmap</option>
-                        <option value="map">Physique change map</option>
-                      </select>
-                    </label>
-                    {flipView !== "normal" ? (
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6, opacity: 0.9 }}>
-                        {flipView === "ghost" ? "Opacity" : flipView === "diff" ? "Intensity" : "Map strength"}
-                        <input
-                          type="range"
-                          min={5}
-                          max={85}
-                          value={ghostOpacity}
-                          onChange={(e) => setGhostOpacity(Number(e.target.value))}
-                          style={{ width: 140 }}
-                        />
-                        <span style={{ width: 34, textAlign: "right" }}>{ghostOpacity}%</span>
-                      </label>
-                    ) : null}
-                    <span style={{ opacity: 0.75 }}>
-                      {flipList.length
-                        ? flipList.length === 1
-                          ? "1 anchor (log one more week to play)"
-                          : `${flipList.length} anchors`
-                        : "No anchors yet"}
-                    </span>
-                    <span style={{ opacity: 0.85 }}>
-                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
-                    </span>
-                  </div>
-                </div>
+            flipPose={flipPose}
+            setFlipPose={setFlipPose}
+            flipList={flipList}
+            flipIdx={flipIdx}
+            setFlipIdx={setFlipIdx}
+            flipPlaying={flipPlaying}
+            setFlipPlaying={setFlipPlaying}
+            flipView={flipView}
+            setFlipView={setFlipView}
+            ghostOpacity={ghostOpacity}
+            setGhostOpacity={setGhostOpacity}
+            monthlyHighlights={monthlyHighlights}
+            CORE_POSES={CORE_POSES}
+            thumbs={thumbs}
+            alignGrid={alignGrid}
+            alignX={alignX}
+            alignY={alignY}
+            diffCanvasRef={diffCanvasRef}
+            nudgeAlign={nudgeAlign}
+            resetAlign={resetAlign}
+            setAlignGrid={setAlignGrid}
+            flipKeysArmed={flipKeysArmed}
+            setFlipKeysArmed={setFlipKeysArmed}
+            copyPrevAlignToCurrent={copyPrevAlignToCurrent}
+          />
 
-                <div>
-                  <strong>Monthly highlights</strong>
-                  <div style={{ marginTop: 6, opacity: 0.9 }}>Month: {monthlyHighlights.key}</div>
-                  <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
-                    {CORE_POSES.map((p) => {
-                      const h = (monthlyHighlights.highlights as any)[p] as { first?: ProgressPhotoRow; last?: ProgressPhotoRow };
-                      if (!h?.first || !h?.last) {
-                        return (
-                          <div key={p} style={{ opacity: 0.75 }}>
-                            {p.toUpperCase()}: —
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={p}>
-                          {p.toUpperCase()}: {h.first.taken_on} → {h.last.taken_on}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-{flipList.length ? (
-                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-                    {[
-                      { label: "Oldest anchor", row: flipList[0] },
-                      { label: "Current frame", row: flipList[flipIdx] },
-                      { label: "Latest anchor", row: flipList[flipList.length - 1] },
-                    ].map((card) => (
-                      <div
-                        key={card.label}
-                        style={{
-                          border: "1px solid rgba(255,255,255,0.12)",
-                          borderRadius: 10,
-                          padding: 10,
-                          background: "rgba(255,255,255,0.04)"
-                        }}
-                      >
-                        <div style={{ fontSize: 12, opacity: 0.75 }}>{card.label}</div>
-                        {card.row ? (
-                          <>
-                            <div style={{ marginTop: 4, fontWeight: 700 }}>{card.row.taken_on}</div>
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
-                              {card.row.pose.toUpperCase()} • {card.row.weight_lbs ?? "—"} lb • {card.row.waist_in ?? "—"} in
-                            </div>
-                          </>
-                        ) : (
-                          <div style={{ marginTop: 4, opacity: 0.75 }}>—</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Video-editor style scrubber */}
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-                    <div style={{ opacity: 0.9 }}>
-                      <strong>Timeline</strong> — {flipList[flipIdx] ? `${flipList[flipIdx].taken_on} (${flipPose.toUpperCase()})` : ""}
-                    </div>
-                    <div style={{ opacity: 0.75, fontSize: 12 }}>
-                      Frame {flipList.length ? flipIdx + 1 : 0} / {flipList.length}
-                    </div>
-                  </div>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, flipList.length - 1)}
-                    value={flipIdx}
-                    onChange={(e) => setFlipIdx(Number(e.target.value))}
-                    style={{ width: "100%" }}
-                    disabled={!flipList.length}
-                  />
-
-                  {/* Clickable markers */}
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto", paddingBottom: 4 }}>
-                    {flipList.map((r, idx) => (
-                      <button
-                        key={r.id}
-                        onClick={() => setFlipIdx(idx)}
-                        title={r.taken_on}
-                        style={{
-                          minWidth: 10,
-                          height: 10,
-                          borderRadius: 999,
-                          border: "1px solid rgba(255,255,255,0.35)",
-                          background: idx === flipIdx ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.15)",
-                          cursor: "pointer"
-                        }}
-                        aria-label={`Jump to ${r.taken_on}`}
-                      />
-                    ))}
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.65, fontSize: 12 }}>
-                    <span>{flipList[0]?.taken_on ?? ""}</span>
-                    <span>{flipList[flipList.length - 1]?.taken_on ?? ""}</span>
-                  </div>
-                </div>
-              ) : null}
-
-                            {flipList[flipIdx] && thumbs[flipList[flipIdx].id] ? (
-                <div style={{ marginTop: 10 }}>
-                  <div
-                    style={{
-                      width: 320,
-                      borderRadius: 12,
-                      border: "1px solid rgba(255,255,255,0.12)",
-                      overflow: "hidden",
-                      position: "relative",
-                      background: "rgba(0,0,0,0.25)"
-                    }}
-                  >
-                    {alignGrid ? (
-                      <div
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          pointerEvents: "none",
-                          backgroundImage:
-                            "linear-gradient(rgba(255,255,255,0.10) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.10) 1px, transparent 1px)",
-                          backgroundSize: "50px 50px",
-                          opacity: 0.35
-                        }}
-                      />
-                    ) : null}
-
-                    {/* Current frame */}
-                    <img
-                      src={thumbs[flipList[flipIdx].id]}
-                      alt={`Flipbook  taken_on`}
-                      style={{ width: "100%", display: "block", objectFit: "contain", transform: `translate(${alignX}px, ${alignY}px)` }}
-                    />
-
-                    {/* Ghost overlay of previous frame */}
-                    {flipView === "ghost" && flipIdx > 0 ? (
-                      thumbs[flipList[flipIdx - 1]?.id] ? (
-                        <img
-                          src={thumbs[flipList[flipIdx - 1].id]}
-                          alt={`Ghost  taken_on`}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            opacity: ghostOpacity / 100,
-                            transform: `translate(${(flipList[flipIdx - 1].align_x ?? 0) as number}px, ${(flipList[flipIdx - 1].align_y ?? 0) as number}px)`,
-                            pointerEvents: "none"
-                          }}
-                        />
-                      ) : null
-                    ) : null}
-
-                    {/* Difference heatmap overlay */}
-                    {(flipView === "diff" || flipView === "map") && flipIdx > 0 ? (
-                      <canvas
-                        ref={diffCanvasRef}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          opacity: 0.85,
-                          pointerEvents: "none",
-                          mixBlendMode: "screen"
-                        }}
-                      />
-                    ) : null}
-                  </div>
-
-                  {/* Alignment controls (Flipbook) */}
-                  <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? -10 : -2)} title="Nudge up (Shift = 10px)">↑</button>
-                      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                        <button onClick={(e) => nudgeAlign(e.shiftKey ? -10 : -2, 0)} title="Nudge left (Shift = 10px)">←</button>
-                        <button onClick={resetAlign} title="Reset alignment">Reset</button>
-                        <button onClick={(e) => nudgeAlign(e.shiftKey ? 10 : 2, 0)} title="Nudge right (Shift = 10px)">→</button>
-                      </div>
-                      <button onClick={(e) => nudgeAlign(0, e.shiftKey ? 10 : 2)} title="Nudge down (Shift = 10px)">↓</button>
-                    </div>
-
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <input type="checkbox" checked={alignGrid} onChange={(e) => setAlignGrid(e.target.checked)} />
-                        Show grid
-                      </label>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <input type="checkbox" checked={flipKeysArmed} onChange={(e) => setFlipKeysArmed(e.target.checked)} />
-                        Keyboard nudges
-                      </label>
-                    </div>
-
-                    {flipIdx > 0 ? (
-                      <button onClick={copyPrevAlignToCurrent} title="Copy previous frame alignment to this frame">
-                        Copy prev alignment
-                      </button>
-                    ) : (
-                      <button disabled title="Log another week to copy alignment">Copy prev alignment</button>
-                    )}
-
-                    <div style={{ opacity: 0.8, fontSize: 12 }}>
-                      {flipKeysArmed ? "Keys: ← ↑ ↓ → (Shift=10px), R=reset" : "Enable keyboard nudges for arrow keys"}
-                      <div>
-                        Current offset: <strong>{alignX}</strong>, <strong>{alignY}</strong>
-                      </div>
-                    </div>
-                  </div>
-
-                  {flipView !== "normal" && flipIdx > 0 ? (
-                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      {flipView === "ghost" ? "Ghost" : flipView === "diff" ? "Heatmap" : "Change map"}: {flipList[flipIdx - 1].taken_on} → {flipList[flipIdx].taken_on}
-                    </div>
-                  ) : null}
-
-                  {flipList.length < 2 ? (
-                    <div style={{ marginTop: 8, opacity: 0.85, fontSize: 12 }}>
-                      Flipbook needs <strong>2+</strong> anchor weeks for this pose. Log next week’s {flipPose.toUpperCase()} to unlock playback.
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          </ProgressSection>
-
-          <ProgressSection
-            title="Compare"
-            subtitle="Inspect anchor photos side by side. Use Compare on any anchor in the library below."
-            open={compareSectionOpen}
+          <ProgressCompare
+            ProgressSection={ProgressSection}
+            bannerStyle={bannerStyle}
+            compareSectionOpen={compareSectionOpen}
             onToggle={() => setCompareSectionOpen((v) => !v)}
-          >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ ...bannerStyle("info") }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <h3 style={{ margin: 0 }}>Compare Library</h3>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <button onClick={refreshGallery} disabled={galleryBusy}>
-                    {galleryBusy ? "Refreshing..." : "Refresh"}
-                  </button>
-                  <span style={{ opacity: 0.75 }}>{rows.length} photos</span>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10 }}>
-                <strong>Quick Compare by Pose</strong>
-                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-                  {CORE_POSES.map((p) => {
-                    const pair = latestAnchorPairByPose[p];
-                    return (
-                      <div
-                        key={p}
-                        style={{
-                          border: "1px solid rgba(255,255,255,0.12)",
-                          borderRadius: 10,
-                          padding: 10,
-                          background: "rgba(255,255,255,0.04)",
-                          display: "grid",
-                          gap: 8
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{p === "front" ? "Front" : p === "side" ? "Side" : "Back"}</div>
-                          {pair ? (
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.85 }}>
-                              Latest anchor pair: {pair.previous.taken_on} → {pair.latest.taken_on}
-                            </div>
-                          ) : (
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                              Need 2 anchor weeks for one-click compare.
-                            </div>
-                          )}
-                        </div>
-                        <button onClick={() => pair && openComparePair(pair.previous, pair.latest)} disabled={!pair}>
-                          Open latest pair
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <label>
-                  Pose filter{" "}
-                  <select value={comparePoseFilter} onChange={(e) => setComparePoseFilter(e.target.value as "all" | Pose)} style={{ padding: 6 }}>
-                    <option value="all">All poses</option>
-                    <option value="front">Front</option>
-                    <option value="quarter">Quarter Turn</option>
-                    <option value="side">Side</option>
-                    <option value="back">Back</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <input type="checkbox" checked={compareAnchorsOnly} onChange={(e) => setCompareAnchorsOnly(e.target.checked)} />
-                  Anchors only
-                </label>
-                <span style={{ opacity: 0.8 }}>Showing <strong>{compareRowsFiltered.length}</strong> of {rows.length}</span>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 10 }}>
-              {compareRowsFiltered.length ? (
-                compareRowsFiltered.map((r) => (
-                  <div
-                    key={r.id}
-                    style={{
-                      border: "1px solid rgba(255,255,255,0.15)",
-                      borderRadius: 10,
-                      padding: 10,
-                      display: "grid",
-                      gap: 8
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                      <div>
-                        <strong>{r.taken_on}</strong> — {r.pose.toUpperCase()}
-                        {r.is_anchor ? <span style={{ marginLeft: 8 }}>(Anchor)</span> : null}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {r.is_anchor && CORE_POSES.includes(r.pose) ? (
-                          <button onClick={() => openCompareForRow(r)}>Compare</button>
-                        ) : null}
-                        <button onClick={() => handleDelete(r)}>Delete</button>
-                      </div>
-                    </div>
-
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      {thumbs[r.id] ? (
-                        <img
-                          src={thumbs[r.id]}
-                          alt={`${r.pose} ${r.taken_on}`}
-                          style={{ width: 200, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)" }}
-                        />
-                      ) : (
-                        <button
-                          onClick={async () => {
-                            try {
-                              await ensureThumb(r.id, r.storage_path);
-                            } catch (e: any) {
-                              alert(e?.message ?? String(e));
-                            }
-                          }}
-                        >
-                          Load preview
-                        </button>
-                      )}
-
-                      <div style={{ minWidth: 260 }}>
-                        <div>Weight: {r.weight_lbs ?? "—"} lbs</div>
-                        <div>Waist: {r.waist_in ?? "—"} in</div>
-                        {r.notes ? <div style={{ marginTop: 6, opacity: 0.9 }}>Notes: {r.notes}</div> : null}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ ...bannerStyle("warn") }}>
-                  No photos match the current Compare filters. Change the pose filter or turn off anchors-only.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Compare modal */}
-          {compareOpen && compareA && compareB ? (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.6)",
-                display: "grid",
-                placeItems: "center",
-                padding: 16,
-                zIndex: 9999
-              }}
-              onClick={() => setCompareOpen(false)}
-            >
-              <div
-                style={{
-                  width: "min(860px, 95vw)",
-                  background: "#111",
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  borderRadius: 14,
-                  padding: 14
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <strong>Compare</strong> — {compareB.pose.toUpperCase()} ({compareA.taken_on} → {compareB.taken_on})
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <label style={{ fontSize: 12, opacity: 0.9 }}>
-                      View:{" "}
-                      <select value={compareView} onChange={(e) => setCompareView(e.target.value as any)} style={{ padding: 6 }}>
-                        <option value="slider">Slider wipe</option>
-                        <option value="ghost">Ghost overlay</option>
-                        <option value="map">Change map</option>
-                      </select>
-                    </label>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await copyAlignBetweenPhotos(compareA.id, compareB.id);
-                        } catch (e: any) {
-                          alert(e?.message ?? String(e));
-                        }
-                      }}
-                      title="Copy BEFORE alignment to AFTER"
-                    >
-                      Copy prev alignment
-                    </button>
-                    <button onClick={() => setCompareOpen(false)}>Close</button>
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                  <div
-                    style={{
-                      position: "relative",
-                      width: "100%",
-                      aspectRatio: "16/10",
-                      overflow: "hidden",
-                      borderRadius: 12,
-                      border: "1px solid #ccc",
-                      background: "#111",
-                      userSelect: "none"
-                    }}
-                  >
-                    {/* Base (A) */}
-                    <img
-                      src={thumbs[compareA.id]}
-                      alt={`Before ${compareA.taken_on}`}
-                      style={{
-                        position: "absolute",
-                        inset: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                        transform: `translate(${(compareA.align_x ?? 0) as number}px, ${(compareA.align_y ?? 0) as number}px)`,
-                        opacity: compareView === "map" ? 0.08 : 1
-                      }}
-                    />
-
-                    {compareView === "slider" ? (
-                      <>
-                        <div
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            clipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`,
-                            WebkitClipPath: `inset(0 ${Math.max(0, 100 - compareMix)}% 0 0)`
-                          }}
-                        >
-                          <img
-                            src={thumbs[compareB.id]}
-                            alt={`After ${compareB.taken_on}`}
-                            onPointerDown={(e) => {
-                              (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                              compareDragRef.current = {
-                                active: true,
-                                sx: e.clientX,
-                                sy: e.clientY,
-                                ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                                ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                              };
-                            }}
-                            onPointerMove={(e) => {
-                              const st = compareDragRef.current;
-                              if (!st?.active || !compareB) return;
-                              const dx = e.clientX - st.sx;
-                              const dy = e.clientY - st.sy;
-                              const nx = st.ax + dx;
-                              const ny = st.ay + dy;
-                              setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                              updateLocalAlign(compareB.id, nx, ny);
-                              schedulePersistAlign(compareB.id, nx, ny);
-                            }}
-                            onPointerUp={() => {
-                              if (compareDragRef.current) compareDragRef.current.active = false;
-                            }}
-                            onPointerCancel={() => {
-                              if (compareDragRef.current) compareDragRef.current.active = false;
-                            }}
-                            style={{
-                              position: "absolute",
-                              inset: 0,
-                              width: "100%",
-                              height: "100%",
-                              objectFit: "contain",
-                              transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                              transition: "transform 0.02s linear",
-                              cursor: "grab",
-                              touchAction: "none"
-                            }}
-                          />
-                        </div>
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: 0,
-                            bottom: 0,
-                            left: `${compareMix}%`,
-                            width: 2,
-                            background: "rgba(255,255,255,0.85)"
-                          }}
-                        />
-                      </>
-                    ) : compareView === "ghost" ? (
-                      <img
-                        src={thumbs[compareB.id]}
-                        alt={`After ${compareB.taken_on}`}
-                        onPointerDown={(e) => {
-                          (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                          compareDragRef.current = {
-                            active: true,
-                            sx: e.clientX,
-                            sy: e.clientY,
-                            ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                            ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                          };
-                        }}
-                        onPointerMove={(e) => {
-                          const st = compareDragRef.current;
-                          if (!st?.active || !compareB) return;
-                          const dx = e.clientX - st.sx;
-                          const dy = e.clientY - st.sy;
-                          const nx = st.ax + dx;
-                          const ny = st.ay + dy;
-                          setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                          updateLocalAlign(compareB.id, nx, ny);
-                          schedulePersistAlign(compareB.id, nx, ny);
-                        }}
-                        onPointerUp={() => {
-                          if (compareDragRef.current) compareDragRef.current.active = false;
-                        }}
-                        onPointerCancel={() => {
-                          if (compareDragRef.current) compareDragRef.current.active = false;
-                        }}
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          opacity: compareOpacity / 100,
-                          transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                          transition: "transform 0.02s linear",
-                          cursor: "grab",
-                          touchAction: "none"
-                        }}
-                      />
-                    ) : (
-                      <>
-                        <img
-                          src={thumbs[compareB.id]}
-                          alt={`After ${compareB.taken_on}`}
-                          onPointerDown={(e) => {
-                            (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-                            compareDragRef.current = {
-                              active: true,
-                              sx: e.clientX,
-                              sy: e.clientY,
-                              ax: (((compareB.align_x ?? 0) as number) || 0) as number,
-                              ay: (((compareB.align_y ?? 0) as number) || 0) as number
-                            };
-                          }}
-                          onPointerMove={(e) => {
-                            const st = compareDragRef.current;
-                            if (!st?.active || !compareB) return;
-                            const dx = e.clientX - st.sx;
-                            const dy = e.clientY - st.sy;
-                            const nx = st.ax + dx;
-                            const ny = st.ay + dy;
-                            setCompareB({ ...compareB, align_x: nx, align_y: ny });
-                            updateLocalAlign(compareB.id, nx, ny);
-                            schedulePersistAlign(compareB.id, nx, ny);
-                          }}
-                          onPointerUp={() => {
-                            if (compareDragRef.current) compareDragRef.current.active = false;
-                          }}
-                          onPointerCancel={() => {
-                            if (compareDragRef.current) compareDragRef.current.active = false;
-                          }}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            opacity: 0.06,
-                            transform: `translate(${(compareB.align_x ?? 0) as number}px, ${(compareB.align_y ?? 0) as number}px)`,
-                            transition: "transform 0.02s linear",
-                            cursor: "grab",
-                            touchAction: "none"
-                          }}
-                        />
-                        <canvas
-                          ref={compareMapCanvasRef}
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            opacity: 0.96,
-                            pointerEvents: "none",
-                            mixBlendMode: "screen"
-                          }}
-                        />
-                      </>
-                    )}
-                  </div>
-
-                  {/* Alignment controls */}
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ fontSize: 12, opacity: 0.85 }}>
-                      <b>Align:</b> drag the top photo, or nudge with buttons (double‑click = bigger). “Reset” zeros alignment for the top photo.
-                    </div>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <button className="btn" onClick={() => compareNudge(0, -2)} onDoubleClick={() => compareNudge(0, -10)} title="Up">↑</button>
-                      <button className="btn" onClick={() => compareNudge(-2, 0)} onDoubleClick={() => compareNudge(-10, 0)} title="Left">←</button>
-                      <button className="btn" onClick={() => compareNudge(2, 0)} onDoubleClick={() => compareNudge(10, 0)} title="Right">→</button>
-                      <button className="btn" onClick={() => compareNudge(0, 2)} onDoubleClick={() => compareNudge(0, 10)} title="Down">↓</button>
-                      <button className="btn" onClick={compareReset} title="Reset alignment">Reset</button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ opacity: 0.85 }}>{compareA.taken_on}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={compareView === "slider" ? compareMix : compareOpacity}
-                      onChange={(e) => compareView === "slider" ? setCompareMix(Number(e.target.value)) : setCompareOpacity(Number(e.target.value))}
-                      style={{ width: 320 }}
-                    />
-                    <span style={{ opacity: 0.85 }}>{compareView === "slider" ? `Wipe ${compareMix}%` : compareView === "ghost" ? `Opacity ${compareOpacity}%` : `Map ${compareOpacity}%`}</span>
-                    <span style={{ opacity: 0.85 }}>{compareB.taken_on}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          </ProgressSection>
+            refreshGallery={refreshGallery}
+            galleryBusy={galleryBusy}
+            rows={rows}
+            CORE_POSES={CORE_POSES}
+            latestAnchorPairByPose={latestAnchorPairByPose}
+            openComparePair={openComparePair}
+            comparePoseFilter={comparePoseFilter}
+            setComparePoseFilter={setComparePoseFilter}
+            compareAnchorsOnly={compareAnchorsOnly}
+            setCompareAnchorsOnly={setCompareAnchorsOnly}
+            compareRowsFiltered={compareRowsFiltered}
+            openCompareForRow={openCompareForRow}
+            handleDelete={handleDelete}
+            thumbs={thumbs}
+            ensureThumb={ensureThumb}
+            compareOpen={compareOpen}
+            compareA={compareA}
+            compareB={compareB}
+            setCompareOpen={setCompareOpen}
+            compareView={compareView}
+            setCompareView={setCompareView}
+            copyAlignBetweenPhotos={copyAlignBetweenPhotos}
+            compareMix={compareMix}
+            setCompareMix={setCompareMix}
+            compareOpacity={compareOpacity}
+            setCompareOpacity={setCompareOpacity}
+            compareDragRef={compareDragRef}
+            setCompareB={setCompareB}
+            updateLocalAlign={updateLocalAlign}
+            schedulePersistAlign={schedulePersistAlign}
+            compareMapCanvasRef={compareMapCanvasRef}
+            compareNudge={compareNudge}
+            compareReset={compareReset}
+          />
         </div>
       )}
 
@@ -2739,6 +1976,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
