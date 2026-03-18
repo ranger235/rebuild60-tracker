@@ -32,6 +32,22 @@ export type WatchFlag = {
 
 export type PrescriptionTrustLevel = "high" | "moderate" | "low" | "unknown";
 
+export type SessionPatternProfile = {
+  executionDiscipline: "high" | "moderate" | "low";
+  loadAggression: "conservative" | "neutral" | "aggressive";
+  volumeDrift: "low" | "moderate" | "high";
+  substitutionPattern: "stable" | "selective" | "frequent";
+  anchorReliability: "strong" | "mixed" | "weak";
+};
+
+export type SessionPatternEvidence = {
+  fidelityAvg: number | null;
+  avgLoadDelta: number | null;
+  avgVolumeDelta: number | null;
+  substitutionRate: number | null;
+  anchorMatchRate: number | null;
+};
+
 export type ReadinessMetrics = {
   adherence7d: number | null;
   adherence28d: number | null;
@@ -52,13 +68,12 @@ export type ReadinessSummary = {
 export type ReadinessContext = {
   status: ReadinessStatus;
   confidence: ConfidenceLevel;
-
   summary: ReadinessSummary;
-
   metrics: ReadinessMetrics;
-
   drivers: DriverSignal[];
   watchFlags: WatchFlag[];
+  patterns: SessionPatternProfile;
+  patternEvidence: SessionPatternEvidence;
 };
 
 export type WorkoutHistoryItem = {
@@ -80,6 +95,10 @@ export type ReadinessPreferenceHistoryItem = {
   timestamp: number;
   fidelityScore?: number | null;
   sessionOutcome?: "as_prescribed" | "modified" | "partial" | "abandoned";
+  loadDeltaAvg?: number | null;
+  volumeDelta?: number | null;
+  substitutionCount?: number | null;
+  primaryOutcome?: "progressed" | "matched" | "regressed" | "unknown";
 };
 
 export type ReadinessInput = {
@@ -88,4 +107,4 @@ export type ReadinessInput = {
   scorecards: ScorecardItem[];
   preferenceHistory?: ReadinessPreferenceHistoryItem[];
 };
-;
+
