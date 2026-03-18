@@ -61,6 +61,9 @@ type Props = {
   scorecardMetrics: ScorecardMetric[];
   formatDelta: (delta: number) => string;
   deltaTone: (delta: number) => CSSProperties;
+  lastScoreSignals: any | null;
+  showSignalDebug: boolean;
+  setShowSignalDebug: Dispatch<SetStateAction<boolean>>;
 };
 
 function ProgressSection({
@@ -137,6 +140,9 @@ export default function ProgressScorecard(props: Props) {
     scorecardMetrics,
     formatDelta,
     deltaTone,
+    lastScoreSignals,
+    showSignalDebug,
+    setShowSignalDebug,
   } = props;
 
   return (
@@ -200,6 +206,9 @@ export default function ProgressScorecard(props: Props) {
                 <button onClick={() => setVisionShowHistory((s) => !s)} disabled={visionHistory.length === 0} title="Show previous Vision runs">
                   {visionShowHistory ? "Hide vision" : "Vision history"}
                 </button>
+                <button onClick={() => setShowSignalDebug((s) => !s)} disabled={!lastScoreSignals && !monthStats?.signals} title="Show deterministic signals used for scoring">
+                  {showSignalDebug ? "Hide signals" : "Signals"}
+                </button>
                 <button onClick={() => setScorecard(null)} disabled={!scorecard} title="Clear the current scorecard display">
                   Clear score
                 </button>
@@ -248,6 +257,40 @@ export default function ProgressScorecard(props: Props) {
             </div>
           </div>
         </div>
+
+        {showSignalDebug ? (
+          <div style={{ marginTop: 10, padding: 12, borderRadius: 12, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div>
+                <strong>Deterministic Signal Debug</strong>
+                <div style={{ marginTop: 4, fontSize: 12, opacity: 0.82 }}>
+                  Inspect the exact month-scoped signals driving the scorecard. No mysticism, no smoke machine.
+                </div>
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.82 }}>
+                Source: {lastScoreSignals ? "latest scorecard artifact" : "live month snapshot"}
+              </div>
+            </div>
+            <pre
+              style={{
+                marginTop: 10,
+                marginBottom: 0,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                padding: 10,
+                borderRadius: 10,
+                background: "rgba(0,0,0,0.18)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                fontSize: 12,
+                lineHeight: 1.45,
+                maxHeight: 320,
+                overflow: "auto",
+              }}
+            >
+              {JSON.stringify(lastScoreSignals ?? monthStats?.signals ?? null, null, 2)}
+            </pre>
+          </div>
+        ) : null}
 
         <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
@@ -430,4 +473,5 @@ export default function ProgressScorecard(props: Props) {
     </ProgressSection>
   );
 }
+
 
