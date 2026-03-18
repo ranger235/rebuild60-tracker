@@ -193,6 +193,57 @@ export default function ProgressScorecard(props: Props) {
     URL.revokeObjectURL(url);
   }
 
+  const deltaIntelligence = (() => {
+    if (!scorecard || !previousScorecard || !scorecardDeltaSummary) return null;
+
+    const improved = scorecardDeltaSummary.deltas.filter((row) => row.delta > 0);
+    const slipped = scorecardDeltaSummary.deltas.filter((row) => row.delta < 0);
+    const steady = scorecardDeltaSummary.deltas.filter((row) => row.delta === 0);
+    const signals = (lastScoreSignals ?? scorecard?.signals_used ?? monthStats?.signals ?? {}) as Record<string, any>;
+
+    const driverBits: string[] = [];
+    const waistDelta = Number(signals?.waistDelta ?? Number.NaN);
+    const adherence = Number(signals?.adherenceScore ?? Number.NaN);
+    const progressionHits = Number(signals?.progressionHits ?? Number.NaN);
+    const avgProtein = Number(signals?.avgProtein ?? Number.NaN);
+    const avgZone2 = Number(signals?.avgZone2Minutes ?? Number.NaN);
+    const anchorCompleteness = Number(signals?.anchorCompleteness ?? Number.NaN);
+    const pushPullBalance = Number(signals?.pushPullBalance ?? Number.NaN);
+
+    if (Number.isFinite(waistDelta) && waistDelta < 0) driverBits.push(`waist came down ${Math.abs(waistDelta).toFixed(1)} in`);
+    if (Number.isFinite(adherence) && adherence >= 0.75) driverBits.push(`training adherence held at ${Math.round(adherence * 100)}%`);
+    if (Number.isFinite(progressionHits) && progressionHits > 0) driverBits.push(`${Math.round(progressionHits)} progression hit${Math.round(progressionHits) === 1 ? "" : "s"} landed`);
+    if (Number.isFinite(avgProtein) && avgProtein > 0) driverBits.push(`protein averaged ${Math.round(avgProtein)} g/day`);
+    if (Number.isFinite(avgZone2) && avgZone2 > 0) driverBits.push(`Zone 2 averaged ${Math.round(avgZone2)} min/day logged`);
+    if (Number.isFinite(anchorCompleteness) && anchorCompleteness < 0.75) driverBits.push(`weekly anchors were only ${Math.round(anchorCompleteness * 100)}% complete`);
+    if (Number.isFinite(pushPullBalance) && Math.abs(pushPullBalance) > 0.2) driverBits.push(`push/pull balance drifted ${pushPullBalance > 0 ? "push-heavy" : "pull-heavy"}`);
+
+    const improvedText = improved.length ? improved.map((row) => `${row.label} ${formatDelta(row.delta)}`).join(" • ") : "No metrics improved month over month.";
+    const slippedText = slipped.length ? slipped.map((row) => `${row.label} ${formatDelta(row.delta)}`).join(" • ") : "No metrics slipped month over month.";
+    const steadyText = steady.length ? steady.map((row) => row.label).join(" • ") : "Nothing held completely flat.";
+
+    let headline = "Mixed month.";
+    if (improved.length >= 3 && slipped.length === 0) headline = "This month moved in the right direction.";
+    else if (slipped.length >= 3 && improved.length === 0) headline = "This month leaked ground and needs tightening.";
+    else if (improved.length > slipped.length) headline = "The month improved, but not evenly.";
+    else if (slipped.length > improved.length) headline = "The month backslid in a few places despite some useful work.";
+
+    let nextMove = "Keep the next month boring and repeatable: protect the main lifts, hit the planned work, and keep the data complete.";
+    if (slipped.some((row) => row.key === "consistency")) nextMove = "First fix consistency. A prettier plan is worthless if the work does not happen on schedule.";
+    else if (slipped.some((row) => row.key === "waist_control")) nextMove = "Tighten recovery inputs and waist control next month: protein up, drift down, no freelancing the basics.";
+    else if (slipped.some((row) => row.key === "symmetry")) nextMove = "Bring balance back next month. Keep the neglected pattern from becoming movement debt.";
+    else if (improved.some((row) => row.key === "muscularity")) nextMove = "Hold the current training rhythm and look for one more clean progression win instead of forcing a hero jump.";
+
+    return {
+      headline,
+      improvedText,
+      slippedText,
+      steadyText,
+      drivers: driverBits.length ? driverBits.join(" • ") : "Driver read is limited because the month did not provide much clean signal.",
+      nextMove,
+    };
+  })();
+
   return (
     <ProgressSection
       title="Monthly Scorecard"
@@ -454,6 +505,18 @@ export default function ProgressScorecard(props: Props) {
                       <strong>Notes:</strong> {scorecard.notes}
                     </div>
                   ) : null}
+
+                  {deltaIntelligence ? (
+                    <div style={{ padding: 10, borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", fontSize: 12, lineHeight: 1.45 }}>
+                      <div style={{ fontWeight: 800, marginBottom: 6 }}>Delta Intelligence</div>
+                      <div><strong>Headline:</strong> {deltaIntelligence.headline}</div>
+                      <div style={{ marginTop: 4 }}><strong>Improved:</strong> {deltaIntelligence.improvedText}</div>
+                      <div style={{ marginTop: 4 }}><strong>Slipped:</strong> {deltaIntelligence.slippedText}</div>
+                      <div style={{ marginTop: 4 }}><strong>Held steady:</strong> {deltaIntelligence.steadyText}</div>
+                      <div style={{ marginTop: 4 }}><strong>Likely drivers:</strong> {deltaIntelligence.drivers}</div>
+                      <div style={{ marginTop: 4 }}><strong>Next move:</strong> {deltaIntelligence.nextMove}</div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div style={{ marginTop: 8, opacity: 0.85 }}>
@@ -511,6 +574,7 @@ export default function ProgressScorecard(props: Props) {
     </ProgressSection>
   );
 }
+
 
 
 
