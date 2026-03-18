@@ -8,6 +8,7 @@ import {
   WatchFlag,
   PrescriptionTrustLevel,
 } from "./readinessTypes";
+import { deriveSessionPatterns } from "./sessionPatterns";
 
 function daysAgo(days: number) {
   const d = new Date();
@@ -108,8 +109,13 @@ function deriveStatus(
   if (recentFidelityAvg != null && recentFidelityAvg < 60 && density !== null && density >= 3) {
     return "recovery_constrained";
   }
-  if (adherence !== null && adherence >= 0.85 && density !== null && density >= 3 && (recentFidelityAvg == null || recentFidelityAvg >= 75))
-    return "ready_to_push";
+  if (
+    adherence !== null &&
+    adherence >= 0.85 &&
+    density !== null &&
+    density >= 3 &&
+    (recentFidelityAvg == null || recentFidelityAvg >= 75)
+  ) return "ready_to_push";
   if (adherence !== null && adherence < 0.5) return "recovery_constrained";
   if (density !== null && density >= 5) return "watch_fatigue";
   return "stable_normal";
@@ -122,9 +128,10 @@ function buildDrivers(params: {
   fidelityTrend: TrendDirection;
   prescriptionTrust: PrescriptionTrustLevel;
   confidence: ConfidenceLevel;
+  patterns: ReadinessContext["patterns"];
 }): DriverSignal[] {
   const drivers: DriverSignal[] = [];
-  const { adherence7d, sessionDensity7d, recentFidelityAvg, fidelityTrend, prescriptionTrust, confidence } = params;
+  const { adherence7d, sessionDensity7d, recentFidelityAvg, fidelityTrend, prescriptionTrust, confidence, patterns } = params;
 
   if (recentFidelityAvg != null) {
     if (recentFidelityAvg >= 85) {
@@ -133,7 +140,7 @@ function buildDrivers(params: {
         label: "Recent session fidelity has been strong",
         direction: "positive",
         strength: "high",
-        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so the system can trust the prescription signal more.`
+        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so the system can trust the prescription signal more.`,
       });
     } else if (recentFidelityAvg >= 70) {
       drivers.push({
@@ -141,7 +148,7 @@ function buildDrivers(params: {
         label: "Recent session fidelity has been serviceable",
         direction: "neutral",
         strength: "medium",
-        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so the signal is useful but not bulletproof.`
+        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so the signal is useful but not bulletproof.`,
       });
     } else {
       drivers.push({
@@ -149,9 +156,39 @@ function buildDrivers(params: {
         label: "Recent sessions have diverged from prescription",
         direction: "negative",
         strength: "high",
-        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so reality needs more respect than the plan right now.`
+        detail: `Average recent fidelity is ${Math.round(recentFidelityAvg)}%, so reality needs more respect than the plan right now.`,
       });
     }
+  }
+
+  if (patterns.executionDiscipline === "high") {
+    drivers.push({
+      key: "discipline-high",
+      label: "Execution discipline has been high",
+      direction: "positive",
+      strength: "medium",
+      detail: "Recent sessions are landing close to the written plan, which gives the engine a cleaner signal to work with.",
+    });
+  }
+
+  if (patterns.anchorReliability === "strong") {
+    drivers.push({
+      key: "anchor-strong",
+      label: "Primary lift reliability has been strong",
+      direction: "positive",
+      strength: "medium",
+      detail: "The anchor movement is usually landing as written, which supports normal progression confidence.",
+    });
+  }
+
+  if (patterns.volumeDrift === "high") {
+    drivers.push({
+      key: "volume-drift-high",
+      label: "Accessory volume keeps drifting",
+      direction: "negative",
+      strength: "medium",
+      detail: "The back half of sessions is often being trimmed, so the system should respect that instead of pretending it is not happening.",
+    });
   }
 
   if (fidelityTrend === "up") {
@@ -160,7 +197,7 @@ function buildDrivers(params: {
       label: "Fidelity trend is improving",
       direction: "positive",
       strength: "medium",
-      detail: "Recent sessions are landing closer to prescription than the earlier part of the window."
+      detail: "Recent sessions are landing closer to prescription than the earlier part of the window.",
     });
   } else if (fidelityTrend === "down") {
     drivers.push({
@@ -168,7 +205,7 @@ function buildDrivers(params: {
       label: "Fidelity trend is slipping",
       direction: "negative",
       strength: "medium",
-      detail: "Recent sessions are bending away from prescription more than earlier in the window."
+      detail: "Recent sessions are bending away from prescription more than earlier in the window.",
     });
   }
 
@@ -178,7 +215,7 @@ function buildDrivers(params: {
       label: "Adherence has been strong over the last week",
       direction: "positive",
       strength: "medium",
-      detail: `Seven-day adherence is ${Math.round(adherence7d * 100)}%.`
+      detail: `Seven-day adherence is ${Math.round(adherence7d * 100)}%.`,
     });
   } else if (adherence7d != null && adherence7d < 0.6) {
     drivers.push({
@@ -186,7 +223,7 @@ function buildDrivers(params: {
       label: "Adherence has been soft over the last week",
       direction: "negative",
       strength: "medium",
-      detail: `Seven-day adherence is ${Math.round(adherence7d * 100)}%.`
+      detail: `Seven-day adherence is ${Math.round(adherence7d * 100)}%.`,
     });
   }
 
@@ -196,7 +233,7 @@ function buildDrivers(params: {
       label: "Session density is elevated this week",
       direction: "neutral",
       strength: "medium",
-      detail: `${sessionDensity7d} completed sessions landed in the last 7 days.`
+      detail: `${sessionDensity7d} completed sessions landed in the last 7 days.`,
     });
   }
 
@@ -206,7 +243,7 @@ function buildDrivers(params: {
       label: "Prescription trust is high",
       direction: "positive",
       strength: "medium",
-      detail: "Recent execution says the current recommendation signal is landing well."
+      detail: "Recent execution says the current recommendation signal is landing well.",
     });
   } else if (prescriptionTrust === "low") {
     drivers.push({
@@ -214,7 +251,7 @@ function buildDrivers(params: {
       label: "Prescription trust is low",
       direction: "negative",
       strength: "high",
-      detail: "Recent execution says the system should stay conservative until reality tightens back up."
+      detail: "Recent execution says the system should stay conservative until reality tightens back up.",
     });
   }
 
@@ -224,11 +261,11 @@ function buildDrivers(params: {
       label: "Signal coverage is limited",
       direction: "neutral",
       strength: "low",
-      detail: "The dashboard is making the best call it can, but the data window is still thin."
+      detail: "The dashboard is making the best call it can, but the data window is still thin.",
     });
   }
 
-  return drivers.slice(0, 4);
+  return drivers.slice(0, 5);
 }
 
 function buildWatchFlags(params: {
@@ -237,9 +274,10 @@ function buildWatchFlags(params: {
   fidelityTrend: TrendDirection;
   prescriptionTrust: PrescriptionTrustLevel;
   confidence: ConfidenceLevel;
+  patterns: ReadinessContext["patterns"];
 }): WatchFlag[] {
   const flags: WatchFlag[] = [];
-  const { adherence7d, recentFidelityAvg, fidelityTrend, prescriptionTrust, confidence } = params;
+  const { adherence7d, recentFidelityAvg, fidelityTrend, prescriptionTrust, confidence, patterns } = params;
 
   if (confidence === "low") {
     flags.push({ key: "low-coverage", label: "Low recent data coverage", severity: "watch" });
@@ -253,11 +291,20 @@ function buildWatchFlags(params: {
   if (fidelityTrend === "down") {
     flags.push({ key: "fidelity-down", label: "Fidelity trend is declining", severity: "watch" });
   }
+  if (patterns.substitutionPattern === "frequent") {
+    flags.push({ key: "substitution-frequent", label: "Exercise substitutions are frequent", severity: "watch" });
+  }
+  if (patterns.anchorReliability === "weak") {
+    flags.push({ key: "anchor-weak", label: "Primary lift reliability needs attention", severity: "high" });
+  }
+  if (patterns.volumeDrift === "high") {
+    flags.push({ key: "volume-drift", label: "Accessory volume is drifting hard", severity: "watch" });
+  }
   if (adherence7d != null && adherence7d < 0.6) {
     flags.push({ key: "adherence-down", label: "Adherence needs attention", severity: "watch" });
   }
 
-  return flags.slice(0, 3);
+  return flags.slice(0, 4);
 }
 
 export function buildReadinessContext(input: ReadinessInput): ReadinessContext {
@@ -271,6 +318,7 @@ export function buildReadinessContext(input: ReadinessInput): ReadinessContext {
   const prescriptionTrust = derivePrescriptionTrust(recentFidelityAvg);
   const signalCoverage = computeSignalCoverage(input);
   const confidence = deriveConfidence(signalCoverage);
+  const patternsAnalysis = deriveSessionPatterns(input.preferenceHistory);
   const status = deriveStatus(adherence7d, sessionDensity7d, confidence, recentFidelityAvg);
   const drivers = buildDrivers({
     adherence7d,
@@ -279,6 +327,7 @@ export function buildReadinessContext(input: ReadinessInput): ReadinessContext {
     fidelityTrend,
     prescriptionTrust,
     confidence,
+    patterns: patternsAnalysis.profile,
   });
   const watchFlags = buildWatchFlags({
     adherence7d,
@@ -286,11 +335,13 @@ export function buildReadinessContext(input: ReadinessInput): ReadinessContext {
     fidelityTrend,
     prescriptionTrust,
     confidence,
+    patterns: patternsAnalysis.profile,
   });
 
-  const reasonShort = recentFidelityAvg == null
-    ? "Derived readiness from training density, bodyweight trend, and the signal we actually have right now."
-    : `Derived readiness from recent training signals plus ${Math.round(recentFidelityAvg)}% average session fidelity.`;
+  const reasonShort =
+    recentFidelityAvg == null
+      ? "Derived readiness from training density, bodyweight trend, and the signal we actually have right now."
+      : `Derived readiness from recent training signals plus ${Math.round(recentFidelityAvg)}% average session fidelity.`;
 
   return {
     status,
@@ -312,6 +363,9 @@ export function buildReadinessContext(input: ReadinessInput): ReadinessContext {
     },
     drivers,
     watchFlags,
+    patterns: patternsAnalysis.profile,
+    patternEvidence: patternsAnalysis.evidence,
   };
 }
+
 
