@@ -18,12 +18,10 @@ import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
+import type { ActiveBlockPlan } from "./lib/blockPlan";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
-import { buildReadinessContext } from "./lib/readiness";
-import { computeProgramState, type ProgramState } from "./lib/programState";
-import { buildActiveBlockPlan, type ActiveBlockPlan } from "./lib/blockPlan";
 
 function todayISO(): string {
   const d = new Date();
@@ -928,8 +926,6 @@ useEffect(() => {
 
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
-  const [programState, setProgramState] = useState<ProgramState | null>(null);
-  const [activeBlockPlan, setActiveBlockPlan] = useState<ActiveBlockPlan | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -2998,7 +2994,6 @@ async function refreshDashboard() {
       }
 
       let preferenceSignals = null;
-      let preferenceHistoryForState: PreferenceHistoryEntry[] = [];
       try {
         const prefRow = userId
           ? (await localdb.localSettings.get([userId, "recommendation_feedback_v2"]))
@@ -3006,18 +3001,24 @@ async function refreshDashboard() {
           : null;
         const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
         const prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
-        preferenceHistoryForState = prefHistory;
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
       } catch {
         preferenceSignals = null;
       }
 
-      const trainingDays28 = days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length;
+      let activeBlockPlan: ActiveBlockPlan | null = null;
+      try {
+        const blockRow = userId ? await localdb.localSettings.get([userId, "active_block_plan_v1"]) : null;
+        activeBlockPlan = blockRow?.value ? JSON.parse(blockRow.value) as ActiveBlockPlan : null;
+      } catch {
+        activeBlockPlan = null;
+      }
+
       const brain = computeBrainSnapshot({
         sleepAvg7,
         proteinAvg7,
-        trainingDays28,
+        trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
         weeklyCoach: {
           sessionsThis,
           sessionsPrev,
@@ -3036,107 +3037,12 @@ async function refreshDashboard() {
           return dominantFocusFromCounts(counts);
         })() : null,
         exerciseHistory: [...exerciseHistoryMap.values()],
-        preferenceSignals
-      });
-
-      const readiness = buildReadinessContext({
-        workouts: setSeries.map((p) => ({
-          date: p.xLabel,
-          completed: Number(p.y) > 0,
-        })),
-        bodyweight: wSeries
-          .filter((p) => Number.isFinite(Number(p.y)) && Number(p.y) > 0)
-          .map((p) => ({
-            date: p.xLabel,
-            weight: Number(p.y),
-          })),
-        scorecards: [],
-        preferenceHistory: preferenceHistoryForState.map((entry) => ({
-          timestamp: entry.timestamp,
-          fidelityScore: typeof entry.fidelityScore === "number" ? entry.fidelityScore : null,
-          sessionOutcome: entry.sessionOutcome,
-          loadDeltaAvg: typeof entry.loadDeltaAvg === "number" ? entry.loadDeltaAvg : null,
-          volumeDelta: typeof entry.volumeDelta === "number" ? entry.volumeDelta : null,
-          substitutionCount: Array.isArray(entry.substitutionKeys) ? entry.substitutionKeys.length : 0,
-          primaryOutcome: entry.primaryOutcome,
-        })),
-      });
-
-      const nextProgramState = computeProgramState({
-        readiness,
-        brainSnapshot: brain,
-        recentFocusCounts,
-        trainingDays28,
-        weeklyCoach: {
-          sessionsThis,
-          sessionsPrev,
-          tonnageThis: tonThis,
-          tonnagePrev: tonPrev,
-          setsThis,
-          setsPrev,
-        },
-      });
-
-      let previousBlockPlan: ActiveBlockPlan | null = null;
-      if (userId) {
-        try {
-          const prior = await localdb.localSettings.get([userId, "active_block_plan_v1"]);
-          previousBlockPlan = prior?.value ? JSON.parse(prior.value) as ActiveBlockPlan : null;
-        } catch {
-          previousBlockPlan = null;
-        }
-      }
-
-      const focusEntries: Array<[keyof FocusCounts, number]> = [
-        ["Push", recentFocusCounts.Push],
-        ["Pull", recentFocusCounts.Pull],
-        ["Lower", recentFocusCounts.Lower],
-      ];
-      const totalFocusHits = focusEntries.reduce((sum, [, count]) => sum + count, 0);
-      const minFocusHits = Math.min(...focusEntries.map(([, count]) => count));
-      const maxFocusHits = Math.max(...focusEntries.map(([, count]) => count));
-      const movementDebtSeverity = totalFocusHits > 0 ? (maxFocusHits - minFocusHits) / totalFocusHits : 0;
-      const movementDebtPatterns = focusEntries
-        .slice()
-        .sort((a, b) => a[1] - b[1])
-        .filter(([, count]) => count === minFocusHits && totalFocusHits > 0)
-        .map(([focus]) => focus.toLowerCase());
-      const noveltyAnchorCount = [...exerciseHistoryMap.values()].filter((item) => item.lastPerformedDaysAgo <= 21).length;
-      const noveltyRate = recentFocusWindow.length > 0
-        ? Math.max(0, Math.min(1, [...exerciseHistoryMap.values()].length / Math.max(1, recentFocusWindow.length * 4)))
-        : 0;
-
-      const nextBlockPlan = buildActiveBlockPlan({
-        asOf: todayISO(),
-        programState: nextProgramState,
-        previousBlockPlan,
-        readiness: {
-          score: brain.readiness.score,
-          trend: readiness.metrics.scorecardTrend === "unknown" ? "flat" : readiness.metrics.scorecardTrend,
-        },
-        behavior: {
-          fidelity: readiness.metrics.recentFidelityAvg,
-          substitutionRate: readiness.patternEvidence.substitutionRate,
-          anchorReliability: readiness.patternEvidence.anchorMatchRate,
-        },
-        progress: {
-          momentum: readiness.metrics.scorecardTrend === "unknown" ? "flat" : readiness.metrics.scorecardTrend,
-          scorecardTrend: brain.momentum.score,
-        },
-        movementDebt: {
-          topPatterns: movementDebtPatterns,
-          severity: movementDebtSeverity,
-        },
-        exposure: {
-          anchorLiftCount: noveltyAnchorCount,
-          noveltyRate,
-        },
+        preferenceSignals,
+        activeBlockPlan
       });
 
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
-      setProgramState(nextProgramState);
-      setActiveBlockPlan(nextBlockPlan);
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -3144,20 +3050,6 @@ async function refreshDashboard() {
           user_id: userId,
           key: "latest_recommendation_v1",
           value: JSON.stringify(fingerprint),
-          updatedAt: Date.now()
-        });
-      }
-      if (userId) {
-        await localdb.localSettings.put({
-          user_id: userId,
-          key: "program_state_v1",
-          value: JSON.stringify(nextProgramState),
-          updatedAt: Date.now()
-        });
-        await localdb.localSettings.put({
-          user_id: userId,
-          key: "active_block_plan_v1",
-          value: JSON.stringify(nextBlockPlan),
           updatedAt: Date.now()
         });
       }
@@ -3665,8 +3557,6 @@ async function syncNow() {
           preferenceHistory={preferenceHistory}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
-          programState={programState}
-          activeBlockPlan={activeBlockPlan}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
@@ -3773,6 +3663,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
