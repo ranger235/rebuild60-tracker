@@ -59,9 +59,9 @@ export default function CoachInsightsPanel({ insights, defaultOpen = false }: Pr
         }}
       >
         <div>
-          <div style={{ fontWeight: 800 }}>Coach Insights</div>
+          <div style={{ fontWeight: 800 }}>Coach Readout</div>
           <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
-            Session interpretation layered on top of the workout build
+            Deterministic workout underneath, practical coaching layer on top
           </div>
         </div>
         <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
@@ -80,3 +80,4 @@ export default function CoachInsightsPanel({ insights, defaultOpen = false }: Pr
     </div>
   );
 }
+
