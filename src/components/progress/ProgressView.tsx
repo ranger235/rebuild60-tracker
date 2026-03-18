@@ -557,6 +557,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scoreBusy, setScoreBusy] = useState(false);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
+  const [lastScoreSignals, setLastScoreSignals] = useState<any | null>(null);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
 
   const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
@@ -585,6 +586,21 @@ function monthStartEnd(ymd: string) {
   const end = new Date(Date.UTC(y, m, 0)); // last day
   const toYMD = (d: Date) => d.toISOString().slice(0, 10);
   return { startYMD: toYMD(start), endYMD: toYMD(end) };
+}
+
+
+function safeMonthKeyFromIso(isoLike?: string | null): string | undefined {
+  const raw = String(isoLike ?? "").trim();
+  if (!raw) return undefined;
+  const m = raw.match(/^(\d{4}-\d{2})/);
+  return m ? m[1] : undefined;
+}
+
+function normalizeMonthScopedHistory<T extends { monthKey?: string; ts?: string; text?: string; pose?: string; scope?: string }>(rows: T[]): T[] {
+  return rows.map((row) => {
+    const monthKey = row.monthKey ?? safeMonthKeyFromIso(row.ts);
+    return monthKey ? { ...row, monthKey } : row;
+  });
 }
 
 useEffect(() => {
@@ -662,7 +678,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setScoreHistory(parsed);
+      if (Array.isArray(parsed)) setScoreHistory(normalizeMonthScopedHistory(parsed));
     }
   } catch {
     // ignore
@@ -674,11 +690,37 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_scorecards_${userId}`;
-    localStorage.setItem(key, JSON.stringify(scoreHistory.slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(scoreHistory).slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, scoreHistory]);
+
+// Load/save AI history (local only)
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_progress_ai_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setAiInsightHistory(normalizeMonthScopedHistory(parsed));
+    }
+  } catch {
+    // ignore
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  try {
+    const key = `rebuild60_progress_ai_${userId}`;
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(aiInsightHistory).slice(0, 24)));
+  } catch {
+    // ignore
+  }
+}, [userId, aiInsightHistory]);
 
 // Load/save Vision history (local only)
 useEffect(() => {
@@ -688,7 +730,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setVisionHistory(parsed);
+      if (Array.isArray(parsed)) setVisionHistory(normalizeMonthScopedHistory(parsed));
     }
   } catch {
     // ignore
@@ -700,7 +742,7 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_vision_${userId}`;
-    localStorage.setItem(key, JSON.stringify(visionHistory.slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(visionHistory).slice(0, 24)));
   } catch {
     // ignore
   }
@@ -878,7 +920,20 @@ async function buildInsightPayload() {
             notes: scorecard.notes ?? null,
           }
         : null,
+      previous_scorecard: previousScorecard
+        ? {
+            conditioning: previousScorecard.conditioning,
+            muscularity: previousScorecard.muscularity,
+            symmetry: previousScorecard.symmetry,
+            waist_control: previousScorecard.waist_control,
+            consistency: previousScorecard.consistency,
+            momentum: previousScorecard.momentum,
+            notes: previousScorecard.notes ?? null,
+          }
+        : null,
+      scorecard_delta_summary: scorecardDeltaSummary ?? null,
       signals: monthStats.signals ?? null,
+      scorecard_basis_signals: lastScoreSignals ?? monthStats.signals ?? null,
       vision_context: visionText?.trim()
         ? {
             pose: visionPose,
@@ -944,6 +999,7 @@ async function generatePhysiqueScorecard() {
 
     const sc = data?.scorecard as any;
     if (!sc) throw new Error("No scorecard returned");
+    setLastScoreSignals(data?.signals_used ?? monthStats.signals ?? null);
 
     const next: Scorecard = {
       monthKey: monthStats.monthKey,
@@ -1853,6 +1909,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
