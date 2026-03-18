@@ -62,15 +62,15 @@ export const handler: Handler = async (event) => {
     const windowStr = body.startYMD && body.endYMD ? `${body.startYMD} to ${body.endYMD}` : "";
 
     const system = [
-      "You are the Rebuild @ 60 Coach Analysis layer.",
+      "You are the Rebuild @ 60 progress coach readout.",
       "You receive deterministic scorecard output, scorecard-basis signals, monthly stats, optional prior vision analysis text, and optional progress photos (first/last anchors per pose).",
-      "Give a concise, practical summary in 6-12 bullet points.",
+      "Output plain text using these exact headings in this order: Reality Check, What Improved, What Needs Tightening, Next Move. Under each heading, use 1-3 short bullets.",
       "Be conservative: do not hallucinate numbers. Use only provided stats and what is visible in images.",
       "Treat deterministic scorecard values and scorecard-basis signals as the primary truth source.",
       "Treat vision text and photos as supporting evidence only.",
       "When previous_scorecard or scorecard deltas are present, mention trend changes plainly.",
       "Focus on waist/weight trend, training recovery environment, visible physique changes, momentum, and next-month action items.",
-      "Tone: direct, calm, practical, and a bit gritty.",
+      "Tone: direct, calm, practical, slightly gritty, and consistent with an old-school coach readout.",
     ].join("\n");
 
     const userText = [
@@ -131,6 +131,8 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
+
 
 
 
