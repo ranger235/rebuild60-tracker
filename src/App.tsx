@@ -21,6 +21,8 @@ import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCo
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
+import { buildReadinessContext } from "./lib/readiness";
+import { computeProgramState, type ProgramState } from "./lib/programState";
 
 function todayISO(): string {
   const d = new Date();
@@ -925,6 +927,7 @@ useEffect(() => {
 
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
+  const [programState, setProgramState] = useState<ProgramState | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -2993,6 +2996,7 @@ async function refreshDashboard() {
       }
 
       let preferenceSignals = null;
+      let preferenceHistoryForState: PreferenceHistoryEntry[] = [];
       try {
         const prefRow = userId
           ? (await localdb.localSettings.get([userId, "recommendation_feedback_v2"]))
@@ -3000,16 +3004,18 @@ async function refreshDashboard() {
           : null;
         const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
         const prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
+        preferenceHistoryForState = prefHistory;
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
       } catch {
         preferenceSignals = null;
       }
 
+      const trainingDays28 = days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length;
       const brain = computeBrainSnapshot({
         sleepAvg7,
         proteinAvg7,
-        trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
+        trainingDays28,
         weeklyCoach: {
           sessionsThis,
           sessionsPrev,
@@ -3031,8 +3037,47 @@ async function refreshDashboard() {
         preferenceSignals
       });
 
+      const readiness = buildReadinessContext({
+        workouts: setSeries.map((p) => ({
+          date: p.xLabel,
+          completed: Number(p.y) > 0,
+        })),
+        bodyweight: wSeries
+          .filter((p) => Number.isFinite(Number(p.y)) && Number(p.y) > 0)
+          .map((p) => ({
+            date: p.xLabel,
+            weight: Number(p.y),
+          })),
+        scorecards: [],
+        preferenceHistory: preferenceHistoryForState.map((entry) => ({
+          timestamp: entry.timestamp,
+          fidelityScore: typeof entry.fidelityScore === "number" ? entry.fidelityScore : null,
+          sessionOutcome: entry.sessionOutcome,
+          loadDeltaAvg: typeof entry.loadDeltaAvg === "number" ? entry.loadDeltaAvg : null,
+          volumeDelta: typeof entry.volumeDelta === "number" ? entry.volumeDelta : null,
+          substitutionCount: Array.isArray(entry.substitutionKeys) ? entry.substitutionKeys.length : 0,
+          primaryOutcome: entry.primaryOutcome,
+        })),
+      });
+
+      const nextProgramState = computeProgramState({
+        readiness,
+        brainSnapshot: brain,
+        recentFocusCounts,
+        trainingDays28,
+        weeklyCoach: {
+          sessionsThis,
+          sessionsPrev,
+          tonnageThis: tonThis,
+          tonnagePrev: tonPrev,
+          setsThis,
+          setsPrev,
+        },
+      });
+
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
+      setProgramState(nextProgramState);
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -3040,6 +3085,14 @@ async function refreshDashboard() {
           user_id: userId,
           key: "latest_recommendation_v1",
           value: JSON.stringify(fingerprint),
+          updatedAt: Date.now()
+        });
+      }
+      if (userId) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "program_state_v1",
+          value: JSON.stringify(nextProgramState),
           updatedAt: Date.now()
         });
       }
@@ -3547,6 +3600,7 @@ async function syncNow() {
           preferenceHistory={preferenceHistory}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
+          programState={programState}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
@@ -3653,6 +3707,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
