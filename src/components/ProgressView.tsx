@@ -582,6 +582,10 @@ const [aiBusy, setAiBusy] = useState(false);
     { id: string; ts: string; monthKey?: string; pose: Pose; scope: string; text: string }[]
   >([]);
 
+  const stableScoreHistory = useMemo(() => dedupeScorecards(normalizeMonthScopedHistory(scoreHistory)), [scoreHistory]);
+  const stableAiInsightHistory = useMemo(() => dedupeAiArtifacts(normalizeMonthScopedHistory(aiInsightHistory)), [aiInsightHistory]);
+  const stableVisionHistory = useMemo(() => dedupeVisionArtifacts(normalizeMonthScopedHistory(visionHistory)), [visionHistory]);
+
 function monthStartEnd(ymd: string) {
   const [y, m] = ymd.split("-").map(Number);
   const start = new Date(Date.UTC(y, m - 1, 1));
@@ -607,6 +611,145 @@ function normalizeMonthScopedHistory<T extends { monthKey?: string; ts?: string;
 
 function matchesVisionArtifact(row: { monthKey?: string; pose?: string; scope?: string }, activeMonth: string, pose: Pose, scope: "last2" | "month") {
   return row.monthKey === activeMonth && row.pose === pose && row.scope === scope;
+}
+
+type ProgressArtifactEnvelope = {
+  id: string;
+  artifactType: "scorecard" | "ai" | "vision";
+  monthKey: string;
+  ts: string;
+  pose?: string;
+  scope?: string;
+  payload: any;
+};
+
+function makeArtifactEnvelopeKey(row: ProgressArtifactEnvelope) {
+  if (row.artifactType === "vision") return [row.artifactType, row.monthKey, row.pose ?? "", row.scope ?? "", row.ts].join("|");
+  return [row.artifactType, row.monthKey, row.ts].join("|");
+}
+
+function dedupeArtifactEnvelopes(rows: ProgressArtifactEnvelope[]) {
+  const seen = new Set<string>();
+  const out: ProgressArtifactEnvelope[] = [];
+  for (const row of [...rows].sort((a, b) => b.ts.localeCompare(a.ts))) {
+    const key = makeArtifactEnvelopeKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function scorecardArtifactKey(row: { monthKey?: string; ts?: string; conditioning?: number; muscularity?: number; symmetry?: number; waist_control?: number; consistency?: number; momentum?: string; notes?: string }) {
+  return [
+    row.monthKey ?? "",
+    row.ts ?? "",
+    row.conditioning ?? "",
+    row.muscularity ?? "",
+    row.symmetry ?? "",
+    row.waist_control ?? "",
+    row.consistency ?? "",
+    row.momentum ?? "",
+    row.notes ?? "",
+  ].join("|");
+}
+
+function aiArtifactKey(row: { monthKey?: string; ts?: string; text?: string }) {
+  return [row.monthKey ?? "", row.ts ?? "", (row.text ?? "").trim()].join("|");
+}
+
+function visionArtifactKey(row: { monthKey?: string; ts?: string; pose?: string; scope?: string; text?: string }) {
+  return [row.monthKey ?? "", row.pose ?? "", row.scope ?? "", row.ts ?? "", (row.text ?? "").trim()].join("|");
+}
+
+function dedupeScorecards(rows: any[]) {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const row of [...rows].sort((a, b) => String(b.ts ?? "").localeCompare(String(a.ts ?? "")))) {
+    const key = scorecardArtifactKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function dedupeAiArtifacts(rows: any[]) {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const row of [...rows].sort((a, b) => String(b.ts ?? "").localeCompare(String(a.ts ?? "")))) {
+    const key = aiArtifactKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function dedupeVisionArtifacts(rows: any[]) {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const row of [...rows].sort((a, b) => String(b.ts ?? "").localeCompare(String(a.ts ?? "")))) {
+    const key = visionArtifactKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function decodeArtifactStore(envelopes: ProgressArtifactEnvelope[]) {
+  const scorecards = dedupeScorecards(
+    envelopes
+      .filter((row) => row.artifactType === "scorecard")
+      .map((row) => ({ ...row.payload, monthKey: row.monthKey ?? row.payload?.monthKey, ts: row.ts ?? row.payload?.ts }))
+  );
+  const aiRuns = dedupeAiArtifacts(
+    envelopes
+      .filter((row) => row.artifactType === "ai")
+      .map((row) => ({ ...row.payload, monthKey: row.monthKey ?? row.payload?.monthKey, ts: row.ts ?? row.payload?.ts }))
+  );
+  const visionRuns = dedupeVisionArtifacts(
+    envelopes
+      .filter((row) => row.artifactType === "vision")
+      .map((row) => ({
+        ...row.payload,
+        monthKey: row.monthKey ?? row.payload?.monthKey,
+        ts: row.ts ?? row.payload?.ts,
+        pose: row.pose ?? row.payload?.pose,
+        scope: row.scope ?? row.payload?.scope,
+      }))
+  );
+  return { scorecards, aiRuns, visionRuns };
+}
+
+function encodeArtifactStore(args: { scorecards: any[]; aiRuns: any[]; visionRuns: any[] }) {
+  const envelopes: ProgressArtifactEnvelope[] = [
+    ...args.scorecards.map((row) => ({
+      id: `scorecard:${scorecardArtifactKey(row)}`,
+      artifactType: "scorecard" as const,
+      monthKey: row.monthKey ?? safeMonthKeyFromIso(row.ts) ?? "unknown-month",
+      ts: row.ts ?? new Date().toISOString(),
+      payload: row,
+    })),
+    ...args.aiRuns.map((row) => ({
+      id: `ai:${aiArtifactKey(row)}`,
+      artifactType: "ai" as const,
+      monthKey: row.monthKey ?? safeMonthKeyFromIso(row.ts) ?? "unknown-month",
+      ts: row.ts ?? new Date().toISOString(),
+      payload: row,
+    })),
+    ...args.visionRuns.map((row) => ({
+      id: `vision:${visionArtifactKey(row)}`,
+      artifactType: "vision" as const,
+      monthKey: row.monthKey ?? safeMonthKeyFromIso(row.ts) ?? "unknown-month",
+      ts: row.ts ?? new Date().toISOString(),
+      pose: row.pose,
+      scope: row.scope,
+      payload: row,
+    })),
+  ];
+  return dedupeArtifactEnvelopes(envelopes).slice(0, 72);
 }
 
 useEffect(() => {
@@ -676,16 +819,34 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId, dayDate]);
 
-// Load/save scorecard history (local only)
+// Load persisted progress artifacts (month-scoped + backward compatible)
 useEffect(() => {
   if (!userId) return;
   try {
-    const key = `rebuild60_scorecards_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setScoreHistory(normalizeMonthScopedHistory(parsed));
+    const unifiedKey = `rebuild60_progress_artifacts_${userId}`;
+    const rawUnified = localStorage.getItem(unifiedKey);
+    if (rawUnified) {
+      const parsed = JSON.parse(rawUnified);
+      if (Array.isArray(parsed)) {
+        const decoded = decodeArtifactStore(parsed as ProgressArtifactEnvelope[]);
+        setScoreHistory(decoded.scorecards);
+        setAiInsightHistory(decoded.aiRuns);
+        setVisionHistory(decoded.visionRuns);
+        return;
+      }
     }
+
+    const rawScores = localStorage.getItem(`rebuild60_scorecards_${userId}`);
+    const rawAi = localStorage.getItem(`rebuild60_progress_ai_${userId}`);
+    const rawVision = localStorage.getItem(`rebuild60_vision_${userId}`);
+
+    const legacyScores = rawScores ? JSON.parse(rawScores) : [];
+    const legacyAi = rawAi ? JSON.parse(rawAi) : [];
+    const legacyVision = rawVision ? JSON.parse(rawVision) : [];
+
+    if (Array.isArray(legacyScores)) setScoreHistory(dedupeScorecards(normalizeMonthScopedHistory(legacyScores)));
+    if (Array.isArray(legacyAi)) setAiInsightHistory(dedupeAiArtifacts(normalizeMonthScopedHistory(legacyAi)));
+    if (Array.isArray(legacyVision)) setVisionHistory(dedupeVisionArtifacts(normalizeMonthScopedHistory(legacyVision)));
   } catch {
     // ignore
   }
@@ -695,86 +856,39 @@ useEffect(() => {
 useEffect(() => {
   if (!userId) return;
   try {
-    const key = `rebuild60_scorecards_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(scoreHistory).slice(0, 24)));
+    const scorecards = stableScoreHistory.slice(0, 24);
+    const aiRuns = stableAiInsightHistory.slice(0, 24);
+    const visionRuns = stableVisionHistory.slice(0, 24);
+    localStorage.setItem(`rebuild60_progress_artifacts_${userId}`, JSON.stringify(encodeArtifactStore({ scorecards, aiRuns, visionRuns })));
+    localStorage.setItem(`rebuild60_scorecards_${userId}`, JSON.stringify(scorecards));
+    localStorage.setItem(`rebuild60_progress_ai_${userId}`, JSON.stringify(aiRuns));
+    localStorage.setItem(`rebuild60_vision_${userId}`, JSON.stringify(visionRuns));
   } catch {
     // ignore
   }
-}, [userId, scoreHistory]);
-
-// Load/save AI history (local only)
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setAiInsightHistory(normalizeMonthScopedHistory(parsed));
-    }
-  } catch {
-    // ignore
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(aiInsightHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, aiInsightHistory]);
-
-// Load/save Vision history (local only)
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_vision_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setVisionHistory(normalizeMonthScopedHistory(parsed));
-    }
-  } catch {
-    // ignore
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_vision_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(visionHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, visionHistory]);
+}, [userId, stableScoreHistory, stableAiInsightHistory, stableVisionHistory]);
 useEffect(() => {
   const activeMonth = monthKey(dayDate);
-  const latestScore = scoreHistory
+  const latestScore = stableScoreHistory
     .filter((row) => row.monthKey === activeMonth)
     .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
   setScorecard(latestScore);
   setLastScoreSignals(latestScore?.signals_used ?? null);
 
-  const latestAi = aiInsightHistory
+  const latestAi = stableAiInsightHistory
     .filter((row) => row.monthKey === activeMonth)
     .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
   setAiInsight(latestAi?.text ?? "");
 
-  const latestVision = visionHistory
+  const latestVision = stableVisionHistory
     .filter((row) => matchesVisionArtifact(row, activeMonth, visionPose, visionScope))
     .sort((a, b) => b.ts.localeCompare(a.ts))[0]
-    ?? visionHistory
+    ?? stableVisionHistory
       .filter((row) => row.monthKey === activeMonth)
       .sort((a, b) => b.ts.localeCompare(a.ts))[0]
     ?? null;
   setVisionText(latestVision?.text ?? "");
-}, [dayDate, scoreHistory, aiInsightHistory, visionHistory, visionPose, visionScope]);
+}, [dayDate, stableScoreHistory, stableAiInsightHistory, stableVisionHistory, visionPose, visionScope]);
 
 
 const monthStats = useMemo(() => {
@@ -839,34 +953,34 @@ const monthStats = useMemo(() => {
 
 const visibleScoreHistory = useMemo(() => {
   const activeMonth = monthKey(dayDate);
-  return scoreHistory
+  return stableScoreHistory
     .filter((row) => row.monthKey === activeMonth)
     .sort((a, b) => b.ts.localeCompare(a.ts));
-}, [dayDate, scoreHistory]);
+}, [dayDate, stableScoreHistory]);
 
 const visibleAiHistory = useMemo(() => {
   const activeMonth = monthKey(dayDate);
-  return aiInsightHistory
+  return stableAiInsightHistory
     .filter((row) => row.monthKey === activeMonth)
     .sort((a, b) => b.ts.localeCompare(a.ts));
-}, [dayDate, aiInsightHistory]);
+}, [dayDate, stableAiInsightHistory]);
 
 const visibleVisionHistory = useMemo(() => {
   const activeMonth = monthKey(dayDate);
-  return visionHistory
+  return stableVisionHistory
     .filter((row) => matchesVisionArtifact(row, activeMonth, visionPose, visionScope))
     .sort((a, b) => b.ts.localeCompare(a.ts));
-}, [dayDate, visionHistory, visionPose, visionScope]);
+}, [dayDate, stableVisionHistory, visionPose, visionScope]);
 
 const previousScorecard = useMemo<Scorecard | null>(() => {
-  if (!scorecard || scoreHistory.length === 0) return null;
-  const byNewest = [...scoreHistory].sort((a, b) => b.ts.localeCompare(a.ts));
+  if (!scorecard || stableScoreHistory.length === 0) return null;
+  const byNewest = [...stableScoreHistory].sort((a, b) => b.ts.localeCompare(a.ts));
   const idx = byNewest.findIndex((s) => s.ts === scorecard.ts);
   if (idx >= 0) return byNewest[idx + 1] ?? null;
 
   const older = byNewest.find((s) => s.ts < scorecard.ts);
   return older ?? byNewest[0] ?? null;
-}, [scorecard, scoreHistory]);
+}, [scorecard, stableScoreHistory]);
 
 const scorecardDeltaSummary = useMemo(() => {
   if (!scorecard || !previousScorecard) return null;
@@ -1976,6 +2090,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
