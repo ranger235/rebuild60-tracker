@@ -682,11 +682,11 @@ export default function DashboardView(props: Props) {
             </div>
           </div>
 
-          <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.35 }}><b>Coach says:</b> {weeklyCoach.coachLine}</div>
+          <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.35 }}><b>Coach readout:</b> {weeklyCoach.coachLine}</div>
 
           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.15)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 800 }}>AI Coach Add-on</div>
+              <div style={{ fontWeight: 800 }}>AI Coach Readout</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(false)}>{aiCoachBusy ? "Thinking…" : "Refresh AI Coach"}</button>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(true)} style={{ opacity: 0.85 }}>Force Refresh</button>
@@ -699,7 +699,7 @@ export default function DashboardView(props: Props) {
                 {aiCoach.text}
               </div>
             ) : (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>No AI coach cached for this week yet.</div>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>No AI coach readout cached for this week yet.</div>
             )}
           </div>
         </div>
@@ -793,6 +793,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
