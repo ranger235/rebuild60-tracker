@@ -16,8 +16,11 @@ type Scorecard = {
   consistency: number;
   momentum: "up" | "down" | "flat";
   notes?: string;
+  signals_used?: Record<string, unknown> | null;
 };
 type ScoreDelta = { key: ScorecardMetricKey; label: string; delta: number };
+type AiHistoryEntry = { id: string; ts: string; monthKey?: string; text: string };
+type VisionHistoryEntry = { id: string; ts: string; monthKey?: string; pose: Pose; scope: string; text: string };
 
 type Props = {
   scorecardOpen: boolean;
@@ -36,10 +39,10 @@ type Props = {
   scoreHistory: Scorecard[];
   aiShowHistory: boolean;
   setAiShowHistory: Dispatch<SetStateAction<boolean>>;
-  aiInsightHistory: { id: string; ts: string; text: string }[];
+  aiInsightHistory: AiHistoryEntry[];
   visionShowHistory: boolean;
   setVisionShowHistory: Dispatch<SetStateAction<boolean>>;
-  visionHistory: { id: string; ts: string; pose: Pose; scope: string; text: string }[];
+  visionHistory: VisionHistoryEntry[];
   scorecard: Scorecard | null;
   setScorecard: Dispatch<SetStateAction<Scorecard | null>>;
   aiInsight: string;
@@ -145,6 +148,51 @@ export default function ProgressScorecard(props: Props) {
     setShowSignalDebug,
   } = props;
 
+  const monthAiHistory = aiInsightHistory.filter((row) => (row.monthKey ?? row.ts?.slice(0, 7)) === monthStats.monthKey);
+  const monthVisionHistory = visionHistory.filter((row) => (row.monthKey ?? row.ts?.slice(0, 7)) === monthStats.monthKey);
+  const activeVisionArtifact =
+    monthVisionHistory.find((row) => row.pose === visionPose && row.scope === visionScope) ??
+    monthVisionHistory[0] ??
+    null;
+
+  function exportTruthTrail() {
+    const truthTrail = {
+      exported_at: new Date().toISOString(),
+      artifact_type: "progress_truth_trail",
+      month_key: monthStats.monthKey,
+      window: {
+        startYMD: monthStats.startYMD,
+        endYMD: monthStats.endYMD,
+      },
+      scorecard,
+      signals_used: lastScoreSignals ?? scorecard?.signals_used ?? monthStats?.signals ?? null,
+      scorecard_delta_summary: scorecardDeltaSummary,
+      previous_scorecard: previousScorecard,
+      ai_analysis: {
+        current: aiInsight || null,
+        month_history: monthAiHistory,
+      },
+      vision_analysis: {
+        current_text: visionText || null,
+        selected_pose: visionPose,
+        selected_scope: visionScope,
+        selected_focus: visionFocus,
+        active_artifact: activeVisionArtifact,
+        month_history: monthVisionHistory,
+      },
+      month_stats: monthStats,
+      monthly_highlights: monthlyHighlights,
+    };
+
+    const blob = new Blob([JSON.stringify(truthTrail, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rebuild60-progress-truth-trail-${monthStats.monthKey}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <ProgressSection
       title="Monthly Scorecard"
@@ -163,17 +211,7 @@ export default function ProgressScorecard(props: Props) {
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                const blob = new Blob([JSON.stringify({ monthStats, monthlyHighlights }, null, 2)], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `rebuild60-monthly-report-${monthStats.monthKey}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-            >
+            <button onClick={exportTruthTrail}>
               Export JSON
             </button>
           </div>
@@ -473,5 +511,7 @@ export default function ProgressScorecard(props: Props) {
     </ProgressSection>
   );
 }
+
+
 
 
