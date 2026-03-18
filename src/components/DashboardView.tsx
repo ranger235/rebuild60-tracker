@@ -1,6 +1,7 @@
 import { useMemo, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
 import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
+import { formatProgramBias, formatProgramPhase, type ProgramState } from "../lib/programState";
 import { buildReadinessContext } from "../lib/readiness";
 import { formatPatternValue, formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
 import type { ReadinessInput } from "../lib/readinessTypes";
@@ -96,6 +97,7 @@ type Props = {
   }>;
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
+  programState: ProgramState | null;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
 
@@ -181,6 +183,14 @@ function fmtPct(value: number | null) {
   return `${Math.round(value * 100)}%`;
 }
 
+function phaseTone(phase: ProgramState["phase"]) {
+  if (phase === "push") return { bg: "#ebf8ee", border: "#b8dfc0" };
+  if (phase === "build") return { bg: "#eef7ff", border: "#c9dcf5" };
+  if (phase === "consolidate") return { bg: "#fff8ea", border: "#ebd39e" };
+  if (phase === "deload") return { bg: "#fff3e8", border: "#efc9a8" };
+  return { bg: "#f3efff", border: "#cdbef5" };
+}
+
 function fmtTrend(value: string) {
   if (value === "up") return "Up";
   if (value === "down") return "Down";
@@ -245,6 +255,7 @@ export default function DashboardView(props: Props) {
     milestones,
     timelineWeeks,
     brainSnapshot,
+    programState,
     startSessionFromRecommendation,
     preferenceHistory,
     timerOn,
@@ -372,6 +383,87 @@ export default function DashboardView(props: Props) {
           Readiness now includes how faithfully recent sessions matched prescription, so Dashboard and Workout stop telling different stories like a couple of drunks at last call.
         </div>
       </div>
+
+      {programState && (
+        <div style={{ ...cardStyle, marginTop: 14, background: phaseTone(programState.phase).bg, border: `1px solid ${phaseTone(programState.phase).border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Program State Engine — Phase 5A</div>
+              <div style={{ fontSize: 28, fontWeight: 800, marginTop: 2 }}>{formatProgramPhase(programState.phase)}</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                Deterministic training state for the current 28-day review window.
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>State Confidence</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{programState.confidence}</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>State Score: {programState.stateScore}</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginTop: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Volume Bias</div>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.volume)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Intensity Bias</div>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.intensity)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Exercise Novelty</div>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.exerciseNovelty)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Review Window</div>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{programState.reviewWindow.recentDays} days</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginTop: 12 }}>
+            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Why the system picked this state</div>
+              {programState.reasons.map((reason, idx) => (
+                <div key={`${programState.phase}-reason-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
+                  {reason}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Primary Focus</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {programState.primaryFocus.map((item) => (
+                  <div
+                    key={item}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,0.9)",
+                      border: "1px solid rgba(0,0,0,0.1)"
+                    }}
+                  >
+                    {item}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 14, marginBottom: 6 }}>Constraints</div>
+              {programState.constraints.map((constraint, idx) => (
+                <div key={`${programState.phase}-constraint-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
+                  {constraint}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
+            This is the bridge into Phase 5: the engine now knows whether it should build, push, consolidate, deload, or pivot before it starts getting cute with session shaping.
+          </div>
+        </div>
+      )}
 
       <div style={{ ...cardStyle, marginTop: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
@@ -682,11 +774,11 @@ export default function DashboardView(props: Props) {
             </div>
           </div>
 
-          <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.35 }}><b>Coach readout:</b> {weeklyCoach.coachLine}</div>
+          <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.35 }}><b>Coach says:</b> {weeklyCoach.coachLine}</div>
 
           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.15)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 800 }}>AI Coach Readout</div>
+              <div style={{ fontWeight: 800 }}>AI Coach Add-on</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(false)}>{aiCoachBusy ? "Thinking…" : "Refresh AI Coach"}</button>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(true)} style={{ opacity: 0.85 }}>Force Refresh</button>
@@ -699,7 +791,7 @@ export default function DashboardView(props: Props) {
                 {aiCoach.text}
               </div>
             ) : (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>No AI coach readout cached for this week yet.</div>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>No AI coach cached for this week yet.</div>
             )}
           </div>
         </div>
@@ -793,6 +885,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
