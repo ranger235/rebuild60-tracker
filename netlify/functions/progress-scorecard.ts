@@ -205,9 +205,9 @@ export const handler: Handler = async (event) => {
     }
 
     const body: ReqBody = event.body ? JSON.parse(event.body) : {};
-    const signals = (body.stats?.signals ?? null) as ProgressSignals | null;
+    const signals = ((body.stats?.scorecard_basis_signals ?? body.stats?.signals) ?? null) as ProgressSignals | null;
     if (!signals) {
-      return { statusCode: 400, body: JSON.stringify({ message: "Missing deterministic progress signals" }) };
+      return { statusCode: 400, body: JSON.stringify({ message: "Missing deterministic progress signals for this month" }) };
     }
 
     const conditioning = scoreConditioning(signals);
@@ -232,4 +232,5 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
 
