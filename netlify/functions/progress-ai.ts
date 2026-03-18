@@ -4,7 +4,15 @@ type ReqBody = {
   month?: string;
   startYMD?: string;
   endYMD?: string;
-  stats?: any;
+  stats?: {
+    scorecard?: Record<string, unknown> | null;
+    previous_scorecard?: Record<string, unknown> | null;
+    scorecard_delta_summary?: Record<string, unknown> | null;
+    signals?: Record<string, unknown> | null;
+    scorecard_basis_signals?: Record<string, unknown> | null;
+    vision_context?: Record<string, unknown> | null;
+    [key: string]: unknown;
+  } | null;
   images?: { label: string; url: string }[];
 };
 
@@ -55,11 +63,12 @@ export const handler: Handler = async (event) => {
 
     const system = [
       "You are the Rebuild @ 60 Coach Analysis layer.",
-      "You receive monthly stats, an optional deterministic scorecard snapshot, optional prior vision analysis text, and optional progress photos (first/last anchors per pose).",
+      "You receive deterministic scorecard output, scorecard-basis signals, monthly stats, optional prior vision analysis text, and optional progress photos (first/last anchors per pose).",
       "Give a concise, practical summary in 6-12 bullet points.",
       "Be conservative: do not hallucinate numbers. Use only provided stats and what is visible in images.",
-      "Treat scorecard values as structured signals, vision text as supporting observation, and photos as visual evidence.",
-      "If scorecard or vision context is present, reference it when useful, but do not repeat it mechanically.",
+      "Treat deterministic scorecard values and scorecard-basis signals as the primary truth source.",
+      "Treat vision text and photos as supporting evidence only.",
+      "When previous_scorecard or scorecard deltas are present, mention trend changes plainly.",
       "Focus on waist/weight trend, training recovery environment, visible physique changes, momentum, and next-month action items.",
       "Tone: direct, calm, practical, and a bit gritty.",
     ].join("\n");
@@ -122,6 +131,8 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
+
 
 
 
