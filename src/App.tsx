@@ -23,6 +23,7 @@ import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, 
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildReadinessContext } from "./lib/readiness";
 import { computeProgramState, type ProgramState } from "./lib/programState";
+import { buildActiveBlockPlan, type ActiveBlockPlan } from "./lib/blockPlan";
 
 function todayISO(): string {
   const d = new Date();
@@ -928,6 +929,7 @@ useEffect(() => {
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [programState, setProgramState] = useState<ProgramState | null>(null);
+  const [activeBlockPlan, setActiveBlockPlan] = useState<ActiveBlockPlan | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -3075,9 +3077,66 @@ async function refreshDashboard() {
         },
       });
 
+      let previousBlockPlan: ActiveBlockPlan | null = null;
+      if (userId) {
+        try {
+          const prior = await localdb.localSettings.get([userId, "active_block_plan_v1"]);
+          previousBlockPlan = prior?.value ? JSON.parse(prior.value) as ActiveBlockPlan : null;
+        } catch {
+          previousBlockPlan = null;
+        }
+      }
+
+      const focusEntries: Array<[keyof FocusCounts, number]> = [
+        ["Push", recentFocusCounts.Push],
+        ["Pull", recentFocusCounts.Pull],
+        ["Lower", recentFocusCounts.Lower],
+      ];
+      const totalFocusHits = focusEntries.reduce((sum, [, count]) => sum + count, 0);
+      const minFocusHits = Math.min(...focusEntries.map(([, count]) => count));
+      const maxFocusHits = Math.max(...focusEntries.map(([, count]) => count));
+      const movementDebtSeverity = totalFocusHits > 0 ? (maxFocusHits - minFocusHits) / totalFocusHits : 0;
+      const movementDebtPatterns = focusEntries
+        .slice()
+        .sort((a, b) => a[1] - b[1])
+        .filter(([, count]) => count === minFocusHits && totalFocusHits > 0)
+        .map(([focus]) => focus.toLowerCase());
+      const noveltyAnchorCount = [...exerciseHistoryMap.values()].filter((item) => item.lastPerformedDaysAgo <= 21).length;
+      const noveltyRate = recentFocusWindow.length > 0
+        ? Math.max(0, Math.min(1, [...exerciseHistoryMap.values()].length / Math.max(1, recentFocusWindow.length * 4)))
+        : 0;
+
+      const nextBlockPlan = buildActiveBlockPlan({
+        asOf: todayISO(),
+        programState: nextProgramState,
+        previousBlockPlan,
+        readiness: {
+          score: brain.readiness.score,
+          trend: readiness.metrics.scorecardTrend === "unknown" ? "flat" : readiness.metrics.scorecardTrend,
+        },
+        behavior: {
+          fidelity: readiness.metrics.recentFidelityAvg,
+          substitutionRate: readiness.patternEvidence.substitutionRate,
+          anchorReliability: readiness.patternEvidence.anchorMatchRate,
+        },
+        progress: {
+          momentum: readiness.metrics.scorecardTrend === "unknown" ? "flat" : readiness.metrics.scorecardTrend,
+          scorecardTrend: brain.momentum.score,
+        },
+        movementDebt: {
+          topPatterns: movementDebtPatterns,
+          severity: movementDebtSeverity,
+        },
+        exposure: {
+          anchorLiftCount: noveltyAnchorCount,
+          noveltyRate,
+        },
+      });
+
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
       setProgramState(nextProgramState);
+      setActiveBlockPlan(nextBlockPlan);
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -3093,6 +3152,12 @@ async function refreshDashboard() {
           user_id: userId,
           key: "program_state_v1",
           value: JSON.stringify(nextProgramState),
+          updatedAt: Date.now()
+        });
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "active_block_plan_v1",
+          value: JSON.stringify(nextBlockPlan),
           updatedAt: Date.now()
         });
       }
@@ -3601,6 +3666,7 @@ async function syncNow() {
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           programState={programState}
+          activeBlockPlan={activeBlockPlan}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
@@ -3707,6 +3773,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
