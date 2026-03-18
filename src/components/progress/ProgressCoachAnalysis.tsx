@@ -16,7 +16,7 @@ export default function ProgressCoachAnalysis({
   return (
     <div style={{ padding: 10, borderRadius: 10, background: "rgba(0,0,0,0.25)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <strong>Coach Analysis</strong>
+        <strong>Coach Readout</strong>
         <div style={{ fontSize: 12, opacity: 0.75 }}>
           {aiInsightHistory[0]?.ts ? `Last run: ${aiInsightHistory[0].ts.replace("T", " ").slice(0, 19)}Z` : ""}
         </div>
