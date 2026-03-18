@@ -503,21 +503,22 @@ export const handler: Handler = async (event) => {
       "- Keep it punchy. No long lectures. No endless 'Missing:' lists.",
       "- No medical claims. If warning symptoms appear, advise clinician.",
       "Output format (MUST follow exactly):",
-      "1) HEADLINE: one sentence. If DERIVED SIGNALS.deload.active is true, headline MUST start with 'DELOAD' and specify FULL / LOWER / PUSH.",
-      "2) QUICK LOG SIGNALS: 6–8 bullets total. Must include: entries (7d/14d), basics days (7d), sleep avg (3d + 7d if available), protein avg (3d + target), bodyweight trend (14d % if available), Zone 2 (days + minutes in 7d), joint signal summary (knee/back/shoulder + pain yes/no), and latest note (or 'no note').",
-      "   Then add 2 bullets labeled 'Impact:' explaining how Quick Log changed the plan (e.g., RPE cap, deload trigger, no load increase, substitutions).",
-      "3) TRAINING SNAPSHOT: exactly 3 bullets (sessions/tonnage/sets, best lifts if present, and any spike/red flags).",
-      "4) DATA CONFIDENCE: one line (HIGH/MEDIUM/LOW + 5–12 word reason).",
-      "5) RECOVERY BUDGET: one line (GREEN/YELLOW/RED + what to do next 48h). Must explicitly name Quick Log signal(s) driving it (sleep/protein/joints/BW/Z2).",
-      "6) NEXT SESSION TARGETS: max 3 bullets, specific. Must obey governor/deload. At least one bullet must be directly tied to Quick Log/governor (e.g., RPE cap, no load increase, protein target, joint substitution). Prefer: repeat load + add 1 rep, or hold load submax. If bands present, give band target.",
-      "7) DO NOT DO THIS: exactly 1 bullet.",
-      "8) ONE THING TO LOG TOMORROW: exactly 1 bullet.",
-      "Style: direct, encouraging, slightly profane. Traditional training mindset. No fluff.",
+      "1) REALITY CHECK",
+      "   - First line must be a one-sentence headline. If DERIVED SIGNALS.deload.active is true, the headline MUST start with 'DELOAD' and specify FULL / LOWER / PUSH.",
+      "   - Then give 4-6 bullets covering entries (7d/14d), basics days (7d), sleep avg (3d + 7d if available), protein avg (3d + target), bodyweight trend (14d % if available), Zone 2 (days + minutes in 7d), joint signal summary, and latest note (or 'no note').",
+      "2) WHAT IMPROVED",
+      "   - Give exactly 2 bullets on training snapshot wins or stable positives (sessions/tonnage/sets, best lifts if present, useful compliance). If nothing improved, say so plainly.",
+      "3) WHAT NEEDS TIGHTENING",
+      "   - Give exactly 3 bullets covering governor impact, data confidence, and recovery budget. You MUST explicitly name the Quick Log signals driving the call (sleep/protein/joints/BW/Z2).",
+      "4) NEXT MOVE",
+      "   - Give max 3 bullets for next session targets. Must obey governor/deload. At least one bullet must be directly tied to Quick Log/governor.",
+      "   - Then add exactly 1 bullet labeled 'Do not do:' and exactly 1 bullet labeled 'Log tomorrow:'",
+      "Style: direct, encouraging, slightly profane. Traditional training mindset. No fluff. Same coach readout voice used across the app.",
     ].join("\n");
 
     const userPrompt = [
       "Here is a structured training + quick log snapshot from the app.",
-      "Make it actionable, conservative, and specific. Keep it punchy.",
+      "Make it actionable, conservative, specific, and consistent with the coach readout voice. Keep it punchy.",
       "",
       summary,
     ].join("\n");
@@ -587,6 +588,7 @@ export const handler: Handler = async (event) => {
     };
   }
 };
+
 
 
 
