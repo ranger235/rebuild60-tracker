@@ -2,7 +2,7 @@ import { useMemo, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
 import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
 import { buildReadinessContext } from "../lib/readiness";
-import { formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
+import { formatPatternValue, formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
 import type { ReadinessInput } from "../lib/readinessTypes";
 import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
 
@@ -204,7 +204,11 @@ function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], p
     preferenceHistory: preferenceHistory.map((entry) => ({
       timestamp: entry.timestamp,
       fidelityScore: typeof entry.fidelityScore === "number" ? entry.fidelityScore : null,
-      sessionOutcome: entry.sessionOutcome
+      sessionOutcome: entry.sessionOutcome,
+      loadDeltaAvg: typeof entry.loadDeltaAvg === "number" ? entry.loadDeltaAvg : null,
+      volumeDelta: typeof entry.volumeDelta === "number" ? entry.volumeDelta : null,
+      substitutionCount: Array.isArray(entry.substitutionKeys) ? entry.substitutionKeys.length : 0,
+      primaryOutcome: entry.primaryOutcome
     }))
   };
 }
@@ -366,6 +370,47 @@ export default function DashboardView(props: Props) {
 
         <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
           Readiness now includes how faithfully recent sessions matched prescription, so Dashboard and Workout stop telling different stories like a couple of drunks at last call.
+        </div>
+      </div>
+
+      <div style={{ ...cardStyle, marginTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Athlete Behavior Pattern</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>
+              {formatPatternValue(readiness.patterns.executionDiscipline)} Execution
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+              This is the system’s current read on how you actually carry out written sessions.
+            </div>
+          </div>
+          <div style={{ textAlign: "right", fontSize: 12, opacity: 0.75 }}>
+            <div>Load Δ avg: {readiness.patternEvidence.avgLoadDelta != null ? `${readiness.patternEvidence.avgLoadDelta > 0 ? "+" : ""}${readiness.patternEvidence.avgLoadDelta.toFixed(1)}%` : "—"}</div>
+            <div style={{ marginTop: 4 }}>Volume Δ avg: {readiness.patternEvidence.avgVolumeDelta != null ? `${readiness.patternEvidence.avgVolumeDelta > 0 ? "+" : ""}${readiness.patternEvidence.avgVolumeDelta.toFixed(1)}%` : "—"}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Execution Discipline</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPatternValue(readiness.patterns.executionDiscipline)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Load Aggression</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPatternValue(readiness.patterns.loadAggression)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Volume Drift</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPatternValue(readiness.patterns.volumeDrift)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Exercise Substitution</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPatternValue(readiness.patterns.substitutionPattern)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Anchor Reliability</div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>{formatPatternValue(readiness.patterns.anchorReliability)}</div>
+          </div>
         </div>
       </div>
 
@@ -748,6 +793,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
