@@ -41,6 +41,18 @@ export type ScoredCandidate = {
   tags: string[];
 };
 
+export type BlockBiasLike = {
+  progressionBonus?: number;
+  anchorBonus?: number;
+  noveltyPenalty?: number;
+  balanceBonus?: number;
+  fatiguePenalty?: number;
+  noveltyBudgetPerWeek?: number;
+  minAnchorExposure?: number;
+  minPrimaryAccessoryExposure?: number;
+  forcedCarryPatterns?: string[];
+} | null | undefined;
+
 export const PUSH_BLUEPRINT: SessionBlueprint = {
   focus: "Push",
   slots: ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
@@ -111,6 +123,28 @@ function analyzeMemory(hist: CandidateHistory | null): { stalled: boolean; impro
   return { stalled, improving };
 }
 
+
+function candidateAddressesForcedPattern(candidateKey: string, forcedCarryPatterns: string[]): boolean {
+  if (!Array.isArray(forcedCarryPatterns) || forcedCarryPatterns.length === 0) return false;
+  const k = candidateKey.toLowerCase();
+  return forcedCarryPatterns.some((pattern) => {
+    const p = String(pattern || '').toLowerCase();
+    if (!p) return false;
+    if (p.includes('row') || p.includes('upper back')) return k.includes('row') || k.includes('face_pull') || k.includes('rear_delt') || k.includes('reverse_pec_deck');
+    if (p.includes('vertical pull') || p.includes('lat')) return k.includes('pull') || k.includes('chin') || k.includes('pulldown');
+    if (p.includes('press')) return k.includes('press') || k.includes('dip') || k.includes('push_up');
+    if (p.includes('quad')) return k.includes('squat') || k.includes('leg_press') || k.includes('hack_squat') || k.includes('leg_extension') || k.includes('split_squat');
+    if (p.includes('hinge') || p.includes('ham')) return k.includes('deadlift') || k.includes('romanian') || k.includes('hamstring') || k.includes('good_morning') || k.includes('glute_ham');
+    if (p.includes('calf')) return k.includes('calf');
+    if (p.includes('rear delt')) return k.includes('rear_delt') || k.includes('face_pull') || k.includes('reverse_pec_deck') || k.includes('band_pull_apart');
+    return k.includes(p.replace(/\s+/g, '_')) || k.includes(p.replace(/\s+/g, ''));
+  });
+}
+
+function slotIsAnchor(slot: Slot): boolean {
+  return slot === "PrimaryPress" || slot === "PrimaryRow" || slot === "PrimarySquat" || slot === "Hinge" || slot === "VerticalPull";
+}
+
 function lowerCostInReducedVolume(slot: Slot, key: string): boolean {
   if (slot === "Shoulders" || slot === "Biceps" || slot === "Triceps" || slot === "RearDelts" || slot === "Pump" || slot === "Calves") {
     return true;
@@ -123,7 +157,8 @@ export function scoreCandidateForSlot(
   candidateKey: string,
   history: CandidateHistory[],
   mode: "Progression" | "Base" | "Reduced volume",
-  preferences?: PreferenceLike
+  preferences?: PreferenceLike,
+  blockBias?: BlockBiasLike
 ): ScoredCandidate {
   const hist = history.find((h) => h.key === candidateKey) ?? null;
   const tags: string[] = [];
@@ -166,6 +201,40 @@ export function scoreCandidateForSlot(
     tags.push("Preference lean");
   }
 
+  if (blockBias) {
+    const exposureFloor = slotIsAnchor(slot)
+      ? blockBias.minAnchorExposure ?? 0
+      : blockBias.minPrimaryAccessoryExposure ?? 0;
+
+    if (hist && slotIsAnchor(slot)) {
+      score += blockBias.anchorBonus ?? 0;
+      tags.push("Block anchor carry");
+    }
+
+    if (memory.improving) {
+      score += blockBias.progressionBonus ?? 0;
+      tags.push("Block progression push");
+    }
+
+    if (!hist) {
+      score -= blockBias.noveltyPenalty ?? 0;
+      tags.push("Block novelty tax");
+    } else if ((hist.recentSets ?? 0) < exposureFloor) {
+      score += (blockBias.anchorBonus ?? 0) * 0.5;
+      tags.push("Exposure protection");
+    }
+
+    if (mode === "Reduced volume" && lowerCostInReducedVolume(slot, candidateKey)) {
+      score += (blockBias.fatiguePenalty ?? 0) * 0.4;
+      tags.push("Block fatigue restraint");
+    }
+
+    if (candidateAddressesForcedPattern(candidateKey, blockBias.forcedCarryPatterns ?? [])) {
+      score += blockBias.balanceBonus ?? 0;
+      tags.push("Forced carry pattern");
+    }
+  }
+
   // 70/30 familiarity/freshness flavor, expressed as mild modifiers instead of hard math.
   if (tags.includes("Familiar") && !tags.includes("Fresh")) {
     score += 6;
@@ -185,12 +254,14 @@ export function pickBestCandidateForSlot(
   slot: Slot,
   history: CandidateHistory[],
   mode: "Progression" | "Base" | "Reduced volume",
-  preferences?: PreferenceLike
+  preferences?: PreferenceLike,
+  blockBias?: BlockBiasLike
 ): ScoredCandidate[] {
   return candidatesForSlot(slot)
-    .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences))
+    .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
 
 
 
