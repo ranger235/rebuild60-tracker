@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
 import { localdb } from "../localdb";
-import { safeReadArtifactHistory, writeArtifactHistory, wrapArtifact } from "../lib/artifacts";
 
 type Pose = "front" | "quarter" | "side" | "back" | "other";
 
@@ -528,7 +527,7 @@ const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
 const [aiBusy, setAiBusy] = useState(false);
   const [aiInsight, setAiInsight] = useState<string>("");
   const [aiInsightHistory, setAiInsightHistory] = useState<
-    { id: string; ts: string; text: string; monthKey?: string }[]
+    { id: string; ts: string; text: string }[]
   >([]);
   const [aiAppendMode, setAiAppendMode] = useState<boolean>(false);
   const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
@@ -568,7 +567,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
   const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
   const [visionHistory, setVisionHistory] = useState<
-    { id: string; ts: string; pose: Pose; scope: string; text: string; monthKey?: string; focus?: string }[]
+    { id: string; ts: string; pose: Pose; scope: string; text: string }[]
   >([]);
 
 function monthStartEnd(ymd: string) {
@@ -614,24 +613,19 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId, dayDate]);
 
-// Load/save scorecard, AI, and Vision histories through a versioned artifact envelope.
+// Load/save scorecard history (local only)
 useEffect(() => {
   if (!userId) return;
-  const scoreKey = `rebuild60_scorecards_${userId}`;
-  const aiKey = `rebuild60_ai_${userId}`;
-  const visionKey = `rebuild60_vision_${userId}`;
-
-  const scoreArtifacts = safeReadArtifactHistory<Scorecard>(scoreKey, "progress_scorecard", { userId });
-  setScoreHistory(scoreArtifacts.map((a) => a.payload));
-  if (scoreArtifacts.length) writeArtifactHistory(scoreKey, scoreArtifacts, 24);
-
-  const aiArtifacts = safeReadArtifactHistory<{ id: string; ts: string; text: string; monthKey?: string }>(aiKey, "progress_ai_analysis", { userId });
-  setAiInsightHistory(aiArtifacts.map((a) => a.payload));
-  if (aiArtifacts.length) writeArtifactHistory(aiKey, aiArtifacts, 24);
-
-  const visionArtifacts = safeReadArtifactHistory<{ id: string; ts: string; pose: Pose; scope: string; text: string; monthKey?: string; focus?: string }>(visionKey, "progress_vision_analysis", { userId });
-  setVisionHistory(visionArtifacts.map((a) => a.payload));
-  if (visionArtifacts.length) writeArtifactHistory(visionKey, visionArtifacts, 24);
+  try {
+    const key = `rebuild60_scorecards_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setScoreHistory(parsed);
+    }
+  } catch {
+    // ignore
+  }
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId]);
 
@@ -639,47 +633,33 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_scorecards_${userId}`;
-    const artifacts = scoreHistory.map((entry) =>
-      wrapArtifact("progress_scorecard", entry, { userId, monthKey: entry.monthKey }, { createdAt: entry.ts })
-    );
-    writeArtifactHistory(key, artifacts, 24);
+    localStorage.setItem(key, JSON.stringify(scoreHistory.slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, scoreHistory]);
 
+// Load/save Vision history (local only)
 useEffect(() => {
   if (!userId) return;
   try {
-    const key = `rebuild60_ai_${userId}`;
-    const artifacts = aiInsightHistory.map((entry) =>
-      wrapArtifact("progress_ai_analysis", entry, { userId, monthKey: entry.monthKey ?? entry.ts.slice(0, 7) }, { createdAt: entry.ts })
-    );
-    writeArtifactHistory(key, artifacts, 24);
+    const key = `rebuild60_vision_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setVisionHistory(parsed);
+    }
   } catch {
     // ignore
   }
-}, [userId, aiInsightHistory]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [userId]);
 
 useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_vision_${userId}`;
-    const artifacts = visionHistory.map((entry) =>
-      wrapArtifact(
-        "progress_vision_analysis",
-        entry,
-        {
-          userId,
-          monthKey: entry.monthKey ?? entry.ts.slice(0, 7),
-          pose: entry.pose,
-          scope: entry.scope,
-          focus: entry.focus ?? null,
-        },
-        { createdAt: entry.ts }
-      )
-    );
-    writeArtifactHistory(key, artifacts, 24);
+    localStorage.setItem(key, JSON.stringify(visionHistory.slice(0, 24)));
   } catch {
     // ignore
   }
@@ -854,7 +834,7 @@ async function generateAiPhysiqueInsight() {
 
     // Always keep a small history of runs.
     if (nextText) {
-      setAiInsightHistory((prev) => [{ id, ts, text: nextText, monthKey: monthStats.monthKey }, ...prev].slice(0, 12));
+      setAiInsightHistory((prev) => [{ id, ts, text: nextText }, ...prev].slice(0, 12));
     }
 
     // Prevent accidental duplicates (double-click, rerender, etc.)
@@ -1002,7 +982,7 @@ async function runVisionPhysiqueAnalysis() {
     const id = `${ts}-${Math.random().toString(16).slice(2)}`;
 
     // Keep a small local history
-    setVisionHistory((prev) => [{ id, ts, pose, scope: visionScope, text: nextText, monthKey: monthStats.monthKey, focus: visionFocus }, ...prev].slice(0, 24));
+    setVisionHistory((prev) => [{ id, ts, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
 
     setVisionText((prev) => {
       const prevTrim = (prev || "").trim();
@@ -2759,6 +2739,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
