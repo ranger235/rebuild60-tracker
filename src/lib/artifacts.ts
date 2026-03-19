@@ -66,6 +66,36 @@ export function wrapArtifact<T>(
   };
 }
 
+// ✅ FIX: missing export
+export function migrateSingletonArtifact<T>(
+  storageKey: string,
+  artifactType: ArtifactType
+): T | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+
+    if (isArtifactEnvelope(parsed)) {
+      return parsed.payload as T;
+    }
+
+    const wrapped = wrapArtifact(
+      artifactType,
+      { asOf: new Date().toISOString() },
+      parsed
+    );
+
+    localStorage.setItem(storageKey, JSON.stringify(wrapped));
+
+    return parsed as T;
+  } catch (err) {
+    console.warn("migrateSingletonArtifact failed:", storageKey, err);
+    return null;
+  }
+}
+
 export function safeReadArtifactHistory<T>(
   storageKey: string,
   artifactType: ArtifactType
@@ -92,5 +122,6 @@ export function writeArtifactHistory<T>(
 ) {
   localStorage.setItem(storageKey, JSON.stringify(artifacts));
 }
+
 
 
