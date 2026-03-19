@@ -18,10 +18,10 @@ import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
-import type { ActiveBlockPlan } from "./lib/blockPlan";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
+import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
 
 function todayISO(): string {
   const d = new Date();
@@ -926,6 +926,7 @@ useEffect(() => {
 
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
+  const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -2994,25 +2995,73 @@ async function refreshDashboard() {
       }
 
       let preferenceSignals = null;
+      let prefHistory: PreferenceHistoryEntry[] = [];
       try {
         const prefRow = userId
           ? (await localdb.localSettings.get([userId, "recommendation_feedback_v2"]))
             ?? (await localdb.localSettings.get([userId, "recommendation_history_v1"]))
           : null;
         const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
-        const prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
+        prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
       } catch {
         preferenceSignals = null;
       }
 
-      let activeBlockPlan: ActiveBlockPlan | null = null;
-      try {
-        const blockRow = userId ? await localdb.localSettings.get([userId, "active_block_plan_v1"]) : null;
-        activeBlockPlan = blockRow?.value ? JSON.parse(blockRow.value) as ActiveBlockPlan : null;
-      } catch {
-        activeBlockPlan = null;
+      const recentPref = prefHistory
+        .slice()
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 8);
+      const avg = (vals: number[]) => vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      const fidelityAvg = avg(recentPref.map((e) => Number(e.fidelityScore)).filter((n) => Number.isFinite(n)));
+      const substitutionAvg = avg(recentPref.map((e) => {
+        const total = (e.substitutionKeys?.length ?? 0) + (e.missedKeys?.length ?? 0) + (e.extrasKeys?.length ?? 0);
+        const denom = Math.max(1, total + ((e.exerciseFidelity?.length ?? 0) || 1));
+        return total / denom;
+      }));
+      const anchorReliabilityAvg = avg(recentPref.map((e) => {
+        if (e.primaryOutcome === "progressed") return 90;
+        if (e.primaryOutcome === "matched") return 75;
+        if (e.primaryOutcome === "regressed") return 45;
+        return 60;
+      }));
+      const lastWorkoutDays = recentSessions.length > 0
+        ? daysBetweenISO(recentSessions[0].day_date || isoToDay(recentSessions[0].started_at), today)
+        : null;
+      const readinessTrend = sleepAvg7 != null && proteinAvg7 != null && sleepAvg7 >= 6.5 && proteinAvg7 >= 170 ? "up" : sleepAvg7 != null && sleepAvg7 >= 5.5 ? "flat" : "down";
+      const sleepReadiness = sleepAvg7 != null ? Math.max(35, Math.min(100, Math.round(35 + sleepAvg7 * 9))) : 60;
+      const proteinReadiness = proteinAvg7 != null ? Math.max(35, Math.min(100, Math.round(30 + proteinAvg7 * 0.3))) : 60;
+      const momentumTrend = tonPct >= 5 ? "up" : tonPct <= -5 ? "down" : "flat";
+      const friction = buildFrictionProfile({
+        asOf: today,
+        readiness: {
+          score: Math.round((sleepReadiness + proteinReadiness) / 2),
+          trend: readinessTrend,
+        },
+        behavior: {
+          fidelity: fidelityAvg,
+          substitutionRate: substitutionAvg,
+          anchorReliability: anchorReliabilityAvg,
+        },
+        execution: {
+          daysSinceLastWorkout: lastWorkoutDays,
+          expectedSessions: 4,
+          completedSessions: sessionsThis,
+          recentMissedSessions: Math.max(0, 4 - sessionsThis),
+        },
+        progress: {
+          momentum: momentumTrend,
+        },
+      });
+      setFrictionProfile(friction);
+      if (userId) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "friction_profile_v1",
+          value: JSON.stringify(friction),
+          updatedAt: Date.now(),
+        });
       }
 
       const brain = computeBrainSnapshot({
@@ -3038,7 +3087,7 @@ async function refreshDashboard() {
         })() : null,
         exerciseHistory: [...exerciseHistoryMap.values()],
         preferenceSignals,
-        activeBlockPlan
+        frictionProfile: friction
       });
 
       setTimelineWeeks(timeline);
@@ -3557,6 +3606,7 @@ async function syncNow() {
           preferenceHistory={preferenceHistory}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
+          frictionProfile={frictionProfile}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
@@ -3663,6 +3713,8 @@ async function syncNow() {
     </div>
   );
 }
+
+
 
 
 
