@@ -5,12 +5,6 @@ import {
   type Slot,
 } from "./slotEngine";
 import {
-  deriveComposerBlockBias,
-  isAccessorySlot,
-  type ComposerBlockBias,
-} from "./blockComposerBias";
-import type { ActiveBlockPlan } from "./blockPlan";
-import {
   applyPreferenceSignalsToNeeds,
   type PreferenceSignals,
 } from "./preferenceLearning";
@@ -25,6 +19,7 @@ import {
 } from "./sessionNeedsEngine";
 import { composeAdaptiveSession } from "./sessionComposer";
 import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
+import type { FrictionProfile } from "./frictionEngine";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -64,7 +59,7 @@ export type BrainInput = {
   lastSessionFocus: BrainFocus | null;
   exerciseHistory: ExerciseHistory[];
   preferenceSignals?: PreferenceSignals | null;
-  activeBlockPlan?: ActiveBlockPlan | null;
+  frictionProfile?: FrictionProfile | null;
 };
 
 export type BrainMetric = {
@@ -356,9 +351,12 @@ function fallbackOverrideFocus(plannedFocus: Exclude<BrainFocus, "Mixed">): Excl
 function progressionMode(
   readiness: number,
   recovery: number,
-  momentum: number
+  momentum: number,
+  friction?: FrictionProfile | null
 ): "Progression" | "Base" | "Reduced volume" {
+  if (friction?.recommendations.progressionCap === "hold" || friction?.recommendations.volumeCap === "reduced") return "Reduced volume";
   if (recovery < 62 || readiness < 65) return "Reduced volume";
+  if (friction?.recommendations.progressionCap === "soft") return "Base";
   if (readiness >= 85 && recovery >= 80 && momentum >= 85) return "Progression";
   return "Base";
 }
@@ -371,7 +369,7 @@ function chooseDecision(
   adaptiveFocus: Exclude<BrainFocus, "Mixed">
 ): Decision {
   const plannedFocus = choosePlannedFocus(input);
-  const baseMode = progressionMode(readiness, recovery, momentum);
+  const baseMode = progressionMode(readiness, recovery, momentum, input.frictionProfile);
 
   if (recovery < 45) {
     const focus = adaptiveFocus === "Lower" ? fallbackOverrideFocus(plannedFocus) : adaptiveFocus;
@@ -408,47 +406,6 @@ function chooseDecision(
         ? `The adaptive composer sees better stimulus value in ${adaptiveFocus} than the default ${plannedFocus} slot today.`
         : null,
   };
-}
-
-
-function shapeSlotsForBlock(slots: Slot[], blockBias: ComposerBlockBias, mode: "Progression" | "Base" | "Reduced volume"): Slot[] {
-  const unique = Array.from(new Set(slots));
-  let shaped = [...unique];
-
-  if (blockBias.accessoryVolumeShift < 0 || mode === "Reduced volume") {
-    const accessoryCount = shaped.filter((slot) => isAccessorySlot(slot)).length;
-    if (accessoryCount >= 3) {
-      const trimOrder: Slot[] = ["Pump", "Calves", "RearDelts", "Biceps", "Triceps", "SecondaryRow", "Shoulders", "Hamstrings", "SecondaryQuad", "SecondaryPress"];
-      for (const slot of trimOrder) {
-        const idx = shaped.indexOf(slot);
-        if (idx !== -1 && isAccessorySlot(slot)) {
-          shaped.splice(idx, 1);
-          break;
-        }
-      }
-    }
-  }
-
-  if (blockBias.accessoryVolumeShift > 0 && mode !== "Reduced volume") {
-    const addOrder: Slot[] = ["SecondaryPress", "SecondaryRow", "Hamstrings", "Calves", "Pump", "RearDelts"];
-    for (const slot of addOrder) {
-      if (!shaped.includes(slot) && slots.includes(slot)) {
-        shaped.push(slot);
-        break;
-      }
-    }
-  }
-
-  return shaped;
-}
-
-function blockAdjustedMode(
-  mode: "Progression" | "Base" | "Reduced volume",
-  blockBias: ComposerBlockBias
-): "Progression" | "Base" | "Reduced volume" {
-  if (blockBias.fatiguePenalty >= 11) return "Reduced volume";
-  if (mode === "Base" && blockBias.progressionBonus >= 12 && blockBias.fatiguePenalty <= 6) return "Progression";
-  return mode;
 }
 
 function nearestIncrement(value: number, increment: number): number {
@@ -733,14 +690,52 @@ function buildExercisesFromSlots(
   mode: "Progression" | "Base" | "Reduced volume",
   history: ExerciseHistory[],
   preferenceSignals?: PreferenceSignals | null,
-  blockBias?: ComposerBlockBias
+  frictionProfile?: FrictionProfile | null
 ): RecommendedExercise[] {
   const used = new Set<string>();
+  const noveltyCap = frictionProfile?.recommendations.noveltyCap ?? "normal";
+  const volumeCap = frictionProfile?.recommendations.volumeCap ?? "normal";
+  const anchorDemand = frictionProfile?.recommendations.anchorDemand ?? "normal";
+  const trimmedSlots = volumeCap === "reduced"
+    ? slots.filter((slot) => !["Pump", "Calves"].includes(slot)).slice(0, Math.max(3, slots.length - 1))
+    : volumeCap === "soft"
+    ? slots.filter((slot, idx) => !(slot === "Pump" && idx >= 4))
+    : slots;
 
-  return slots.map((slot) => {
+  return trimmedSlots.map((slot) => {
     const program = SLOT_PROGRAMS[slot];
     const candidates = candidatesForSlot(slot);
-    const ranked = pickBestCandidateForSlot(slot, history, mode, preferenceSignals, blockBias);
+    const rankedBase = pickBestCandidateForSlot(slot, history, mode, preferenceSignals);
+    const ranked = rankedBase
+      .map((candidate) => {
+        let score = candidate.score;
+        const tags = [...candidate.tags];
+        const histForCandidate = history.find((h) => h.key === candidate.key) ?? null;
+        const familiarity = !!histForCandidate;
+        const isFresh = candidate.tags.includes("Fresh");
+        const isAnchorSlot = ["PrimaryPress", "PrimaryRow", "PrimarySquat", "Hinge", "VerticalPull"].includes(slot);
+
+        if (noveltyCap === "minimal" && isFresh && !familiarity) {
+          score -= 12;
+          tags.push("Friction: novelty cap");
+        } else if (noveltyCap === "reduced" && isFresh) {
+          score -= 6;
+          tags.push("Friction: novelty trim");
+        }
+
+        if ((anchorDemand === "protect" || anchorDemand === "preserve") && isAnchorSlot && familiarity) {
+          score += anchorDemand === "preserve" ? 10 : 6;
+          tags.push(anchorDemand === "preserve" ? "Friction: preserve anchor" : "Friction: protect anchor");
+        }
+
+        if (volumeCap === "reduced" && ["Shoulders", "Triceps", "Biceps", "RearDelts", "Pump", "Calves"].includes(slot)) {
+          score -= 4;
+          tags.push("Friction: trim fluff");
+        }
+
+        return { ...candidate, score, tags: [...new Set(tags)] };
+      })
+      .sort((a, b) => b.score - a.score);
 
     let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
     const primaryKey = ranked[0]?.key ?? candidates[0];
@@ -792,10 +787,12 @@ function buildExercisesFromSlots(
     ) {
       note = `${note} Progression memory says strength is moving and fatigue is behaving.`;
       eventTag = mode === "Progression" ? "Progression push" : "Trend green";
+      if (frictionProfile?.recommendations.progressionCap === "soft") note = `${note} Friction keeps progression on a short leash even though the trend looks decent.`;
     } else if (activeMemory.strength === "flat" && activeMemory.fatigue === "rising") {
       note = `${note} Progression memory says hold your water — fatigue is climbing faster than performance.`;
       eventTag = "Hold load";
     } else if (mode === "Reduced volume") {
+      if (frictionProfile?.recommendations.volumeCap === "reduced") note = `${note} Friction profile is trimming session demand to preserve completion.`;
       eventTag = chosen?.tags.includes("Recovery-friendly")
         ? "Recovery-friendly"
         : chosen?.tags.includes("Preference lean")
@@ -818,12 +815,6 @@ function buildExercisesFromSlots(
           if (tag === "Progression path") return "Chosen for progression";
           if (tag === "Preference lean") return "Chosen for preference fit";
           if (tag === "Stall penalty") return "Penalty applied for stalling";
-          if (tag === "Block anchor carry") return "Block favors keeping anchors stable";
-          if (tag === "Block progression push") return "Block is pushing a live progression path";
-          if (tag === "Block novelty tax") return "Block penalized unnecessary novelty";
-          if (tag === "Exposure protection") return "Block protected a movement still inside its minimum exposure window";
-          if (tag === "Block fatigue restraint") return "Block favored a lower-cost recovery-friendly choice";
-          if (tag === "Forced carry pattern") return "Block boosted a lagging forced-carry pattern";
           return tag;
         })
         .join(", ");
@@ -955,32 +946,27 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     adaptiveFocus
   );
 
-  const blockBias = deriveComposerBlockBias(input.activeBlockPlan);
-  const adjustedMode = blockAdjustedMode(decision.mode, blockBias);
-  const shapedSlots = shapeSlotsForBlock(composer.slots, blockBias, adjustedMode);
-
   const recommendedExercises = buildExercisesFromSlots(
-    shapedSlots,
-    adjustedMode,
+    composer.slots,
+    decision.mode,
     input.exerciseHistory,
     input.preferenceSignals,
-    blockBias
+    input.frictionProfile
   );
 
-  const systemTake = decision.wasOverride
+  const friction = input.frictionProfile;
+
+  const systemTake = friction?.level === "high"
+    ? `System sees real friction in the week, so today is built to preserve continuity before chasing ideals.`
+    : decision.wasOverride
     ? `System called an audible — ${decision.overrideReason ?? "the adaptive composer saw a better place to put work today."}`
-    : adjustedMode === "Progression"
+    : decision.mode === "Progression"
     ? "System says go — enough signal and enough recovery to nudge progression without getting stupid."
-    : adjustedMode === "Reduced volume"
+    : decision.mode === "Reduced volume"
     ? "System says train, but keep your head on straight — enough fatigue is hanging around that today should be crisp, not heroic."
     : "System says steady as she goes — productive base work beats forcing the issue.";
 
   const signalCards: BrainSignalCard[] = [
-    {
-      label: "Block",
-      value: `${input.activeBlockPlan?.blockType ?? "Unscoped"} / ${input.activeBlockPlan?.waveProfile ?? "stabilize"}`,
-      note: blockBias.notes[0] ?? "Block directives are now biasing candidate scoring, progression pushes, and session density.",
-    },
     {
       label: "Sleep",
       value: sleepAvg > 0 ? `${sleepAvg.toFixed(1)} h` : "—",
@@ -1054,9 +1040,11 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const rationale = rationaleParts.join(" ");
 
   const volumeNote =
-    adjustedMode === "Reduced volume"
+    friction?.recommendations.volumeCap === "reduced"
+      ? "Friction is high, so trim accessories, keep the session short, and leave more in reserve than your ego wants."
+      : decision.mode === "Reduced volume"
       ? "Trim one accessory set where needed and leave one more rep in reserve than usual."
-      : adjustedMode === "Progression"
+      : decision.mode === "Progression"
       ? "Take the first anchor movement seriously, then keep the rest crisp and businesslike."
       : "Run the planned work, keep execution clean, and let consistency do the lifting.";
 
@@ -1083,16 +1071,13 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   if (decision.wasOverride) {
     alerts.push(`Opinionated call: ${decision.plannedFocus} delayed, ${decision.focus} gets the nod`);
   }
-  if (adjustedMode === "Progression") {
+  if (friction) {
+    alerts.push(`Friction ${friction.level}: progression ${friction.recommendations.progressionCap} / volume ${friction.recommendations.volumeCap} / novelty ${friction.recommendations.noveltyCap}`);
+  }
+  if (decision.mode === "Progression") {
     alerts.push("Progression window open");
-  } else if (adjustedMode === "Reduced volume") {
+  } else if (decision.mode === "Reduced volume") {
     alerts.push("Recovery protection mode");
-  }
-  if (input.activeBlockPlan) {
-    alerts.push(`Block steering: ${input.activeBlockPlan.blockType} / ${input.activeBlockPlan.waveProfile}`);
-  }
-  for (const note of blockBias.notes.slice(0, 2)) {
-    alerts.push(`Block directive: ${note}`);
   }
   if (input.preferenceSignals?.reasons?.length) {
     for (const reason of input.preferenceSignals.reasons.slice(0, 2)) {
@@ -1116,11 +1101,11 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     recovery: { score: recoveryScore, label: metricLabel(recoveryScore) },
     compliance: { score: complianceScore, label: metricLabel(complianceScore) },
     systemTake,
-    nextFocus: `${composer.emphasis} — ${adjustedMode}`,
+    nextFocus: `${composer.emphasis} — ${decision.mode}`,
     signalCards,
     recommendedSession: {
       focus: decision.focus,
-      bias: adjustedMode,
+      bias: decision.mode,
       title: `${composer.emphasis} Session`,
       rationale,
       volumeNote,
@@ -1129,6 +1114,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
