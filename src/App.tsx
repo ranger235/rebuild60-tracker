@@ -3092,6 +3092,14 @@ async function refreshDashboard() {
 
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
+      if (userId) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "next_session_priority_v1",
+          value: JSON.stringify(brain.nextSessionPriority),
+          updatedAt: Date.now(),
+        });
+      }
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -3713,6 +3721,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
