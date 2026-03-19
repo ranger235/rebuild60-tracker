@@ -26,118 +26,71 @@ export type ArtifactEnvelope<T> = {
   payload: T;
 };
 
-const SCHEMA_VERSION = 1;
-
-function cleanScopePart(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-export function buildArtifactId(type: ArtifactType, scope: ArtifactScope = {}): string {
-  const parts = [
+function buildArtifactId(type: ArtifactType, scope: ArtifactScope): string {
+  return [
     type,
-    cleanScopePart(scope.userId) ?? "anon",
-    cleanScopePart(scope.monthKey),
-    cleanScopePart(scope.asOf),
-    cleanScopePart(scope.pose),
-    cleanScopePart(scope.scope),
-    cleanScopePart(scope.focus)
-  ].filter(Boolean) as string[];
-
-  return parts.join(":");
+    scope.userId ?? "anon",
+    scope.monthKey ?? "",
+    scope.asOf ?? "",
+    scope.pose ?? "",
+    scope.scope ?? "",
+    scope.focus ?? "",
+  ]
+    .filter(Boolean)
+    .join(":");
 }
 
-export function isArtifactEnvelope(value: unknown): value is ArtifactEnvelope<unknown> {
-  if (!value || typeof value !== "object") return false;
-  const v = value as Record<string, unknown>;
+export function isArtifactEnvelope(value: any): value is ArtifactEnvelope<any> {
   return (
-    typeof v.schemaVersion === "number" &&
-    typeof v.artifactType === "string" &&
-    typeof v.id === "string" &&
-    typeof v.createdAt === "string" &&
-    !!v.scope &&
-    typeof v.scope === "object" &&
-    "payload" in v
+    value &&
+    typeof value === "object" &&
+    "artifactType" in value &&
+    "payload" in value &&
+    "schemaVersion" in value
   );
 }
 
 export function wrapArtifact<T>(
   artifactType: ArtifactType,
   scope: ArtifactScope,
-  payload: T,
-  nowIso = new Date().toISOString()
+  payload: T
 ): ArtifactEnvelope<T> {
+  const now = new Date().toISOString();
   return {
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: 1,
     artifactType,
     id: buildArtifactId(artifactType, scope),
-    createdAt: nowIso,
-    updatedAt: nowIso,
+    createdAt: now,
     scope,
-    payload
+    payload,
   };
 }
 
-function tryParseJson(raw: string | null): unknown | null {
-  if (!raw) return null;
+export function safeReadArtifactHistory<T>(
+  storageKey: string,
+  artifactType: ArtifactType
+): ArtifactEnvelope<T>[] {
   try {
-    return JSON.parse(raw);
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.map((entry: any) => {
+      if (isArtifactEnvelope(entry)) return entry;
+      return wrapArtifact(artifactType, { asOf: new Date().toISOString() }, entry);
+    });
   } catch {
-    return null;
+    return [];
   }
 }
 
-export function readSingletonArtifact<T>(
+export function writeArtifactHistory<T>(
   storageKey: string,
-  artifactType: ArtifactType,
-  fallbackScope: ArtifactScope = {}
-): T | null {
-  const parsed = tryParseJson(localStorage.getItem(storageKey));
-  if (parsed == null) return null;
-
-  if (isArtifactEnvelope(parsed) && parsed.artifactType === artifactType) {
-    return parsed.payload as T;
-  }
-
-  if (typeof parsed !== "object") return null;
-
-  const envelope = wrapArtifact(artifactType, fallbackScope, parsed as T);
-  localStorage.setItem(storageKey, JSON.stringify(envelope));
-  return parsed as T;
+  artifacts: ArtifactEnvelope<T>[]
+) {
+  localStorage.setItem(storageKey, JSON.stringify(artifacts));
 }
 
-export function writeSingletonArtifact<T>(
-  storageKey: string,
-  artifactType: ArtifactType,
-  payload: T,
-  scope: ArtifactScope = {}
-): ArtifactEnvelope<T> {
-  const nowIso = new Date().toISOString();
-  const envelope = wrapArtifact(artifactType, { ...scope, asOf: scope.asOf ?? nowIso }, payload, nowIso);
-  localStorage.setItem(storageKey, JSON.stringify(envelope));
-  return envelope;
-}
-
-export function migrateSingletonArtifact(
-  storageKey: string,
-  artifactType: ArtifactType,
-  fallbackScope: ArtifactScope = {}
-): ArtifactEnvelope<unknown> | null {
-  const parsed = tryParseJson(localStorage.getItem(storageKey));
-  if (parsed == null) return null;
-
-  if (isArtifactEnvelope(parsed) && parsed.artifactType === artifactType) {
-    return parsed;
-  }
-
-  if (typeof parsed !== "object") {
-    console.warn(`[artifacts] Skipping malformed artifact for ${storageKey}`);
-    return null;
-  }
-
-  const envelope = wrapArtifact(artifactType, fallbackScope, parsed);
-  localStorage.setItem(storageKey, JSON.stringify(envelope));
-  return envelope;
-}
 
