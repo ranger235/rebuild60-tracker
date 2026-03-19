@@ -1,12 +1,11 @@
 import { useMemo, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
 import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
-import { formatProgramBias, formatProgramPhase, type ProgramState } from "../lib/programState";
-import { formatBlockType, formatDirectivePressure, formatWaveProfile, type ActiveBlockPlan } from "../lib/blockPlan";
 import { buildReadinessContext } from "../lib/readiness";
 import { formatPatternValue, formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
 import type { ReadinessInput } from "../lib/readinessTypes";
 import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
+import type { FrictionProfile } from "../lib/frictionEngine";
 
 export type Point = { xLabel: string; y: number };
 
@@ -98,8 +97,7 @@ type Props = {
   }>;
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
-  programState: ProgramState | null;
-  activeBlockPlan: ActiveBlockPlan | null;
+  frictionProfile: FrictionProfile | null;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
 
@@ -185,28 +183,18 @@ function fmtPct(value: number | null) {
   return `${Math.round(value * 100)}%`;
 }
 
-function phaseTone(phase: ProgramState["phase"]) {
-  if (phase === "push") return { bg: "#ebf8ee", border: "#b8dfc0" };
-  if (phase === "build") return { bg: "#eef7ff", border: "#c9dcf5" };
-  if (phase === "consolidate") return { bg: "#fff8ea", border: "#ebd39e" };
-  if (phase === "deload") return { bg: "#fff3e8", border: "#efc9a8" };
-  return { bg: "#f3efff", border: "#cdbef5" };
-}
-
-
-function blockTone(phase: ActiveBlockPlan["phase"]) {
-  if (phase === "push") return { bg: "#edf9ef", border: "#b8dfc0" };
-  if (phase === "build") return { bg: "#f2f8ff", border: "#c9dcf5" };
-  if (phase === "consolidate") return { bg: "#fffaf0", border: "#ebd39e" };
-  if (phase === "deload") return { bg: "#fff5ec", border: "#efc9a8" };
-  return { bg: "#f6f1ff", border: "#cdbef5" };
-}
-
 function fmtTrend(value: string) {
   if (value === "up") return "Up";
   if (value === "down") return "Down";
   if (value === "flat") return "Flat";
   return "Unknown";
+}
+
+
+function frictionTone(level: FrictionProfile["level"]): { bg: string; border: string } {
+  if (level === "high") return { bg: "#ffe7e7", border: "#e7b0b0" };
+  if (level === "moderate") return { bg: "#fff7e5", border: "#ead39a" };
+  return { bg: "#ecf8ee", border: "#b9dfc0" };
 }
 
 function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], preferenceHistory: PreferenceHistoryEntry[]): ReadinessInput {
@@ -266,8 +254,7 @@ export default function DashboardView(props: Props) {
     milestones,
     timelineWeeks,
     brainSnapshot,
-    programState,
-    activeBlockPlan,
+    frictionProfile,
     startSessionFromRecommendation,
     preferenceHistory,
     timerOn,
@@ -396,164 +383,6 @@ export default function DashboardView(props: Props) {
         </div>
       </div>
 
-      {programState && (
-        <div style={{ ...cardStyle, marginTop: 14, background: phaseTone(programState.phase).bg, border: `1px solid ${phaseTone(programState.phase).border}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Program State Engine — Phase 5A</div>
-              <div style={{ fontSize: 28, fontWeight: 800, marginTop: 2 }}>{formatProgramPhase(programState.phase)}</div>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-                Deterministic training state for the current 28-day review window.
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>State Confidence</div>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{programState.confidence}</div>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>State Score: {programState.stateScore}</div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginTop: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Volume Bias</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.volume)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Intensity Bias</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.intensity)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Exercise Novelty</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatProgramBias(programState.recommendedBias.exerciseNovelty)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Review Window</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{programState.reviewWindow.recentDays} days</div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginTop: 12 }}>
-            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
-              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Why the system picked this state</div>
-              {programState.reasons.map((reason, idx) => (
-                <div key={`${programState.phase}-reason-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
-                  {reason}
-                </div>
-              ))}
-            </div>
-
-            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
-              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Primary Focus</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {programState.primaryFocus.map((item) => (
-                  <div
-                    key={item}
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      background: "rgba(255,255,255,0.9)",
-                      border: "1px solid rgba(0,0,0,0.1)"
-                    }}
-                  >
-                    {item}
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 14, marginBottom: 6 }}>Constraints</div>
-              {programState.constraints.map((constraint, idx) => (
-                <div key={`${programState.phase}-constraint-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
-                  {constraint}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
-            This is the bridge into Phase 5: the engine now knows whether it should build, push, consolidate, deload, or pivot before it starts getting cute with session shaping.
-          </div>
-        </div>
-      )}
-
-      {activeBlockPlan && (
-        <div style={{ ...cardStyle, marginTop: 14, background: blockTone(activeBlockPlan.phase).bg, border: `1px solid ${blockTone(activeBlockPlan.phase).border}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Active Block Plan — Phase 5B</div>
-              <div style={{ fontSize: 28, fontWeight: 800, marginTop: 2 }}>{formatBlockType(activeBlockPlan.blockType)}</div>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-                Week {activeBlockPlan.currentWeekIndex} of {activeBlockPlan.targetDurationWeeks} • Wave: {formatWaveProfile(activeBlockPlan.waveProfile)}
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Phase</div>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{formatProgramPhase(activeBlockPlan.phase)}</div>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>Started: {activeBlockPlan.startedAt}</div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginTop: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Volume Bias</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatDirectivePressure(activeBlockPlan.directives.volumePressure)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Intensity Bias</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatDirectivePressure(activeBlockPlan.directives.progressionPressure)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Exercise Novelty</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatDirectivePressure(activeBlockPlan.directives.noveltyAllowance)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>Anchor Strictness</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{formatDirectivePressure(activeBlockPlan.directives.anchorStrictness)}</div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginTop: 12 }}>
-            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
-              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Block Priorities</div>
-              {activeBlockPlan.emphasis.map((item, idx) => (
-                <div key={`block-emphasis-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
-                  {item}
-                </div>
-              ))}
-
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 14, marginBottom: 6 }}>Constraints</div>
-              {activeBlockPlan.constraints.length > 0 ? activeBlockPlan.constraints.map((constraint, idx) => (
-                <div key={`block-constraint-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
-                  {constraint}
-                </div>
-              )) : <div style={{ fontSize: 13, lineHeight: 1.45 }}>No hard brakes beyond the normal guardrails.</div>}
-            </div>
-
-            <div style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 10, padding: 10, background: "rgba(255,255,255,0.45)" }}>
-              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 6 }}>Why this block</div>
-              {activeBlockPlan.reasons.map((reason, idx) => (
-                <div key={`block-reason-${idx}`} style={{ marginTop: idx === 0 ? 0 : 8, fontSize: 13, lineHeight: 1.45 }}>
-                  {reason}
-                </div>
-              ))}
-
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 14, marginBottom: 6 }}>Rotation Rules</div>
-              <div style={{ fontSize: 13, lineHeight: 1.45 }}>Anchors stay at least {activeBlockPlan.rotationRules.minAnchorExposure} exposures. Primary accessories stay at least {activeBlockPlan.rotationRules.minPrimaryAccessoryExposure} exposures. Novelty budget: {activeBlockPlan.rotationRules.noveltyBudgetPerWeek} swap{activeBlockPlan.rotationRules.noveltyBudgetPerWeek === 1 ? "" : "s"} per week.</div>
-              {activeBlockPlan.rotationRules.forcedCarryPatterns.length > 0 && (
-                <div style={{ fontSize: 13, lineHeight: 1.45, marginTop: 8 }}>
-                  Forced carry patterns: {activeBlockPlan.rotationRules.forcedCarryPatterns.join(", ")}.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.78 }}>
-            This is Phase 5B in plain English: the engine now knows what kind of block it is running, how aggressive it should be, and how much novelty it can afford before it starts acting like a Labrador in a butcher shop.
-          </div>
-        </div>
-      )}
-
       <div style={{ ...cardStyle, marginTop: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
           <div>
@@ -647,6 +476,70 @@ export default function DashboardView(props: Props) {
           );
         })}
       </div>
+
+      {frictionProfile && (
+        <>
+          <h4 style={{ marginTop: 18, marginBottom: 8 }}>Recovery & Friction Constraints — Phase 5C</h4>
+          <div style={{ ...cardStyle, background: frictionTone(frictionProfile.level).bg, borderColor: frictionTone(frictionProfile.level).border }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Current Friction</div>
+                <div style={{ fontSize: 26, fontWeight: 800, textTransform: "capitalize" }}>{frictionProfile.level}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Score</div>
+                <div style={{ fontSize: 26, fontWeight: 800 }}>{frictionProfile.score}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginTop: 12 }}>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Progression</div>
+                <div style={{ fontSize: 20, fontWeight: 800, textTransform: "capitalize" }}>{frictionProfile.recommendations.progressionCap}</div>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Volume</div>
+                <div style={{ fontSize: 20, fontWeight: 800, textTransform: "capitalize" }}>{frictionProfile.recommendations.volumeCap}</div>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Novelty</div>
+                <div style={{ fontSize: 20, fontWeight: 800, textTransform: "capitalize" }}>{frictionProfile.recommendations.noveltyCap}</div>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Anchors</div>
+                <div style={{ fontSize: 20, fontWeight: 800, textTransform: "capitalize" }}>{frictionProfile.recommendations.anchorDemand}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 12 }}>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Drivers</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {(frictionProfile.drivers.length ? frictionProfile.drivers : ["No major friction drivers detected."]).map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Current constraints</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {frictionProfile.constraints.map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Why the engine is responding this way</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {frictionProfile.reasons.map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {brainSnapshot && (
         <>
@@ -974,6 +867,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
