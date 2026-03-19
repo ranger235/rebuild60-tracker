@@ -20,6 +20,7 @@ import {
 import { composeAdaptiveSession } from "./sessionComposer";
 import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
 import type { FrictionProfile } from "./frictionEngine";
+import { buildNextSessionPriorityProfile, type NextSessionPriorityProfile } from "./nextSessionPriority";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -103,6 +104,7 @@ export type BrainSnapshot = {
   systemTake: string;
   nextFocus: string;
   signalCards: BrainSignalCard[];
+  nextSessionPriority: NextSessionPriorityProfile;
   recommendedSession: RecommendedSession;
 };
 
@@ -690,7 +692,8 @@ function buildExercisesFromSlots(
   mode: "Progression" | "Base" | "Reduced volume",
   history: ExerciseHistory[],
   preferenceSignals?: PreferenceSignals | null,
-  frictionProfile?: FrictionProfile | null
+  frictionProfile?: FrictionProfile | null,
+  priorityProfile?: NextSessionPriorityProfile | null
 ): RecommendedExercise[] {
   const used = new Set<string>();
   const noveltyCap = frictionProfile?.recommendations.noveltyCap ?? "normal";
@@ -701,6 +704,12 @@ function buildExercisesFromSlots(
     : volumeCap === "soft"
     ? slots.filter((slot, idx) => !(slot === "Pump" && idx >= 4))
     : slots;
+
+  const topPriority = priorityProfile?.topPriorities?.[0] ?? null;
+  const secondPriority = priorityProfile?.topPriorities?.[1] ?? null;
+  const slotSupportsBalance = (slot: Slot) => ["PrimaryRow", "VerticalPull", "RearDelts", "Biceps", "Hamstrings", "Calves", "SecondaryQuad", "Shoulders"].includes(slot);
+  const slotIsAnchor = (slot: Slot) => ["PrimaryPress", "PrimaryRow", "VerticalPull", "PrimarySquat", "Hinge"].includes(slot);
+  const slotIsSupport = (slot: Slot) => ["SecondaryPress", "SecondaryRow", "Shoulders", "Triceps", "Pump", "RearDelts", "Biceps", "SecondaryQuad", "Hamstrings", "Calves"].includes(slot);
 
   return trimmedSlots.map((slot) => {
     const program = SLOT_PROGRAMS[slot];
@@ -714,6 +723,31 @@ function buildExercisesFromSlots(
         const familiarity = !!histForCandidate;
         const isFresh = candidate.tags.includes("Fresh");
         const isAnchorSlot = ["PrimaryPress", "PrimaryRow", "PrimarySquat", "Hinge", "VerticalPull"].includes(slot);
+
+        if (topPriority?.category === "anchor_progression" && isAnchorSlot && familiarity && candidate.tags.includes("Progression path")) {
+          score += 10;
+          tags.push("Priority: anchor progression");
+        }
+        if ((topPriority?.category === "movement_balance" || secondPriority?.category === "movement_balance") && slotSupportsBalance(slot)) {
+          score += 6;
+          tags.push("Priority: balance correction");
+        }
+        if ((topPriority?.category === "pattern_repeat" || secondPriority?.category === "pattern_repeat") && familiarity) {
+          score += 6;
+          tags.push("Priority: pattern repeat");
+        }
+        if ((topPriority?.category === "volume_reinforcement" || secondPriority?.category === "volume_reinforcement") && slotIsSupport(slot)) {
+          score += 4;
+          tags.push("Priority: volume reinforcement");
+        }
+        if ((topPriority?.category === "fatigue_containment" || secondPriority?.category === "fatigue_containment") && (isFresh || !familiarity)) {
+          score -= 8;
+          tags.push("Priority: fatigue containment");
+        }
+        if ((topPriority?.category === "continuity_recovery" || secondPriority?.category === "continuity_recovery") && familiarity) {
+          score += 7;
+          tags.push("Priority: continuity recovery");
+        }
 
         if (noveltyCap === "minimal" && isFresh && !familiarity) {
           score -= 12;
@@ -815,6 +849,12 @@ function buildExercisesFromSlots(
           if (tag === "Progression path") return "Chosen for progression";
           if (tag === "Preference lean") return "Chosen for preference fit";
           if (tag === "Stall penalty") return "Penalty applied for stalling";
+          if (tag === "Priority: anchor progression") return "Priority engine pushed anchor progression";
+          if (tag === "Priority: balance correction") return "Priority engine boosted balance work";
+          if (tag === "Priority: pattern repeat") return "Priority engine favored pattern repeat";
+          if (tag === "Priority: volume reinforcement") return "Priority engine favored more useful work";
+          if (tag === "Priority: fatigue containment") return "Priority engine trimmed risk for fatigue containment";
+          if (tag === "Priority: continuity recovery") return "Priority engine favored continuity recovery";
           return tag;
         })
         .join(", ");
@@ -946,12 +986,24 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     adaptiveFocus
   );
 
+  const nextSessionPriority = buildNextSessionPriorityProfile({
+    asOf: new Date().toISOString(),
+    focus: decision.focus,
+    mode: decision.mode,
+    topNeeds: composer.topNeeds,
+    recoveryBias: composer.recoveryBias,
+    frictionProfile: input.frictionProfile,
+    weeklyCoach: input.weeklyCoach,
+    exerciseHistory: input.exerciseHistory,
+  });
+
   const recommendedExercises = buildExercisesFromSlots(
     composer.slots,
     decision.mode,
     input.exerciseHistory,
     input.preferenceSignals,
-    input.frictionProfile
+    input.frictionProfile,
+    nextSessionPriority
   );
 
   const friction = input.frictionProfile;
@@ -1103,6 +1155,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     systemTake,
     nextFocus: `${composer.emphasis} — ${decision.mode}`,
     signalCards,
+    nextSessionPriority,
     recommendedSession: {
       focus: decision.focus,
       bias: decision.mode,
@@ -1114,6 +1167,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
+
 
 
 
