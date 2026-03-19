@@ -197,6 +197,10 @@ function frictionTone(level: FrictionProfile["level"]): { bg: string; border: st
   return { bg: "#ecf8ee", border: "#b9dfc0" };
 }
 
+function priorityLabel(category: string) {
+  return category.replace(/_/g, " ").replace(/\w/g, (m) => m.toUpperCase());
+}
+
 function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], preferenceHistory: PreferenceHistoryEntry[]): ReadinessInput {
   return {
     workouts: setsSeries.map((p) => ({
@@ -578,6 +582,53 @@ export default function DashboardView(props: Props) {
             ))}
           </div>
 
+          <div style={{ ...cardStyle, marginTop: 10, background: "#f8fbff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Next-Session Priority Biasing — Phase 5D</div>
+                <div style={{ fontSize: 26, fontWeight: 800 }}>Top priorities for the next bite of work</div>
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>Deterministic queue, not AI vibes</div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 12 }}>
+              {brainSnapshot.nextSessionPriority.topPriorities.map((item) => (
+                <div key={`${item.category}-${item.target}`} style={cardStyle}>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>{priorityLabel(item.category)}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800 }}>{item.priorityScore}</div>
+                  <div style={{ marginTop: 4, fontWeight: 700 }}>{item.target}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 12 }}>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Why these are leading</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {brainSnapshot.nextSessionPriority.rationaleSummary.map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Constraints applied</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {brainSnapshot.nextSessionPriority.constraintsApplied.map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>What can wait</div>
+                <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                  {brainSnapshot.nextSessionPriority.deprioritized.map((item) => (
+                    <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
           <div style={{ ...cardStyle, marginTop: 10, background: focusTone(brainSnapshot.recommendedSession.focus) }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
               <div>
@@ -867,6 +918,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
