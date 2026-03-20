@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
-import { localdb, type LocalDailyMetrics, type LocalNutritionDaily, type LocalWorkoutExercise, type LocalWorkoutSession, type LocalWorkoutSet, type LocalZone2Daily } from "../localdb";
-import { buildProgressSignals } from "../lib/progressSignals";
+import { localdb } from "../localdb";
 
 type Pose = "front" | "quarter" | "side" | "back" | "other";
 
@@ -523,17 +522,12 @@ function monthKey(ymd: string) {
 
 // Monthly report (Quick Log + Measurements + Anchors)
 const [monthReportBusy, setMonthReportBusy] = useState(false);
-const [monthDaily, setMonthDaily] = useState<LocalDailyMetrics[]>([]);
-const [monthNutrition, setMonthNutrition] = useState<LocalNutritionDaily[]>([]);
-const [monthZone2, setMonthZone2] = useState<LocalZone2Daily[]>([]);
+const [monthDaily, setMonthDaily] = useState<any[]>([]);
 const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
-const [monthSessions, setMonthSessions] = useState<LocalWorkoutSession[]>([]);
-const [monthExercises, setMonthExercises] = useState<LocalWorkoutExercise[]>([]);
-const [monthSets, setMonthSets] = useState<LocalWorkoutSet[]>([]);
 const [aiBusy, setAiBusy] = useState(false);
   const [aiInsight, setAiInsight] = useState<string>("");
   const [aiInsightHistory, setAiInsightHistory] = useState<
-    { id: string; ts: string; monthKey?: string; text: string }[]
+    { id: string; ts: string; text: string }[]
   >([]);
   const [aiAppendMode, setAiAppendMode] = useState<boolean>(false);
   const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
@@ -554,7 +548,6 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scoreBusy, setScoreBusy] = useState(false);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
-  const [lastScoreSignals, setLastScoreSignals] = useState<any | null>(null);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
 
   const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
@@ -574,7 +567,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
   const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
   const [visionHistory, setVisionHistory] = useState<
-    { id: string; ts: string; monthKey?: string; pose: Pose; scope: string; text: string }[]
+    { id: string; ts: string; pose: Pose; scope: string; text: string }[]
   >([]);
 
 function monthStartEnd(ymd: string) {
@@ -585,21 +578,6 @@ function monthStartEnd(ymd: string) {
   return { startYMD: toYMD(start), endYMD: toYMD(end) };
 }
 
-
-function safeMonthKeyFromIso(isoLike?: string | null): string | undefined {
-  const raw = String(isoLike ?? "").trim();
-  if (!raw) return undefined;
-  const m = raw.match(/^(\d{4}-\d{2})/);
-  return m ? m[1] : undefined;
-}
-
-function normalizeMonthScopedHistory<T extends { monthKey?: string; ts?: string; text?: string; pose?: string; scope?: string }>(rows: T[]): T[] {
-  return rows.map((row) => {
-    const monthKey = row.monthKey ?? safeMonthKeyFromIso(row.ts);
-    return monthKey ? { ...row, monthKey } : row;
-  });
-}
-
 useEffect(() => {
   (async () => {
     if (!userId) return;
@@ -607,44 +585,12 @@ useEffect(() => {
     try {
       const { startYMD, endYMD } = monthStartEnd(dayDate);
 
-      // Quick Log + training data from local Dexie
-      const [daily, nutrition, zone2, sessions] = await Promise.all([
-        localdb.dailyMetrics
-          .where("[user_id+day_date]")
-          .between([userId, startYMD], [userId, endYMD], true, true)
-          .sortBy("day_date"),
-        localdb.nutritionDaily
-          .where("[user_id+day_date]")
-          .between([userId, startYMD], [userId, endYMD], true, true)
-          .sortBy("day_date"),
-        localdb.zone2Daily
-          .where("[user_id+day_date]")
-          .between([userId, startYMD], [userId, endYMD], true, true)
-          .sortBy("day_date"),
-        localdb.localSessions
-          .where("user_id")
-          .equals(userId)
-          .filter((row) => row.day_date >= startYMD && row.day_date <= endYMD)
-          .sortBy("day_date"),
-      ]);
+      // Quick Log from local Dexie (dailyMetrics)
+      const daily = await localdb.dailyMetrics
+        .where("[user_id+day_date]")
+        .between([userId, startYMD], [userId, endYMD], true, true)
+        .sortBy("day_date");
       setMonthDaily(daily ?? []);
-      setMonthNutrition(nutrition ?? []);
-      setMonthZone2(zone2 ?? []);
-      setMonthSessions(sessions ?? []);
-
-      const sessionIds = new Set((sessions ?? []).map((row) => row.id));
-      if (sessionIds.size > 0) {
-        const exercises = (await localdb.localExercises.toArray()).filter((row) => sessionIds.has(row.session_id));
-        setMonthExercises(exercises);
-        const exerciseIds = new Set(exercises.map((row) => row.id));
-        const sets = exerciseIds.size > 0
-          ? (await localdb.localSets.toArray()).filter((row) => exerciseIds.has(row.exercise_id))
-          : [];
-        setMonthSets(sets);
-      } else {
-        setMonthExercises([]);
-        setMonthSets([]);
-      }
 
       // Measurements from Supabase
       const { data: mdata, error: merr } = await supabase
@@ -675,7 +621,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setScoreHistory(normalizeMonthScopedHistory(parsed));
+      if (Array.isArray(parsed)) setScoreHistory(parsed);
     }
   } catch {
     // ignore
@@ -687,37 +633,11 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_scorecards_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(scoreHistory).slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(scoreHistory.slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, scoreHistory]);
-
-// Load/save AI history (local only)
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setAiInsightHistory(normalizeMonthScopedHistory(parsed));
-    }
-  } catch {
-    // ignore
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(aiInsightHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, aiInsightHistory]);
 
 // Load/save Vision history (local only)
 useEffect(() => {
@@ -727,7 +647,7 @@ useEffect(() => {
     const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setVisionHistory(normalizeMonthScopedHistory(parsed));
+      if (Array.isArray(parsed)) setVisionHistory(parsed);
     }
   } catch {
     // ignore
@@ -739,29 +659,11 @@ useEffect(() => {
   if (!userId) return;
   try {
     const key = `rebuild60_vision_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(visionHistory).slice(0, 24)));
+    localStorage.setItem(key, JSON.stringify(visionHistory.slice(0, 24)));
   } catch {
     // ignore
   }
 }, [userId, visionHistory]);
-useEffect(() => {
-  const activeMonth = monthKey(dayDate);
-  const latestScore = scoreHistory
-    .filter((row) => row.monthKey === activeMonth)
-    .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
-  setScorecard(latestScore);
-
-  const latestAi = aiInsightHistory
-    .filter((row) => row.monthKey === activeMonth)
-    .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
-  setAiInsight(latestAi?.text ?? "");
-
-  const latestVision = visionHistory
-    .filter((row) => row.monthKey === activeMonth)
-    .sort((a, b) => b.ts.localeCompare(a.ts))[0] ?? null;
-  setVisionText(latestVision?.text ?? "");
-}, [dayDate, scoreHistory, aiInsightHistory, visionHistory]);
-
 
 const monthStats = useMemo(() => {
   const { startYMD, endYMD } = monthStartEnd(dayDate);
@@ -775,8 +677,13 @@ const monthStats = useMemo(() => {
     return { first: vals[0], last: vals[vals.length - 1], delta: vals[vals.length - 1] - vals[0] };
   };
 
-  const avg = (arr: any[], key: string) => {
-    const vals = arr
+  const qWeight = firstLast(monthDaily, "weight_lbs");
+  const qWaist = firstLast(monthDaily, "waist_in");
+  const mWeight = firstLast(monthMeas, "weight_lbs");
+  const mWaist = firstLast(monthMeas, "waist_in");
+
+  const avg = (key: string) => {
+    const vals = monthDaily
       .map((r) => r?.[key])
       .filter((v) => v != null && v !== "" && !Number.isNaN(Number(v)))
       .map((v) => Number(v));
@@ -784,44 +691,22 @@ const monthStats = useMemo(() => {
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   };
 
-  const signals = buildProgressSignals({
-    monthKey: monthKey(dayDate),
-    startYMD,
-    endYMD,
-    monthDaily,
-    monthNutrition,
-    monthZone2,
-    monthMeasurements: monthMeas,
-    monthPhotos: rows.filter((r) => r.taken_on >= startYMD && r.taken_on <= endYMD),
-    monthSessions,
-    monthExercises,
-    monthSets,
-    visionText,
-  });
-
   return {
     monthKey: monthKey(dayDate),
     startYMD,
     endYMD,
     quicklogDays: monthDaily.length,
     measDays: monthMeas.length,
-    qWeight: firstLast(monthDaily, "weight_lbs"),
-    qWaist: firstLast(monthDaily, "waist_in"),
-    mWeight: firstLast(monthMeas, "weight_lbs"),
-    mWaist: firstLast(monthMeas, "waist_in"),
-    avgSleep: avg(monthDaily, "sleep_hours"),
-    avgCalories: avg(monthNutrition, "calories"),
-    avgProtein: avg(monthNutrition, "protein_g"),
-    avgZone2: avg(monthZone2, "minutes"),
-    workoutsCompleted: signals.workoutsCompleted,
-    hardSets: signals.hardSets,
-    anchorDays: signals.anchorDays,
-    adherenceScore: signals.adherenceScore,
-    progressionHits: signals.progressionHits,
-    pushPullBalance: signals.pushPullBalance,
-    signals,
+    qWeight,
+    qWaist,
+    mWeight,
+    mWaist,
+    avgSleep: avg("sleep_hours"),
+    avgCalories: avg("calories"),
+    avgProtein: avg("protein_g"),
+    avgZone2: avg("zone2_minutes"),
   };
-}, [dayDate, monthDaily, monthNutrition, monthZone2, monthMeas, monthSessions, monthExercises, monthSets, rows, visionText]);
+}, [dayDate, monthDaily, monthMeas]);
 
 const previousScorecard = useMemo<Scorecard | null>(() => {
   if (!scorecard || scoreHistory.length === 0) return null;
@@ -2854,6 +2739,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
