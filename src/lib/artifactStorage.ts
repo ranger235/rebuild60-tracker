@@ -20,10 +20,7 @@ function safeParse(raw: string | null): unknown {
   }
 }
 
-function readEnvelopeItems<T>(
-  parsed: unknown,
-  expectedKind: ArtifactEnvelopeKind,
-): T[] | null {
+function readEnvelopeItems<T>(parsed: unknown, expectedKind: ArtifactEnvelopeKind): T[] | null {
   if (!isRecord(parsed)) return null;
   if (parsed.kind !== expectedKind) return null;
   if (!Array.isArray(parsed.items)) return null;
@@ -36,15 +33,13 @@ export function loadArtifactHistory<T>(opts: {
   normalize: (value: unknown) => T | null;
   limit?: number;
 }): T[] {
-  const parsed = safeParse(typeof localStorage === "undefined" ? null : localStorage.getItem(opts.key));
-  const legacyOrEnvelope = Array.isArray(parsed)
-    ? parsed
-    : readEnvelopeItems<unknown>(parsed, opts.kind);
-
-  if (!legacyOrEnvelope?.length) return [];
+  if (typeof localStorage === "undefined") return [];
+  const parsed = safeParse(localStorage.getItem(opts.key));
+  const source = Array.isArray(parsed) ? parsed : readEnvelopeItems<unknown>(parsed, opts.kind);
+  if (!source || source.length === 0) return [];
 
   const normalized: T[] = [];
-  for (const item of legacyOrEnvelope) {
+  for (const item of source) {
     const next = opts.normalize(item);
     if (next) normalized.push(next);
   }
@@ -59,12 +54,13 @@ export function saveArtifactHistory<T>(opts: {
   limit?: number;
 }): void {
   if (typeof localStorage === "undefined") return;
-  const capped = typeof opts.limit === "number" ? opts.items.slice(0, opts.limit) : opts.items;
+  const items = typeof opts.limit === "number" ? opts.items.slice(0, opts.limit) : opts.items;
   const envelope: ArtifactEnvelope<T> = {
     version: 1,
     kind: opts.kind,
     updatedAt: new Date().toISOString(),
-    items: capped,
+    items,
   };
   localStorage.setItem(opts.key, JSON.stringify(envelope));
 }
+
