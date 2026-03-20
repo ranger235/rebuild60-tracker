@@ -35,133 +35,6 @@ type MeasurementRow = {
   created_at: string;
 };
 
-type Scorecard = {
-  monthKey: string;
-  ts: string;
-  conditioning: number;
-  muscularity: number;
-  symmetry: number;
-  waist_control: number;
-  consistency: number;
-  momentum: "up" | "down" | "flat";
-  notes?: string;
-};
-
-type AiInsightHistoryEntry = {
-  id: string;
-  ts: string;
-  text: string;
-};
-
-type VisionHistoryEntry = {
-  id: string;
-  ts: string;
-  pose: Pose;
-  scope: string;
-  text: string;
-};
-
-function normalizeIsoString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const next = value.trim();
-  return next ? next : null;
-}
-
-function normalizeScore(value: unknown): number {
-  const next = Number(value);
-  if (!Number.isFinite(next)) return 0;
-  return Number(next.toFixed(1));
-}
-
-function normalizeScorecard(value: unknown): Scorecard | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  const monthKey = normalizeIsoString(row.monthKey);
-  const ts = normalizeIsoString(row.ts);
-  if (!monthKey || !ts) return null;
-
-  const momentum = row.momentum === "up" || row.momentum === "down" || row.momentum === "flat" ? row.momentum : "flat";
-  const notes = normalizeIsoString(row.notes);
-
-  return {
-    monthKey,
-    ts,
-    conditioning: normalizeScore(row.conditioning),
-    muscularity: normalizeScore(row.muscularity),
-    symmetry: normalizeScore(row.symmetry),
-    waist_control: normalizeScore(row.waist_control),
-    consistency: normalizeScore(row.consistency),
-    momentum,
-    notes: notes ?? undefined,
-  };
-}
-
-function scorecardSignature(entry: Scorecard): string {
-  return [
-    entry.monthKey,
-    entry.conditioning,
-    entry.muscularity,
-    entry.symmetry,
-    entry.waist_control,
-    entry.consistency,
-    entry.momentum,
-    entry.notes ?? "",
-  ].join("|");
-}
-
-function normalizeScorecardHistory(value: unknown): Scorecard[] {
-  const entries = Array.isArray(value) ? value.map(normalizeScorecard).filter((entry): entry is Scorecard => !!entry) : [];
-  const deduped = new Map<string, Scorecard>();
-  for (const entry of entries.sort((a, b) => b.ts.localeCompare(a.ts))) {
-    const signature = scorecardSignature(entry);
-    if (!deduped.has(signature)) deduped.set(signature, entry);
-  }
-  return Array.from(deduped.values()).sort((a, b) => b.ts.localeCompare(a.ts));
-}
-
-function normalizeAiInsightHistoryEntry(value: unknown): AiInsightHistoryEntry | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  const text = normalizeIsoString(row.text);
-  if (!text) return null;
-  const ts = normalizeIsoString(row.ts) ?? new Date(0).toISOString();
-  const id = normalizeIsoString(row.id) ?? `${ts}-${text.slice(0, 24)}`;
-  return { id, ts, text };
-}
-
-function normalizeAiInsightHistory(value: unknown): AiInsightHistoryEntry[] {
-  const entries = Array.isArray(value) ? value.map(normalizeAiInsightHistoryEntry).filter((entry): entry is AiInsightHistoryEntry => !!entry) : [];
-  const deduped = new Map<string, AiInsightHistoryEntry>();
-  for (const entry of entries.sort((a, b) => b.ts.localeCompare(a.ts))) {
-    const signature = entry.text.trim();
-    if (!deduped.has(signature)) deduped.set(signature, entry);
-  }
-  return Array.from(deduped.values()).sort((a, b) => b.ts.localeCompare(a.ts));
-}
-
-function normalizeVisionHistoryEntry(value: unknown): VisionHistoryEntry | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const row = value as Record<string, unknown>;
-  const ts = normalizeIsoString(row.ts);
-  const text = normalizeIsoString(row.text);
-  if (!ts || !text) return null;
-  const pose = row.pose === "front" || row.pose === "quarter" || row.pose === "side" || row.pose === "back" || row.pose === "other" ? row.pose : "other";
-  const scope = normalizeIsoString(row.scope) ?? "month";
-  const id = normalizeIsoString(row.id) ?? `${ts}-${pose}-${scope}`;
-  return { id, ts, pose, scope, text };
-}
-
-function normalizeVisionHistory(value: unknown): VisionHistoryEntry[] {
-  const entries = Array.isArray(value) ? value.map(normalizeVisionHistoryEntry).filter((entry): entry is VisionHistoryEntry => !!entry) : [];
-  const deduped = new Map<string, VisionHistoryEntry>();
-  for (const entry of entries.sort((a, b) => b.ts.localeCompare(a.ts))) {
-    const signature = [entry.pose, entry.scope, entry.text.trim()].join("|");
-    if (!deduped.has(signature)) deduped.set(signature, entry);
-  }
-  return Array.from(deduped.values()).sort((a, b) => b.ts.localeCompare(a.ts));
-}
-
-
 const CORE_POSES: Pose[] = ["front", "side", "back"]
 const BONUS_POSES: Pose[] = ["quarter"]
 const ALL_POSES: Pose[] = ["front", "quarter", "side", "back", "other"];
@@ -254,6 +127,136 @@ function bannerStyle(kind: "info" | "warn") {
     padding: 10,
     borderRadius: 12
   } as const;
+}
+
+type Scorecard = {
+  monthKey: string;
+  ts: string;
+  conditioning: number;
+  muscularity: number;
+  symmetry: number;
+  waist_control: number;
+  consistency: number;
+  momentum: "up" | "down" | "flat";
+  notes?: string;
+};
+
+type AiInsightHistoryEntry = {
+  id: string;
+  ts: string;
+  text: string;
+};
+
+type VisionHistoryEntry = {
+  id: string;
+  ts: string;
+  pose: Pose;
+  scope: string;
+  text: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function cleanString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const next = value.trim();
+  return next ? next : null;
+}
+
+function cleanNumber(value: unknown): number | null {
+  const next = Number(value);
+  return Number.isFinite(next) ? Number(next.toFixed(1)) : null;
+}
+
+function normalizeScorecardEntry(value: unknown): Scorecard | null {
+  if (!isRecord(value)) return null;
+  const monthKey = cleanString(value.monthKey);
+  const ts = cleanString(value.ts);
+  if (!monthKey || !ts) return null;
+
+  return {
+    monthKey,
+    ts,
+    conditioning: cleanNumber(value.conditioning) ?? 0,
+    muscularity: cleanNumber(value.muscularity) ?? 0,
+    symmetry: cleanNumber(value.symmetry) ?? 0,
+    waist_control: cleanNumber(value.waist_control) ?? 0,
+    consistency: cleanNumber(value.consistency) ?? 0,
+    momentum: value.momentum === "up" || value.momentum === "down" || value.momentum === "flat" ? value.momentum : "flat",
+    notes: cleanString(value.notes) ?? undefined,
+  };
+}
+
+function scorecardSignature(entry: Scorecard): string {
+  return [
+    entry.monthKey,
+    entry.conditioning,
+    entry.muscularity,
+    entry.symmetry,
+    entry.waist_control,
+    entry.consistency,
+    entry.momentum,
+    entry.notes ?? "",
+  ].join("|");
+}
+
+function normalizeScorecardHistory(entries: Scorecard[]): Scorecard[] {
+  const seen = new Set<string>();
+  const deduped: Scorecard[] = [];
+  for (const entry of [...entries].sort((a, b) => b.ts.localeCompare(a.ts))) {
+    const sig = scorecardSignature(entry);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    deduped.push(entry);
+  }
+  return deduped.slice(0, 24);
+}
+
+function normalizeAiHistoryEntry(value: unknown): AiInsightHistoryEntry | null {
+  if (!isRecord(value)) return null;
+  const id = cleanString(value.id);
+  const ts = cleanString(value.ts);
+  const text = cleanString(value.text);
+  if (!id || !ts || !text) return null;
+  return { id, ts, text };
+}
+
+function normalizeAiHistory(entries: AiInsightHistoryEntry[]): AiInsightHistoryEntry[] {
+  const seen = new Set<string>();
+  const deduped: AiInsightHistoryEntry[] = [];
+  for (const entry of [...entries].sort((a, b) => b.ts.localeCompare(a.ts))) {
+    const sig = `${entry.text}|${entry.ts}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    deduped.push(entry);
+  }
+  return deduped.slice(0, 24);
+}
+
+function normalizeVisionHistoryEntry(value: unknown): VisionHistoryEntry | null {
+  if (!isRecord(value)) return null;
+  const id = cleanString(value.id);
+  const ts = cleanString(value.ts);
+  const text = cleanString(value.text);
+  const scope = cleanString(value.scope);
+  const pose = value.pose;
+  if (!id || !ts || !text || !scope) return null;
+  if (pose !== "front" && pose !== "quarter" && pose !== "side" && pose !== "back" && pose !== "other") return null;
+  return { id, ts, pose, scope, text };
+}
+
+function normalizeVisionHistory(entries: VisionHistoryEntry[]): VisionHistoryEntry[] {
+  const seen = new Set<string>();
+  const deduped: VisionHistoryEntry[] = [];
+  for (const entry of [...entries].sort((a, b) => b.ts.localeCompare(a.ts))) {
+    const sig = `${entry.pose}|${entry.scope}|${entry.text}|${entry.ts}`;
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    deduped.push(entry);
+  }
+  return deduped.slice(0, 24);
 }
 
 function ProgressSection({
@@ -659,6 +662,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [aiShowHistory, setAiShowHistory] = useState<boolean>(false);
 
   // Physique scorecard (monthly)
+
   const [scoreBusy, setScoreBusy] = useState(false);
   const [scorecard, setScorecard] = useState<Scorecard | null>(null);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
@@ -681,6 +685,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [visionAppendMode, setVisionAppendMode] = useState<boolean>(false);
   const [visionShowHistory, setVisionShowHistory] = useState<boolean>(false);
   const [visionHistory, setVisionHistory] = useState<VisionHistoryEntry[]>([]);
+  const [progressArtifactsHydrated, setProgressArtifactsHydrated] = useState(false);
 
 function monthStartEnd(ymd: string) {
   const [y, m] = ymd.split("-").map(Number);
@@ -725,48 +730,61 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId, dayDate]);
 
-// Load/save Progress artifact histories (local only)
+// Load/save Progress artifact histories (local only, with legacy normalization)
 useEffect(() => {
-  if (!userId) return;
+  if (!userId) {
+    setScoreHistory([]);
+    setAiInsightHistory([]);
+    setVisionHistory([]);
+    setProgressArtifactsHydrated(false);
+    return;
+  }
+
   try {
-    setScoreHistory(
-      normalizeScorecardHistory(
-        loadArtifactHistory({
-          key: `rebuild60_scorecards_${userId}`,
-          kind: "progress_scorecards",
-          normalize: normalizeScorecard,
-          limit: 24,
-        }),
-      ),
+    const nextScoreHistory = normalizeScorecardHistory(
+      loadArtifactHistory<Scorecard>({
+        key: `rebuild60_scorecards_${userId}`,
+        kind: "progress_scorecards",
+        normalize: normalizeScorecardEntry,
+        limit: 24,
+      })
     );
-    setAiInsightHistory(
-      normalizeAiInsightHistory(
-        loadArtifactHistory({
-          key: `rebuild60_progress_ai_${userId}`,
-          kind: "progress_ai_history",
-          normalize: normalizeAiInsightHistoryEntry,
-          limit: 12,
-        }),
-      ),
+    const nextAiHistory = normalizeAiHistory(
+      loadArtifactHistory<AiInsightHistoryEntry>({
+        key: `rebuild60_ai_${userId}`,
+        kind: "progress_ai_history",
+        normalize: normalizeAiHistoryEntry,
+        limit: 24,
+      })
     );
-    setVisionHistory(
-      normalizeVisionHistory(
-        loadArtifactHistory({
-          key: `rebuild60_vision_${userId}`,
-          kind: "progress_vision_history",
-          normalize: normalizeVisionHistoryEntry,
-          limit: 24,
-        }),
-      ),
+    const nextVisionHistory = normalizeVisionHistory(
+      loadArtifactHistory<VisionHistoryEntry>({
+        key: `rebuild60_vision_${userId}`,
+        kind: "progress_vision_history",
+        normalize: normalizeVisionHistoryEntry,
+        limit: 24,
+      })
     );
+
+    setScoreHistory(nextScoreHistory);
+    setAiInsightHistory(nextAiHistory);
+    setVisionHistory(nextVisionHistory);
+    setScorecard((prev) => {
+      if (prev) return prev;
+      return nextScoreHistory[0] ?? null;
+    });
+    setProgressArtifactsHydrated(true);
   } catch {
-    // ignore
+    setScoreHistory([]);
+    setAiInsightHistory([]);
+    setVisionHistory([]);
+    setProgressArtifactsHydrated(true);
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId]);
 
 useEffect(() => {
-  if (!userId) return;
+  if (!userId || !progressArtifactsHydrated) return;
   try {
     saveArtifactHistory({
       key: `rebuild60_scorecards_${userId}`,
@@ -777,24 +795,24 @@ useEffect(() => {
   } catch {
     // ignore
   }
-}, [userId, scoreHistory]);
+}, [userId, progressArtifactsHydrated, scoreHistory]);
 
 useEffect(() => {
-  if (!userId) return;
+  if (!userId || !progressArtifactsHydrated) return;
   try {
     saveArtifactHistory({
-      key: `rebuild60_progress_ai_${userId}`,
+      key: `rebuild60_ai_${userId}`,
       kind: "progress_ai_history",
-      items: normalizeAiInsightHistory(aiInsightHistory),
-      limit: 12,
+      items: normalizeAiHistory(aiInsightHistory),
+      limit: 24,
     });
   } catch {
     // ignore
   }
-}, [userId, aiInsightHistory]);
+}, [userId, progressArtifactsHydrated, aiInsightHistory]);
 
 useEffect(() => {
-  if (!userId) return;
+  if (!userId || !progressArtifactsHydrated) return;
   try {
     saveArtifactHistory({
       key: `rebuild60_vision_${userId}`,
@@ -805,7 +823,7 @@ useEffect(() => {
   } catch {
     // ignore
   }
-}, [userId, visionHistory]);
+}, [userId, progressArtifactsHydrated, visionHistory]);
 
 const monthStats = useMemo(() => {
   const { startYMD, endYMD } = monthStartEnd(dayDate);
@@ -976,7 +994,7 @@ async function generateAiPhysiqueInsight() {
 
     // Always keep a small history of runs.
     if (nextText) {
-      setAiInsightHistory((prev) => [{ id, ts, text: nextText }, ...prev].slice(0, 12));
+      setAiInsightHistory((prev) => normalizeAiHistory([{ id, ts, text: nextText }, ...prev]));
     }
 
     // Prevent accidental duplicates (double-click, rerender, etc.)
@@ -1124,7 +1142,7 @@ async function runVisionPhysiqueAnalysis() {
     const id = `${ts}-${Math.random().toString(16).slice(2)}`;
 
     // Keep a small local history
-    setVisionHistory((prev) => [{ id, ts, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
+    setVisionHistory((prev) => normalizeVisionHistory([{ id, ts, pose, scope: visionScope, text: nextText }, ...prev]));
 
     setVisionText((prev) => {
       const prevTrim = (prev || "").trim();
@@ -2881,6 +2899,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
