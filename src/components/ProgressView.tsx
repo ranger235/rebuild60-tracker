@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
 import { localdb } from "../localdb";
 
@@ -1784,7 +1784,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                           const value = Number(scorecard[metric.key] ?? 0);
                           const delta = scorecardDeltaSummary?.deltas.find((d) => d.key === metric.key)?.delta ?? null;
                           return (
-                            <Fragment key={metric.key}>
+                            <React.Fragment key={metric.key}>
                               <div style={{ opacity: 0.9 }}>{metric.label}</div>
                               <div><strong>{value.toFixed(1)}</strong></div>
                               {scorecardDeltaSummary ? (
@@ -1806,7 +1806,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                                   </span>
                                 </div>
                               ) : null}
-                            </Fragment>
+                            </React.Fragment>
                           );
                         })}
                       </div>
@@ -2739,6 +2739,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
