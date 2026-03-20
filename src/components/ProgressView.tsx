@@ -623,8 +623,9 @@ useEffect(() => {
       setMonthZone2(zone2 ?? []);
 
       const sessions = await localdb.localSessions
-        .where("[user_id+day_date]")
-        .between([userId, startYMD], [userId, endYMD], true, true)
+        .where("user_id")
+        .equals(userId)
+        .and((session) => session.day_date >= startYMD && session.day_date <= endYMD)
         .sortBy("day_date");
       setMonthSessions(sessions ?? []);
 
@@ -2797,6 +2798,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
