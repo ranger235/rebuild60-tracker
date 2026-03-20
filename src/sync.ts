@@ -36,7 +36,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       return;
 
     case "insert_zone2":
-      await must(supabase.from("zone2_sessions").upsert(payload, { onConflict: "user_id,day_date" }));
+      await must(supabase.from("zone2_sessions").insert(payload));
       return;
 
     case "create_workout":
@@ -234,6 +234,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
