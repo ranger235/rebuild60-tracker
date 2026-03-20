@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabase";
 import { localdb } from "../localdb";
+import { buildProgressSignals } from "../lib/progressSignals";
 
 type Pose = "front" | "quarter" | "side" | "back" | "other";
 
@@ -524,6 +525,11 @@ function monthKey(ymd: string) {
 const [monthReportBusy, setMonthReportBusy] = useState(false);
 const [monthDaily, setMonthDaily] = useState<any[]>([]);
 const [monthMeas, setMonthMeas] = useState<MeasurementRow[]>([]);
+const [monthNutrition, setMonthNutrition] = useState<any[]>([]);
+const [monthZone2, setMonthZone2] = useState<any[]>([]);
+const [monthSessions, setMonthSessions] = useState<any[]>([]);
+const [monthExercises, setMonthExercises] = useState<any[]>([]);
+const [monthSets, setMonthSets] = useState<any[]>([]);
 const [aiBusy, setAiBusy] = useState(false);
   const [aiInsight, setAiInsight] = useState<string>("");
   const [aiInsightHistory, setAiInsightHistory] = useState<
@@ -603,6 +609,36 @@ useEffect(() => {
 
       if (merr && (merr as any).code !== "PGRST116") throw merr;
       setMonthMeas((mdata as any) ?? []);
+
+      const nutrition = await localdb.nutritionDaily
+        .where("[user_id+day_date]")
+        .between([userId, startYMD], [userId, endYMD], true, true)
+        .sortBy("day_date");
+      setMonthNutrition(nutrition ?? []);
+
+      const zone2 = await localdb.zone2Daily
+        .where("[user_id+day_date]")
+        .between([userId, startYMD], [userId, endYMD], true, true)
+        .sortBy("day_date");
+      setMonthZone2(zone2 ?? []);
+
+      const sessions = await localdb.localSessions
+        .where("[user_id+day_date]")
+        .between([userId, startYMD], [userId, endYMD], true, true)
+        .sortBy("day_date");
+      setMonthSessions(sessions ?? []);
+
+      const sessionIds = (sessions ?? []).map((s: any) => s.id).filter(Boolean);
+      const exercises = sessionIds.length
+        ? await localdb.localExercises.where("session_id").anyOf(sessionIds).toArray()
+        : [];
+      setMonthExercises(exercises ?? []);
+
+      const exerciseIds = (exercises ?? []).map((ex: any) => ex.id).filter(Boolean);
+      const sets = exerciseIds.length
+        ? await localdb.localSets.where("exercise_id").anyOf(exerciseIds).toArray()
+        : [];
+      setMonthSets(sets ?? []);
     } catch (e: any) {
       // Keep the rest of the page usable even if report fetch fails
       console.error(e);
@@ -708,6 +744,26 @@ const monthStats = useMemo(() => {
   };
 }, [dayDate, monthDaily, monthMeas]);
 
+const progressSignals = useMemo(() => {
+  const { startYMD, endYMD } = monthStartEnd(dayDate);
+  const monthPhotos = rows.filter((row) => row.taken_on >= startYMD && row.taken_on <= endYMD);
+
+  return buildProgressSignals({
+    monthKey: monthKey(dayDate),
+    startYMD,
+    endYMD,
+    monthDaily,
+    monthNutrition,
+    monthZone2,
+    monthMeasurements: monthMeas,
+    monthPhotos,
+    monthSessions,
+    monthExercises,
+    monthSets,
+    visionText: visionText?.trim() || null,
+  });
+}, [dayDate, monthDaily, monthNutrition, monthZone2, monthMeas, rows, monthSessions, monthExercises, monthSets, visionText]);
+
 const previousScorecard = useMemo<Scorecard | null>(() => {
   if (!scorecard || scoreHistory.length === 0) return null;
   const byNewest = [...scoreHistory].sort((a, b) => b.ts.localeCompare(a.ts));
@@ -791,6 +847,8 @@ async function buildInsightPayload() {
     endYMD,
     stats: {
       ...monthStats,
+      signals: progressSignals,
+      scorecard_basis_signals: progressSignals,
       scorecard: scorecard
         ? {
             conditioning: scorecard.conditioning,
@@ -1784,7 +1842,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                           const value = Number(scorecard[metric.key] ?? 0);
                           const delta = scorecardDeltaSummary?.deltas.find((d) => d.key === metric.key)?.delta ?? null;
                           return (
-                            <React.Fragment key={metric.key}>
+                            <Fragment key={metric.key}>
                               <div style={{ opacity: 0.9 }}>{metric.label}</div>
                               <div><strong>{value.toFixed(1)}</strong></div>
                               {scorecardDeltaSummary ? (
@@ -1806,7 +1864,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
                                   </span>
                                 </div>
                               ) : null}
-                            </React.Fragment>
+                            </Fragment>
                           );
                         })}
                       </div>
@@ -2739,6 +2797,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
