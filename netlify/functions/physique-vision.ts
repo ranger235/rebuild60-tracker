@@ -5,15 +5,9 @@ type ReqBody = {
   focus?: "balanced" | "lower" | "upper";
   labelA?: string;
   labelB?: string;
-  imageA: string; // signed URL or data URL
-  imageB: string; // signed URL or data URL
+  imageA: string; // signed URL
+  imageB: string; // signed URL
 };
-
-function isAcceptedImageInput(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  return trimmed.startsWith("data:image/") || /^https?:\/\//i.test(trimmed);
-}
 
 function extractOutputText(data: any): string {
   if (!data) return "";
@@ -42,15 +36,9 @@ export const handler: Handler = async (event) => {
     }
 
     const body: ReqBody = event.body ? JSON.parse(event.body) : ({} as any);
-    if (!isAcceptedImageInput(body?.imageA) || !isAcceptedImageInput(body?.imageB)) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ message: "Missing or invalid imageA/imageB payload" }),
-      };
+    if (!body?.imageA || !body?.imageB) {
+      return { statusCode: 400, body: JSON.stringify({ message: "Missing imageA or imageB" }) };
     }
-
-    const imageA = body.imageA.trim();
-    const imageB = body.imageB.trim();
 
     const pose = (body.pose ?? "pose").toUpperCase();
     const focus = (body.focus ?? "balanced") as ReqBody["focus"];
@@ -127,9 +115,9 @@ export const handler: Handler = async (event) => {
             content: [
               { type: "input_text", text: userText },
               { type: "input_text", text: `IMAGE: ${labelA}` },
-              { type: "input_image", image_url: imageA },
+              { type: "input_image", image_url: body.imageA },
               { type: "input_text", text: `IMAGE: ${labelB}` },
-              { type: "input_image", image_url: imageB },
+              { type: "input_image", image_url: body.imageB },
             ],
           },
         ],
@@ -155,6 +143,8 @@ export const handler: Handler = async (event) => {
     return { statusCode: 500, body: JSON.stringify({ message: e?.message ?? String(e) }) };
   }
 };
+
+
 
 
 
