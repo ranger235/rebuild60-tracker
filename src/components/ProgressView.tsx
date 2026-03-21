@@ -57,22 +57,6 @@ function addDays(ymd: string, delta: number): string {
   return dateToYmd(dt);
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result;
-      if (typeof result === "string" && result.startsWith("data:")) {
-        resolve(result);
-        return;
-      }
-      reject(new Error("Failed to convert image blob to data URL."));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image blob."));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function getWeekWindowForDate(day: string, checkinDow: number): { weekStart: string; weekEnd: string } {
   // Define a week as: [Mon..Sun] by default if checkinDow=0 (Sunday).
   // More generally: weekEnd is the NEXT check-in DOW on/after 'day'; weekStart = weekEnd - 6.
@@ -958,17 +942,22 @@ async function runVisionPhysiqueAnalysis() {
 
   setVisionBusy(true);
   try {
-    const { data: downloadA, error: downloadAError } = await supabase.storage.from("progress-photos").download(a.storage_path);
-    if (downloadAError) throw downloadAError;
-    if (!downloadA) throw new Error(`Could not load photo data for ${labelA}.`);
+    // Ensure we have signed URLs
+    // (Don't rely on React state here; fetch signed URLs directly to avoid race conditions.)
+    const { data: sa, error: sea } = await supabase.storage.from("progress-photos").createSignedUrl(a.storage_path, 60 * 60);
+    if (sea) throw sea;
+    const { data: sb, error: seb } = await supabase.storage.from("progress-photos").createSignedUrl(b.storage_path, 60 * 60);
+    if (seb) throw seb;
+    const imageA = sa?.signedUrl;
+    const imageB = sb?.signedUrl;
+    if (!imageA || !imageB) throw new Error("Could not load signed photo URLs.");
 
-    const { data: downloadB, error: downloadBError } = await supabase.storage.from("progress-photos").download(b.storage_path);
-    if (downloadBError) throw downloadBError;
-    if (!downloadB) throw new Error(`Could not load photo data for ${labelB}.`);
-
-    const imageA = await blobToDataUrl(downloadA);
-    const imageB = await blobToDataUrl(downloadB);
-    if (!imageA || !imageB) throw new Error("Could not prepare photo payload for Vision analysis.");
+    // still populate thumbs cache for the UI
+    try {
+      setThumbs((p) => ({ ...p, [a!.id]: imageA!, [b!.id]: imageB! }));
+    } catch {
+      // ignore
+    }
 
     const resp = await fetch("/.netlify/functions/physique-vision", {
       method: "POST",
@@ -998,11 +987,7 @@ async function runVisionPhysiqueAnalysis() {
     setVisionText((prev) => {
       const prevTrim = (prev || "").trim();
       if (prevTrim === nextText) return prev;
-      if (visionAppendMode) return prev ? `${prev}
-
----
-
-${nextText}` : nextText;
+      if (visionAppendMode) return prev ? `${prev}\n\n---\n\n${nextText}` : nextText;
       return nextText;
     });
   } catch (e: any) {
@@ -2754,6 +2739,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
