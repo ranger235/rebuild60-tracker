@@ -785,12 +785,77 @@ async function buildInsightPayload() {
     if (h?.last && h.last.id !== h.first?.id) await addImg(`${p.toUpperCase()} LAST (${h.last.taken_on})`, h.last);
   }
 
+  const nutritionRows = await localdb.nutritionDaily
+    .where("[user_id+day_date]")
+    .between([userId ?? "", startYMD], [userId ?? "", endYMD], true, true)
+    .sortBy("day_date");
+
+  const zone2Rows = await localdb.zone2Daily
+    .where("[user_id+day_date]")
+    .between([userId ?? "", startYMD], [userId ?? "", endYMD], true, true)
+    .sortBy("day_date");
+
+  const sessionRows = await localdb.localSessions
+    .where("user_id")
+    .equals(userId ?? "")
+    .filter((s) => s.day_date >= startYMD && s.day_date <= endYMD && !s.exclude_from_analytics)
+    .toArray();
+
+  const sessionIds = sessionRows.map((s) => s.id);
+  const exerciseRows = sessionIds.length
+    ? await localdb.localExercises.where("session_id").anyOf(sessionIds).toArray()
+    : [];
+  const exerciseIds = exerciseRows.map((e) => e.id);
+  const setRows = exerciseIds.length
+    ? await localdb.localSets.where("exercise_id").anyOf(exerciseIds).toArray()
+    : [];
+
+  const avgFromRows = (rows: any[], key: string) => {
+    const vals = rows
+      .map((r) => r?.[key])
+      .filter((v) => v != null && v !== "" && !Number.isNaN(Number(v)))
+      .map((v) => Number(v));
+    if (!vals.length) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+
+  const monthAnchorRows = rows.filter(
+    (r) => !!r.is_anchor && CORE_POSES.includes(r.pose) && r.taken_on >= startYMD && r.taken_on <= endYMD
+  );
+  const anchorDays = new Set(monthAnchorRows.map((r) => r.taken_on)).size;
+  const anchorPoseCoverage = new Set(monthAnchorRows.map((r) => r.pose)).size;
+  const scorecardSignals = {
+    quicklogDays: monthStats.quicklogDays,
+    measurementDays: monthStats.measDays,
+    anchorDays,
+    anchorCompleteness: Math.max(0, Math.min(1, anchorPoseCoverage / CORE_POSES.length)),
+    weightDelta: monthStats.mWeight.delta ?? monthStats.qWeight.delta ?? null,
+    waistDelta: monthStats.mWaist.delta ?? monthStats.qWaist.delta ?? null,
+    avgSleep: monthStats.avgSleep,
+    avgProtein: avgFromRows(nutritionRows, "protein_g"),
+    avgZone2Minutes: avgFromRows(zone2Rows, "minutes"),
+    workoutsCompleted: sessionRows.length,
+    expectedWorkouts: 12,
+    uniqueTrainingDays: new Set(sessionRows.map((s) => s.day_date)).size,
+    totalExercises: exerciseRows.length,
+    totalSets: setRows.length,
+    hardSets: setRows.filter((s) => !s.is_warmup).length,
+    adherenceScore: Math.max(0, Math.min(1, sessionRows.length / 12)),
+    momentumSignal:
+      (monthStats.mWaist.delta != null ? -monthStats.mWaist.delta * 0.12 : 0) +
+      (monthStats.mWeight.delta != null ? -monthStats.mWeight.delta * 0.03 : 0) +
+      (sessionRows.length >= 12 ? 0.25 : sessionRows.length >= 8 ? 0.12 : 0),
+    hasEnoughData: monthStats.quicklogDays > 0 || monthStats.measDays > 0 || anchorDays > 0 || sessionRows.length > 0,
+  };
+
   return {
     month: key,
     startYMD,
     endYMD,
     stats: {
       ...monthStats,
+      scorecard_basis_signals: scorecardSignals,
+      signals: scorecardSignals,
       scorecard: scorecard
         ? {
             conditioning: scorecard.conditioning,
@@ -2739,6 +2804,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
