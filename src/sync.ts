@@ -157,10 +157,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
 export async function runSyncPass(
   setStatus: (s: string) => void,
   onAfterSync?: () => Promise<void> | void
-) {
+): Promise<{ completed: boolean; failed: number; hadQueuedOps: boolean }> {
   if (!navigator.onLine) {
-    setStatus("Offline/retrying");
-    return;
+    setStatus("Offline (local saves only)");
+    return { completed: false, failed: 0, hadQueuedOps: false };
   }
 
   try {
@@ -169,6 +169,7 @@ export async function runSyncPass(
     const items = await localdb.pendingOps.orderBy("createdAt").toArray();
 
     if (items.length > 0) {
+      setStatus("Local changes pending");
       let failed = 0;
 
       for (const item of items) {
@@ -196,8 +197,8 @@ export async function runSyncPass(
         await onAfterSync();
       }
 
-      setStatus(failed === 0 ? "Synced" : `Synced (with ${failed} retrying)`);
-      return;
+      setStatus(failed === 0 ? "Synced" : `Sync issues (${failed} retrying)`);
+      return { completed: true, failed, hadQueuedOps: true };
     }
 
     const auth = await supabase.auth.getUser();
@@ -209,21 +210,25 @@ export async function runSyncPass(
       await onAfterSync();
     }
     setStatus("Synced");
+    return { completed: true, failed: 0, hadQueuedOps: false };
   } catch (e: any) {
     console.error(e);
-    setStatus("Offline/retrying");
+    setStatus(navigator.onLine ? "Sync issues (retrying)" : "Offline (local saves only)");
+    return { completed: false, failed: 1, hadQueuedOps: false };
   }
 }
 
 export function startAutoSync(
   setStatus: (s: string) => void,
-  onAfterSync?: () => Promise<void> | void
+  onAfterSync?: () => Promise<void> | void,
+  onResult?: (result: { completed: boolean; failed: number; hadQueuedOps: boolean }) => void
 ) {
   let stopped = false;
 
   async function tick() {
     if (stopped) return;
-    await runSyncPass(setStatus, onAfterSync);
+    const result = await runSyncPass(setStatus, onAfterSync);
+    if (onResult) onResult(result);
   }
 
   tick();
@@ -234,6 +239,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
