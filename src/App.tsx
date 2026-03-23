@@ -980,18 +980,25 @@ useEffect(() => {
     if (!userId) return;
     const stop = startAutoSync(setStatus, async () => {
       await refreshLocalUiFromDexie();
-      setLastSyncedAt(new Date().toLocaleTimeString());
+    }, (result) => {
+      if (result.completed && result.failed === 0) {
+        setLastSyncedAt(new Date().toLocaleTimeString());
+      }
     });
     return stop;
-  }, [userId, selectedDayDate, openSessionId, tab]);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
-    void runSyncPass(setStatus, async () => {
-      await refreshLocalUiFromDexie();
-      setLastSyncedAt(new Date().toLocaleTimeString());
-    });
-  }, [userId, selectedDayDate]);
+    void (async () => {
+      const result = await runSyncPass(setStatus, async () => {
+        await refreshLocalUiFromDexie();
+      });
+      if (result.completed && result.failed === 0) {
+        setLastSyncedAt(new Date().toLocaleTimeString());
+      }
+    })();
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -3246,10 +3253,12 @@ async function refreshLocalUiFromDexie() {
 }
 
 async function syncNow() {
-  await runSyncPass(setStatus, async () => {
+  const result = await runSyncPass(setStatus, async () => {
     await refreshLocalUiFromDexie();
-    setLastSyncedAt(new Date().toLocaleTimeString());
   });
+  if (result.completed && result.failed === 0) {
+    setLastSyncedAt(new Date().toLocaleTimeString());
+  }
 }
 
   // -----------------------------
@@ -3618,7 +3627,7 @@ async function syncNow() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <div>
-            <b>Status:</b> {navigator.onLine ? status : "Offline (logging still works)"}
+            <b>Status:</b> {navigator.onLine ? status : "Offline (local saves only)"}
             {lastSyncedAt ? <span style={{ marginLeft: 8, opacity: 0.8 }}>Last synced: {lastSyncedAt}</span> : null}
           </div>
           <button type="button" onClick={() => void syncNow()} disabled={!userId}>
@@ -3812,6 +3821,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
