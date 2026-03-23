@@ -171,7 +171,6 @@ const CANONICAL_ALIAS_KEYS: Record<string, string> = {
   bulgariansplitsquat: "split_squat",
   legpress: "leg_press",
   hacksquat: "hack_squat",
-  legrxtension: "leg_extension",
   legextension: "leg_extension",
   hamstringcurl: "hamstring_curl",
   legcurl: "hamstring_curl",
@@ -197,7 +196,6 @@ const CANONICAL_ALIAS_KEYS: Record<string, string> = {
   curl: "curl",
   curls: "curl",
   bicepcurl: "curl",
-  preachersurl: "preacher_curl",
   preachercurl: "preacher_curl",
   hammercurl: "hammer_curl",
   tricepspressdown: "triceps_pressdown",
@@ -1566,8 +1564,6 @@ async function saveQuickLog() {
 
     await forgetDeletedSessionId(id);
 
-    await forgetDeletedSessionId(id);
-
     await localdb.localSessions.put(local);
 
     await enqueue("create_workout", {
@@ -2402,16 +2398,16 @@ function effectiveLoadForTopSet(s: SetLite): number {
 function pickTopSet(setsAll: SetLite[]): SetLite | null {
     let best: SetLite | null = null;
     for (const s of setsAll) {
-      const w = s.weight_lbs ?? -1;
-      const r = s.reps ?? -1;
+      const load = effectiveLoadForTopSet(s);
+      const reps = s.reps ?? -1;
       if (!best) {
         best = s;
         continue;
       }
-      const bw = best.weight_lbs ?? -1;
-      const br = best.reps ?? -1;
-      if (w > bw) best = s;
-      else if (w === bw && r > br) best = s;
+      const bestLoad = effectiveLoadForTopSet(best);
+      const bestReps = best.reps ?? -1;
+      if (load > bestLoad) best = s;
+      else if (load == bestLoad && reps > bestReps) best = s;
     }
     return best;
   }
@@ -3721,6 +3717,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
