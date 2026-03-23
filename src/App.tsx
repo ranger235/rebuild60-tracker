@@ -781,6 +781,7 @@ export default function App() {
   // Workout: local-first state
   const [sessions, setSessions] = useState<LocalWorkoutSession[]>([]);
   const [openSessionId, setOpenSessionId] = useState<string | null>(null);
+  const createSessionInFlightRef = useRef(false);
   const [exercises, setExercises] = useState<LocalWorkoutExercise[]>([]);
   const [sets, setSets] = useState<LocalWorkoutSet[]>([]);
 
@@ -1082,6 +1083,7 @@ useEffect(() => {
     setIsRecoveryMode(false);
     window.history.replaceState({}, "", "/");
     setTab("quick");
+    clearOpenWorkoutSessionPointer();
     setOpenSessionId(null);
     setOpenTemplateId(null);
     setLastByExerciseName({});
@@ -1153,6 +1155,7 @@ useEffect(() => {
 
       setLastByExerciseName({});
       setDraftByExerciseId({});
+      clearOpenWorkoutSessionPointer();
       setOpenSessionId(null);
       setOpenTemplateId(null);
 
@@ -1495,6 +1498,79 @@ async function saveQuickLog() {
       updatedAt: Date.now()
     });
   }
+
+  function openWorkoutSessionPointerKey(currentUserId: string) {
+    return `rebuild60:openWorkoutSession:${currentUserId}`;
+  }
+
+  function saveOpenWorkoutSessionPointer(sessionId: string, dayDate: string) {
+    if (!userId) return;
+    try {
+      localStorage.setItem(
+        openWorkoutSessionPointerKey(userId),
+        JSON.stringify({ sessionId, dayDate })
+      );
+    } catch {}
+  }
+
+  function clearOpenWorkoutSessionPointer() {
+    if (!userId) return;
+    try {
+      localStorage.removeItem(openWorkoutSessionPointerKey(userId));
+    } catch {}
+  }
+
+  function readOpenWorkoutSessionPointer(): { sessionId: string; dayDate: string } | null {
+    if (!userId) return null;
+    try {
+      const raw = localStorage.getItem(openWorkoutSessionPointerKey(userId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (
+        parsed &&
+        typeof parsed.sessionId === "string" &&
+        parsed.sessionId.length > 0 &&
+        typeof parsed.dayDate === "string" &&
+        parsed.dayDate.length > 0
+      ) {
+        return { sessionId: parsed.sessionId, dayDate: parsed.dayDate };
+      }
+    } catch {}
+    return null;
+  }
+
+  async function recoverOpenSessionForDay(day: string): Promise<boolean> {
+    if (!userId) return false;
+
+    const pointer = readOpenWorkoutSessionPointer();
+    if (!pointer || pointer.dayDate !== day) return false;
+
+    const rememberedDeletes = await getDeletedSessionIds();
+    if (rememberedDeletes.has(pointer.sessionId)) {
+      clearOpenWorkoutSessionPointer();
+      return false;
+    }
+
+    const pendingDeletes = await localdb.pendingOps.where("op").equals("delete_session").toArray();
+    const queuedDeleteIds = new Set(
+      pendingDeletes
+        .map((op) => op?.payload?.session_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    );
+    if (queuedDeleteIds.has(pointer.sessionId)) {
+      clearOpenWorkoutSessionPointer();
+      return false;
+    }
+
+    const local = await localdb.localSessions.get(pointer.sessionId);
+    if (!local || local.user_id !== userId || local.day_date !== day) {
+      clearOpenWorkoutSessionPointer();
+      return false;
+    }
+
+    await openSession(pointer.sessionId);
+    return true;
+  }
   async function loadSessionsForDay(day: string) {
     if (!userId) return;
 
@@ -1521,6 +1597,7 @@ async function saveQuickLog() {
 
   async function openSession(sessionId: string) {
     setOpenSessionId(sessionId);
+    saveOpenWorkoutSessionPointer(sessionId, selectedDayDate);
 
     const ex = await localdb.localExercises.where({ session_id: sessionId }).sortBy("sort_order");
     setExercises(ex);
@@ -1548,68 +1625,75 @@ async function saveQuickLog() {
   }
 
   async function createWorkoutSession() {
-    if (!userId) return;
+    if (!userId || createSessionInFlightRef.current) return;
 
-    const id = uuid();
-    const started_at = new Date().toISOString();
+    createSessionInFlightRef.current = true;
+    try {
+      const id = uuid();
+      const started_at = new Date().toISOString();
 
-    const local: LocalWorkoutSession = {
-      id,
-      user_id: userId,
-      day_date: selectedDayDate,
-      started_at,
-      title: "Week 1 Day 1",
-      notes: null
-    };
+      const local: LocalWorkoutSession = {
+        id,
+        user_id: userId,
+        day_date: selectedDayDate,
+        started_at,
+        title: "Week 1 Day 1",
+        notes: null
+      };
 
-    await forgetDeletedSessionId(id);
+      await forgetDeletedSessionId(id);
 
-    await localdb.localSessions.put(local);
+      await localdb.localSessions.put(local);
 
-    await enqueue("create_workout", {
-      id,
-      user_id: userId,
-      day_date: selectedDayDate,
-      started_at,
-      title: local.title,
-      notes: null
-    });
+      await enqueue("create_workout", {
+        id,
+        user_id: userId,
+        day_date: selectedDayDate,
+        started_at,
+        title: local.title,
+        notes: null
+      });
 
-    await loadSessionsForDay(selectedDayDate);
-    await openSession(id);
-    setTab("workout");
+      await loadSessionsForDay(selectedDayDate);
+      await openSession(id);
+      setTab("workout");
+    } finally {
+      createSessionInFlightRef.current = false;
+    }
   }
 
   async function startSessionFromRecommendation() {
-    if (!userId || !brainSnapshot?.recommendedSession) return;
+    if (!userId || !brainSnapshot?.recommendedSession || createSessionInFlightRef.current) return;
 
-    const id = uuid();
-    const started_at = new Date().toISOString();
+    createSessionInFlightRef.current = true;
+    try {
+      const id = uuid();
+      const started_at = new Date().toISOString();
 
-    const local: LocalWorkoutSession = {
-      id,
-      user_id: userId,
-      day_date: selectedDayDate,
-      started_at,
-      title: brainSnapshot.recommendedSession.title || "Coach Session",
-      notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
-    };
+      const local: LocalWorkoutSession = {
+        id,
+        user_id: userId,
+        day_date: selectedDayDate,
+        started_at,
+        title: brainSnapshot.recommendedSession.title || "Coach Session",
+        notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
+      };
 
-    await localdb.localSessions.put(local);
+      await localdb.localSessions.put(local);
 
-    await enqueue("create_workout", {
-      id,
-      user_id: userId,
-      day_date: selectedDayDate,
-      started_at,
-      title: local.title,
-      notes: local.notes
-    });
+      await enqueue("create_workout", {
+        id,
+        user_id: userId,
+        day_date: selectedDayDate,
+        started_at,
+        title: local.title,
+        notes: local.notes
+      });
 
-    const nextDrafts: Record<string, ExerciseDraft> = {};
-    const coachExercises: CoachSessionExerciseSeed[] = [];
+      const nextDrafts: Record<string, ExerciseDraft> = {};
+      const coachExercises: CoachSessionExerciseSeed[] = [];
 
-    for (let i = 0; i < brainSnapshot.recommendedSession.exercises.length; i += 1) {
+      for (let i = 0; i < brainSnapshot.recommendedSession.exercises.length; i += 1) {
       const ex = brainSnapshot.recommendedSession.exercises[i];
       const exerciseId = uuid();
       const canonicalName = canonicalizeExerciseInput(ex.name);
@@ -1678,6 +1762,9 @@ async function saveQuickLog() {
     });
     setDraftByExerciseId((prev) => ({ ...prev, ...nextDrafts }));
     setTab("workout");
+    } finally {
+      createSessionInFlightRef.current = false;
+    }
   }
 
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
@@ -1974,6 +2061,9 @@ This removes it locally immediately and queues a cloud delete.`
       await removeCoachSessionSeed(sessionId);
 
       // refresh UI
+      if (openSessionId === sessionId) {
+        clearOpenWorkoutSessionPointer();
+      }
       setOpenSessionId((cur) => (cur === sessionId ? null : cur));
       setExercises((cur) => (openSessionId === sessionId ? [] : cur));
       setSets((cur) => (openSessionId === sessionId ? [] : cur));
@@ -3146,6 +3236,8 @@ async function refreshLocalUiFromDexie() {
 
   if (openSessionId) {
     await openSession(openSessionId);
+  } else {
+    await recoverOpenSessionForDay(selectedDayDate);
   }
 
   if (tab === "dash") {
@@ -3169,9 +3261,12 @@ async function syncNow() {
     setOpenSessionId(null);
     setExercises([]);
     setSets([]);
-    void loadQuickLogForDay(selectedDayDate);
-    void loadSessionsForDay(selectedDayDate);
-    void loadTemplates();
+    void (async () => {
+      await loadQuickLogForDay(selectedDayDate);
+      await loadSessionsForDay(selectedDayDate);
+      await loadTemplates();
+      await recoverOpenSessionForDay(selectedDayDate);
+    })();
   }, [userId, selectedDayDate]);
 
   useEffect(() => {
@@ -3717,6 +3812,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
