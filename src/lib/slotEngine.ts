@@ -79,9 +79,9 @@ export const SLOT_CANDIDATES: Record<Slot, string[]> = {
   SecondaryRow: ["chest_supported_row", "seated_cable_row", "barbell_row", "one_arm_dumbbell_row"],
   RearDelts: ["face_pull", "rear_delt_fly", "reverse_pec_deck", "band_pull_apart"],
   Biceps: ["hammer_curl", "curl", "incline_dumbbell_curl", "preacher_curl"],
-  PrimarySquat: ["ssb_squat", "squat", "leg_press", "hack_squat"],
+  PrimarySquat: ["ssb_squat", "squat"],
   Hinge: ["romanian_deadlift", "deadlift", "good_morning", "hamstring_curl"],
-  SecondaryQuad: ["leg_press", "hack_squat", "leg_extension", "split_squat"],
+  SecondaryQuad: ["leg_extension", "split_squat"],
   Hamstrings: ["hamstring_curl", "romanian_deadlift", "glute_ham_raise", "seated_leg_curl"],
   Calves: ["calf_raise", "seated_calf_raise", "leg_press_calf_raise"],
 };
@@ -133,7 +133,7 @@ function candidateAddressesForcedPattern(candidateKey: string, forcedCarryPatter
     if (p.includes('row') || p.includes('upper back')) return k.includes('row') || k.includes('face_pull') || k.includes('rear_delt') || k.includes('reverse_pec_deck');
     if (p.includes('vertical pull') || p.includes('lat')) return k.includes('pull') || k.includes('chin') || k.includes('pulldown');
     if (p.includes('press')) return k.includes('press') || k.includes('dip') || k.includes('push_up');
-    if (p.includes('quad')) return k.includes('squat') || k.includes('leg_press') || k.includes('hack_squat') || k.includes('leg_extension') || k.includes('split_squat');
+    if (p.includes('quad')) return k.includes('squat') || k.includes('leg_extension') || k.includes('split_squat');
     if (p.includes('hinge') || p.includes('ham')) return k.includes('deadlift') || k.includes('romanian') || k.includes('hamstring') || k.includes('good_morning') || k.includes('glute_ham');
     if (p.includes('calf')) return k.includes('calf');
     if (p.includes('rear delt')) return k.includes('rear_delt') || k.includes('face_pull') || k.includes('reverse_pec_deck') || k.includes('band_pull_apart');
@@ -149,7 +149,7 @@ function lowerCostInReducedVolume(slot: Slot, key: string): boolean {
   if (slot === "Shoulders" || slot === "Biceps" || slot === "Triceps" || slot === "RearDelts" || slot === "Pump" || slot === "Calves") {
     return true;
   }
-  return key === "chest_supported_row" || key === "seated_cable_row" || key === "lat_pulldown" || key === "leg_press" || key === "hack_squat" || key === "hamstring_curl";
+  return key === "chest_supported_row" || key === "seated_cable_row" || key === "lat_pulldown" || key === "hamstring_curl";
 }
 
 export function scoreCandidateForSlot(
@@ -261,6 +261,7 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
 
 
 
