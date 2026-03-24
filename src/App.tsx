@@ -751,6 +751,7 @@ function isCompoundExercise(name: string): boolean {
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
+  const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
   const [lastSyncedAt, setLastSyncedAt] = useState("");
   const [tab, setTab] = useState<"quick" | "workout" | "dash" | "progress">("quick");
 
@@ -1003,32 +1004,6 @@ useEffect(() => {
   useEffect(() => {
     if (!userId) return;
     void loadBandEquiv();
-  }, [userId]);
-
-  useEffect(() => {
-    function handleOffline() {
-      setStatus("Offline (local saves only)");
-    }
-
-    function handleOnline() {
-      if (!userId) {
-        setStatus("…");
-        return;
-      }
-      void syncNow();
-    }
-
-    window.addEventListener("offline", handleOffline);
-    window.addEventListener("online", handleOnline);
-
-    if (!navigator.onLine) {
-      handleOffline();
-    }
-
-    return () => {
-      window.removeEventListener("offline", handleOffline);
-      window.removeEventListener("online", handleOnline);
-    };
   }, [userId]);
 
 
@@ -3287,6 +3262,30 @@ async function syncNow() {
   }
 }
 
+  useEffect(() => {
+    const handleOffline = () => {
+      setIsOnline(false);
+      setStatus("Offline (local saves only)");
+    };
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (userId) {
+        void syncNow();
+      } else {
+        setStatus("…");
+      }
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [userId]);
+
   // -----------------------------
   // Effects
   // -----------------------------
@@ -3653,7 +3652,7 @@ async function syncNow() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <div>
-            <b>Status:</b> {navigator.onLine ? status : "Offline (local saves only)"}
+            <b>Status:</b> {isOnline ? status : "Offline (local saves only)"}
             {lastSyncedAt ? <span style={{ marginLeft: 8, opacity: 0.8 }}>Last synced: {lastSyncedAt}</span> : null}
           </div>
           <button type="button" onClick={() => void syncNow()} disabled={!userId}>
@@ -3847,6 +3846,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
