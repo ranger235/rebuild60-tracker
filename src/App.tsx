@@ -93,8 +93,6 @@ const CANONICAL_DISPLAY: Record<string, string> = {
   squat: "Squat",
   ssb_squat: "SSB Squat",
   split_squat: "Split Squat",
-  leg_press: "Leg Press",
-  hack_squat: "Hack Squat",
   leg_extension: "Leg Extension",
   hamstring_curl: "Hamstring Curl",
   calf_raise: "Calf Raise",
@@ -169,8 +167,6 @@ const CANONICAL_ALIAS_KEYS: Record<string, string> = {
   splitsquat: "split_squat",
   splitsquats: "split_squat",
   bulgariansplitsquat: "split_squat",
-  legpress: "leg_press",
-  hacksquat: "hack_squat",
   legextension: "leg_extension",
   hamstringcurl: "hamstring_curl",
   legcurl: "hamstring_curl",
@@ -236,7 +232,7 @@ function isBenchName(name: string): boolean {
 }
 function isSquatName(name: string): boolean {
   const k = exerciseKey(name);
-  return k === "squat" || k === "ssb_squat" || k === "split_squat" || k === "hack_squat" || k === "leg_press";
+  return k === "squat" || k === "ssb_squat" || k === "split_squat";
 }
 function isDeadliftName(name: string): boolean {
   const k = exerciseKey(name);
@@ -3846,6 +3842,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
