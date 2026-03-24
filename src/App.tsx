@@ -1091,8 +1091,7 @@ useEffect(() => {
     setIsRecoveryMode(false);
     window.history.replaceState({}, "", "/");
     setTab("quick");
-    clearOpenWorkoutSessionPointer();
-    setOpenSessionId(null);
+    clearOpenWorkoutSessionState();
     setOpenTemplateId(null);
     setLastByExerciseName({});
     setDraftByExerciseId({});
@@ -1162,9 +1161,7 @@ useEffect(() => {
       const result = await importBackup(localdb, parsed, mode);
 
       setLastByExerciseName({});
-      setDraftByExerciseId({});
-      clearOpenWorkoutSessionPointer();
-      setOpenSessionId(null);
+      clearOpenWorkoutSessionState();
       setOpenTemplateId(null);
 
       if (userId) {
@@ -1528,6 +1525,18 @@ async function saveQuickLog() {
     } catch {}
   }
 
+  function clearOpenWorkoutSessionUi() {
+    setOpenSessionId(null);
+    setExercises([]);
+    setSets([]);
+    setDraftByExerciseId({});
+  }
+
+  function clearOpenWorkoutSessionState() {
+    clearOpenWorkoutSessionPointer();
+    clearOpenWorkoutSessionUi();
+  }
+
   function readOpenWorkoutSessionPointer(): { sessionId: string; dayDate: string } | null {
     if (!userId) return null;
     try {
@@ -1604,8 +1613,14 @@ async function saveQuickLog() {
   }
 
   async function openSession(sessionId: string) {
+    const sessionRow = await localdb.localSessions.get(sessionId);
+    if (!sessionRow || sessionRow.user_id !== userId) {
+      clearOpenWorkoutSessionState();
+      return;
+    }
+
     setOpenSessionId(sessionId);
-    saveOpenWorkoutSessionPointer(sessionId, selectedDayDate);
+    saveOpenWorkoutSessionPointer(sessionId, sessionRow.day_date);
 
     const ex = await localdb.localExercises.where({ session_id: sessionId }).sortBy("sort_order");
     setExercises(ex);
@@ -1616,20 +1631,6 @@ async function saveQuickLog() {
       allSets.push(...s);
     }
     setSets(allSets);
-
-    setDraftByExerciseId((prev) => {
-      const next = { ...prev };
-      for (const e of ex) {
-        if (!next[e.id]) next[e.id] = { loadType: "weight", weight: "", bandLevel: "3", bandLevel2: "", bandMode: "resist", bandConfig: "single", bandEst: "", reps: "", rpe: "", warmup: false };
-      }
-      return next;
-    });
-  }
-
-  function setsForExercise(exerciseId: string) {
-    return sets
-      .filter((s) => s.exercise_id === exerciseId)
-      .sort((a, b) => a.set_number - b.set_number);
   }
 
   async function createWorkoutSession() {
@@ -2070,15 +2071,8 @@ This removes it locally immediately and queues a cloud delete.`
 
       // refresh UI
       if (openSessionId === sessionId) {
-        clearOpenWorkoutSessionPointer();
+        clearOpenWorkoutSessionState();
       }
-      setOpenSessionId((cur) => (cur === sessionId ? null : cur));
-      setExercises((cur) => (openSessionId === sessionId ? [] : cur));
-      setSets((cur) => (openSessionId === sessionId ? [] : cur));
-      setDraftByExerciseId((prev) => {
-        if (openSessionId !== sessionId) return prev;
-        return {};
-      });
 
       await loadSessionsForDay(selectedDayDate);
       alert("Session deleted (local). Will sync delete when online.");
@@ -3243,7 +3237,13 @@ async function refreshLocalUiFromDexie() {
   await loadTemplates();
 
   if (openSessionId) {
-    await openSession(openSessionId);
+    const localOpenSession = await localdb.localSessions.get(openSessionId);
+    if (localOpenSession && localOpenSession.user_id === userId && localOpenSession.day_date === selectedDayDate) {
+      await openSession(openSessionId);
+    } else {
+      clearOpenWorkoutSessionUi();
+      await recoverOpenSessionForDay(selectedDayDate);
+    }
   } else {
     await recoverOpenSessionForDay(selectedDayDate);
   }
@@ -3292,9 +3292,7 @@ async function syncNow() {
   useEffect(() => {
     if (!userId) return;
     // Reload local state whenever the selected log date changes
-    setOpenSessionId(null);
-    setExercises([]);
-    setSets([]);
+    clearOpenWorkoutSessionUi();
     void (async () => {
       await loadQuickLogForDay(selectedDayDate);
       await loadSessionsForDay(selectedDayDate);
@@ -3846,6 +3844,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
