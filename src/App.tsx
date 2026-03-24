@@ -1005,6 +1005,32 @@ useEffect(() => {
     void loadBandEquiv();
   }, [userId]);
 
+  useEffect(() => {
+    function handleOffline() {
+      setStatus("Offline (local saves only)");
+    }
+
+    function handleOnline() {
+      if (!userId) {
+        setStatus("…");
+        return;
+      }
+      void syncNow();
+    }
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    if (!navigator.onLine) {
+      handleOffline();
+    }
+
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [userId]);
+
 
   // AI Coach Add-on: load cached weekly AI coach from localStorage
   useEffect(() => {
@@ -3821,6 +3847,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
