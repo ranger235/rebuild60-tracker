@@ -163,8 +163,6 @@ const DISPLAY_NAME: Record<string, string> = {
   preacher_curl: "Preacher Curl",
   ssb_squat: "SSB Squat",
   squat: "Squat",
-  leg_press: "Leg Press",
-  hack_squat: "Hack Squat",
   romanian_deadlift: "Romanian Deadlift",
   deadlift: "Deadlift",
   good_morning: "Good Morning",
@@ -1167,6 +1165,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
