@@ -17,7 +17,7 @@ import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory } from "./lib/brainEngine";
+import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory, type SessionTypeCounts } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
@@ -420,6 +420,92 @@ function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
   return entries[0][0];
 }
 
+
+function dominantKeyFromCounts<T extends string>(counts: Record<T, number>): T | null {
+  const entries = Object.entries(counts) as Array<[T, number]>;
+  entries.sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0 || entries[0][1] === 0) return null;
+  if ((entries[1]?.[1] ?? -1) === entries[0][1]) return null;
+  return entries[0][0];
+}
+
+function toGenericBrainFocus(value: string | null | undefined): BrainFocus {
+  const key = String(value || "").trim().toLowerCase();
+  if (!key) return "Mixed";
+  if (["push", "chest", "shoulders", "triceps"].includes(key)) return "Push";
+  if (["pull", "back", "biceps"].includes(key)) return "Pull";
+  if (["lower", "legs", "leg", "quads", "hamstrings", "glutes"].includes(key)) return "Lower";
+  return "Mixed";
+}
+
+function parseRecommendationStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of parsed) {
+      const value = String(item || "").trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function parseRecommendationSessionSlotMap(raw: string | null | undefined): Record<string, string[]> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [sessionType, slots] of Object.entries(parsed as Record<string, unknown>)) {
+      const key = String(sessionType || "").trim();
+      if (!key || !Array.isArray(slots)) continue;
+      out[key] = slots.map((slot) => String(slot || "").trim()).filter(Boolean);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function inferSessionTypeForSession(
+  exerciseNames: string[],
+  configuredSessionTypes: string[]
+): string | null {
+  if (!exerciseNames.length) return null;
+
+  const detailedCounts: Record<string, number> = {};
+  const genericCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
+
+  for (const name of exerciseNames) {
+    const detailed = String(focusFromExerciseKey(exerciseKey(name)) || "Mixed");
+    detailedCounts[detailed] = (detailedCounts[detailed] ?? 0) + 1;
+    genericCounts[toGenericBrainFocus(detailed)] += 1;
+  }
+
+  const dominantDetailed = dominantKeyFromCounts(detailedCounts);
+  if (dominantDetailed) {
+    const exact = configuredSessionTypes.find((item) => item.toLowerCase() === dominantDetailed.toLowerCase());
+    if (exact) return exact;
+  }
+
+  const dominantGeneric = dominantFocusFromCounts(genericCounts);
+  if (dominantGeneric !== "Mixed") {
+    const genericMatch = configuredSessionTypes.find((item) => item.toLowerCase() === dominantGeneric.toLowerCase());
+    if (genericMatch) return genericMatch;
+  }
+
+  return dominantDetailed;
+}
+
 function compareRecommendationToSession(params: {
   recommendation: RecommendationFingerprint | null;
   coachSessionSeed?: CoachSessionSeed | null;
@@ -436,7 +522,7 @@ function compareRecommendationToSession(params: {
 
   for (const ex of sessionExercises) {
     const key = exerciseKey(ex.name);
-    const focus = focusFromExerciseKey(key);
+    const focus = toGenericBrainFocus(focusFromExerciseKey(key));
     actualCounts[focus] += 1;
     const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
     let topLoad: number | null = null;
@@ -2679,23 +2765,9 @@ function daysBetweenISO(a: string, b: string): number {
 }
 
 function parseRecommendationFocusSequence(raw: string | null | undefined): Array<"Push" | "Pull" | "Lower"> {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const allowed = new Set(["Push", "Pull", "Lower"]);
-    const normalized: Array<"Push" | "Pull" | "Lower"> = [];
-    for (const value of parsed) {
-      const next = String(value || "").trim();
-      if (!allowed.has(next)) continue;
-      if (!normalized.includes(next as "Push" | "Pull" | "Lower")) {
-        normalized.push(next as "Push" | "Pull" | "Lower");
-      }
-    }
-    return normalized;
-  } catch {
-    return [];
-  }
+  return parseRecommendationStringArray(raw)
+    .map((item) => item.trim())
+    .filter((item): item is "Push" | "Pull" | "Lower" => item === "Push" || item === "Pull" || item === "Lower");
 }
 
 
@@ -3002,6 +3074,10 @@ async function refreshDashboard() {
         .sort((a, b) => (a.day_date || isoToDay(a.started_at)) < (b.day_date || isoToDay(b.started_at)) ? 1 : -1);
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
+      const recentSessionTypeCounts: SessionTypeCounts = {};
+      for (const sessionType of (configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence)) {
+        recentSessionTypeCounts[sessionType] = 0;
+      }
       const recentFocusWindow = recentSessions.slice(0, 9);
       const exerciseHistoryMap = new Map<string, ExerciseHistory>();
 
@@ -3010,10 +3086,18 @@ async function refreshDashboard() {
         const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
         for (const ex of exercisesForSession) {
           const key = exerciseKey(ex.name);
-          const focus = focusFromExerciseKey(key);
+          const focus = toGenericBrainFocus(focusFromExerciseKey(key));
           focusCounts[focus] += 1;
         }
         recentFocusCounts[dominantFocusFromCounts(focusCounts)] += 1;
+
+        const inferredSessionType = inferSessionTypeForSession(
+          exercisesForSession.map((ex) => ex.name),
+          configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence
+        );
+        if (inferredSessionType) {
+          recentSessionTypeCounts[inferredSessionType] = (recentSessionTypeCounts[inferredSessionType] ?? 0) + 1;
+        }
       }
 
       const today = fmt(endDay);
@@ -3022,7 +3106,7 @@ async function refreshDashboard() {
         for (const ex of exercisesForSession) {
           const key = exerciseKey(ex.name);
           if (exerciseHistoryMap.has(key)) continue;
-          const focus = focusFromExerciseKey(key);
+          const focus = toGenericBrainFocus(focusFromExerciseKey(key));
           const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
           let lastLoad: number | null = null;
           let lastReps: number | null = null;
@@ -3111,7 +3195,7 @@ async function refreshDashboard() {
           const sessionFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of exercisesForSession) {
             const key = exerciseKey(ex.name);
-            const focus = focusFromExerciseKey(key);
+            const focus = toGenericBrainFocus(focusFromExerciseKey(key));
             sessionFocusCounts[focus] += 1;
             const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
             weekSets += sets.length;
@@ -3230,7 +3314,7 @@ async function refreshDashboard() {
           const session = recentFocusWindow[0];
           const counts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of sessionExercisesMap.get(session.id) ?? []) {
-            counts[focusFromExerciseKey(exerciseKey(ex.name))] += 1;
+            counts[toGenericBrainFocus(focusFromExerciseKey(exerciseKey(ex.name)))] += 1;
           }
           return dominantFocusFromCounts(counts);
         })() : null,
@@ -3238,7 +3322,17 @@ async function refreshDashboard() {
         preferenceSignals,
         frictionProfile: friction,
         allowedExerciseKeys,
-        focusSequence: configuredFocusSequence.length > 0 ? configuredFocusSequence : null
+        focusSequence: configuredFocusSequence.length > 0 ? configuredFocusSequence : null,
+        sessionTypes: configuredSessionTypes.length > 0 ? configuredSessionTypes : null,
+        sessionSequence: configuredSessionSequence.length > 0 ? configuredSessionSequence : null,
+        recentSessionTypeCounts,
+        lastSessionType: recentFocusWindow.length > 0
+          ? inferSessionTypeForSession(
+              (sessionExercisesMap.get(recentFocusWindow[0].id) ?? []).map((ex) => ex.name),
+              configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence
+            )
+          : null,
+        sessionSlotMap: Object.keys(configuredSessionSlotMap).length > 0 ? configuredSessionSlotMap as Record<string, any> : null
       });
 
       setTimelineWeeks(timeline);
@@ -3903,6 +3997,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
