@@ -16,6 +16,32 @@ async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?
   return result?.data as T;
 }
 
+async function assertTemplateDeleted(templateId: string) {
+  const rows = await must<any[]>(
+    supabase
+      .from("workout_templates")
+      .select("id")
+      .eq("id", templateId)
+      .limit(1)
+  );
+  if ((rows ?? []).length > 0) {
+    throw new Error(`delete_template did not remove template ${templateId}`);
+  }
+}
+
+async function assertTemplateExerciseDeleted(templateExerciseId: string) {
+  const rows = await must<any[]>(
+    supabase
+      .from("workout_template_exercises")
+      .select("id")
+      .eq("id", templateExerciseId)
+      .limit(1)
+  );
+  if ((rows ?? []).length > 0) {
+    throw new Error(`delete_template_exercise did not remove exercise ${templateExerciseId}`);
+  }
+}
+
 export async function enqueue(op: PendingOp["op"], payload: any) {
   await localdb.pendingOps.add({
     createdAt: Date.now(),
@@ -64,6 +90,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       if (!template_id) throw new Error("delete_template missing template_id");
       await must(supabase.from("workout_template_exercises").delete().eq("template_id", template_id));
       await must(supabase.from("workout_templates").delete().eq("id", template_id));
+      await assertTemplateDeleted(String(template_id));
       return;
     }
 
@@ -79,6 +106,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const template_exercise_id = payload?.template_exercise_id;
       if (!template_exercise_id) throw new Error("delete_template_exercise missing template_exercise_id");
       await must(supabase.from("workout_template_exercises").delete().eq("id", template_exercise_id));
+      await assertTemplateExerciseDeleted(String(template_exercise_id));
       return;
     }
 
@@ -239,6 +267,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
