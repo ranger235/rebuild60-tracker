@@ -869,42 +869,6 @@ useEffect(() => {
   loadBandEquiv();
 }, [userId]);
 
-useEffect(() => {
-  let cancelled = false;
-  (async () => {
-    if (!userId) {
-      if (!cancelled) setSplitConfig(null);
-      return;
-    }
-    try {
-      const row = await localdb.localSettings.get([userId, "training_split_config_v1"]);
-      const parsed = row?.value ? JSON.parse(row.value) as TrainingSplitConfig : null;
-      if (!cancelled) setSplitConfig(parsed);
-    } catch {
-      if (!cancelled) setSplitConfig(null);
-    }
-  })();
-  return () => {
-    cancelled = true;
-  };
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  void refreshDashboard(splitConfig);
-}, [userId, splitConfig]);
-
-async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
-  if (!userId) return;
-  await localdb.localSettings.put({
-    user_id: userId,
-    key: "training_split_config_v1",
-    value: JSON.stringify(next),
-    updatedAt: Date.now(),
-  });
-  setSplitConfig(next);
-  await refreshDashboard(next);
-}
 
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
@@ -961,6 +925,45 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
   const [splitConfig, setSplitConfig] = useState<TrainingSplitConfig | null>(null);
+  const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
+
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    if (!userId) {
+      if (!cancelled) setSplitConfig(null);
+      return;
+    }
+    try {
+      const row = await localdb.localSettings.get([userId, "training_split_config_v1"]);
+      const parsed = row?.value ? JSON.parse(row.value) as TrainingSplitConfig : null;
+      if (!cancelled) setSplitConfig(parsed);
+    } catch {
+      if (!cancelled) setSplitConfig(null);
+    }
+  })();
+  return () => {
+    cancelled = true;
+  };
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  void refreshDashboard(splitConfig);
+}, [userId, splitConfig]);
+
+async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
+  if (!userId) return;
+  await localdb.localSettings.put({
+    user_id: userId,
+    key: "training_split_config_v1",
+    value: JSON.stringify(next),
+    updatedAt: Date.now(),
+  });
+  setSplitConfig(next);
+  await refreshDashboard(next);
+}
+
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -3884,6 +3887,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
