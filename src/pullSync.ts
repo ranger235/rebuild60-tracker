@@ -17,6 +17,20 @@ function toMillis(value: any): number {
 export async function pullSync(userId: string) {
   if (!userId) return;
 
+  const pending = await localdb.pendingOps.toArray();
+  const pendingTemplateDeleteIds = new Set(
+    pending
+      .filter((x) => (x.status === "queued" || x.status === "retry") && x.op === "delete_template")
+      .map((x) => String(x.payload?.template_id ?? ""))
+      .filter(Boolean)
+  );
+  const pendingTemplateExerciseDeleteIds = new Set(
+    pending
+      .filter((x) => (x.status === "queued" || x.status === "retry") && x.op === "delete_template_exercise")
+      .map((x) => String(x.payload?.template_exercise_id ?? ""))
+      .filter(Boolean)
+  );
+
   // Core user-scoped tables
   const [{ data: sessions, error: sessionsErr }, { data: daily, error: dailyErr }, { data: nutrition, error: nutritionErr }, { data: zone2, error: zone2Err }, { data: templates, error: templatesErr }] =
     await Promise.all([
@@ -54,7 +68,7 @@ export async function pullSync(userId: string) {
   if (templatesErr) throw templatesErr;
 
   const sessionRows = (sessions ?? []) as any[];
-  const templateRows = (templates ?? []) as any[];
+  const templateRows = ((templates ?? []) as any[]).filter((r) => !pendingTemplateDeleteIds.has(String(r.id ?? "")));
 
   const sessionIds = sessionRows.map((r) => r.id).filter(Boolean);
   const templateIds = templateRows.map((r) => r.id).filter(Boolean);
@@ -75,6 +89,11 @@ export async function pullSync(userId: string) {
   if (templateExercisesErr) throw templateExercisesErr;
 
   const exerciseRows = (exercises ?? []) as any[];
+  const filteredTemplateExerciseRows = ((templateExercises ?? []) as any[]).filter(
+    (r) =>
+      !pendingTemplateExerciseDeleteIds.has(String(r.id ?? "")) &&
+      !pendingTemplateDeleteIds.has(String(r.template_id ?? ""))
+  );
   const exerciseIds = exerciseRows.map((r) => r.id).filter(Boolean);
 
   const setsPromise = exerciseIds.length
@@ -109,10 +128,11 @@ export async function pullSync(userId: string) {
       await localdb.localExercises.bulkPut(exerciseRows as any);
       await localdb.localSets.bulkPut(((sets ?? []) as any[]) as any);
       await localdb.localTemplates.bulkPut(templateRows as any);
-      await localdb.localTemplateExercises.bulkPut(((templateExercises ?? []) as any[]) as any);
+      await localdb.localTemplateExercises.bulkPut(filteredTemplateExerciseRows as any);
       await localdb.dailyMetrics.bulkPut(((daily ?? []) as any[]) as any);
       await localdb.nutritionDaily.bulkPut(((nutrition ?? []) as any[]) as any);
       await localdb.zone2Daily.bulkPut(Array.from(zone2ByDay.values()) as any);
     }
   );
 }
+
