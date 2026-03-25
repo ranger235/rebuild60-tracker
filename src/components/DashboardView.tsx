@@ -1,6 +1,6 @@
-import { useMemo, type CSSProperties, type RefObject } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from "react";
 import LineChart from "./LineChart";
-import type { BrainSnapshot, BrainFocus } from "../lib/brainEngine";
+import type { BrainSnapshot, BrainFocus, TrainingSplitConfig, SplitDayDefinition } from "../lib/brainEngine";
 import { buildReadinessContext } from "../lib/readiness";
 import { formatPatternValue, formatPrescriptionTrust, formatReadinessLabel } from "../lib/readinessFormat";
 import type { ReadinessInput } from "../lib/readinessTypes";
@@ -98,17 +98,8 @@ type Props = {
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
   frictionProfile: FrictionProfile | null;
-  splitSessionTypesInput: string;
-  setSplitSessionTypesInput: (value: string) => void;
-  splitSessionSequenceInput: string;
-  setSplitSessionSequenceInput: (value: string) => void;
-  splitSessionSlotMapInput: string;
-  setSplitSessionSlotMapInput: (value: string) => void;
-  splitConfigBusy: boolean;
-  splitConfigError: string | null;
-  splitConfigMessage: string | null;
-  saveRecommendationSplitConfig: () => void;
-  loadRecommendationPreset: (preset: "current" | "dave" | "tim") => void;
+  splitConfig: TrainingSplitConfig | null;
+  saveTrainingSplitConfig: (next: TrainingSplitConfig) => Promise<void> | void;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
 
@@ -124,24 +115,6 @@ const cardStyle: CSSProperties = {
   padding: 12,
   background: "#fafafa"
 };
-
-const validSessionSlots = [
-  "PrimaryPress",
-  "SecondaryPress",
-  "Shoulders",
-  "Triceps",
-  "Pump",
-  "PrimaryRow",
-  "VerticalPull",
-  "SecondaryRow",
-  "RearDelts",
-  "Biceps",
-  "PrimarySquat",
-  "Hinge",
-  "SecondaryQuad",
-  "Hamstrings",
-  "Calves",
-];
 
 function sumPoints(points: Point[]) {
   return points.reduce((acc, p) => acc + (Number(p.y) || 0), 0);
@@ -255,6 +228,66 @@ function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], p
   };
 }
 
+const SLOT_OPTIONS: Array<SplitDayDefinition["slots"][number]> = [
+  "PrimaryPress",
+  "SecondaryPress",
+  "Shoulders",
+  "Triceps",
+  "Pump",
+  "PrimaryRow",
+  "VerticalPull",
+  "SecondaryRow",
+  "RearDelts",
+  "Biceps",
+  "PrimarySquat",
+  "Hinge",
+  "SecondaryQuad",
+  "Hamstrings",
+  "Calves",
+];
+
+function makeDay(name: string, slots: SplitDayDefinition["slots"]): SplitDayDefinition {
+  return {
+    id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    slots,
+  };
+}
+
+function pplPreset(): TrainingSplitConfig {
+  return {
+    preset: "ppl",
+    days: [
+      makeDay("Push", ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"]),
+      makeDay("Pull", ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps"]),
+      makeDay("Lower", ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"]),
+    ],
+  };
+}
+
+function broPreset(): TrainingSplitConfig {
+  return {
+    preset: "bro",
+    days: [
+      makeDay("Chest", ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"]),
+      makeDay("Back", ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps"]),
+      makeDay("Shoulders", ["Shoulders", "Shoulders", "SecondaryPress", "RearDelts", "Triceps"]),
+      makeDay("Arms", ["Biceps", "Triceps", "Biceps", "Triceps", "Pump"]),
+      makeDay("Legs", ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"]),
+    ],
+  };
+}
+
+function initialCustomPreset(): TrainingSplitConfig {
+  return {
+    preset: "custom",
+    days: [
+      makeDay("Upper", ["PrimaryPress", "PrimaryRow", "VerticalPull", "Shoulders", "Biceps"]),
+      makeDay("Lower", ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"]),
+    ],
+  };
+}
+
 export default function DashboardView(props: Props) {
   const {
     dashBusy,
@@ -288,6 +321,8 @@ export default function DashboardView(props: Props) {
     timelineWeeks,
     brainSnapshot,
     frictionProfile,
+    splitConfig,
+    saveTrainingSplitConfig,
     startSessionFromRecommendation,
     preferenceHistory,
     timerOn,
@@ -295,6 +330,13 @@ export default function DashboardView(props: Props) {
     secs,
     setSecs
   } = props;
+
+  const [splitDraft, setSplitDraft] = useState<TrainingSplitConfig>(splitConfig ?? pplPreset());
+  const [splitSaving, setSplitSaving] = useState(false);
+
+  useEffect(() => {
+    setSplitDraft(splitConfig ?? pplPreset());
+  }, [splitConfig]);
 
   const tonnage28 = Math.round(sumPoints(tonnageSeries));
   const sets28 = Math.round(sumPoints(setsSeries));
@@ -307,6 +349,75 @@ export default function DashboardView(props: Props) {
     { label: "Squat", points: squatSeries },
     { label: "Deadlift / RDL", points: dlSeries }
   ];
+
+  const updateDay = (dayId: string, patch: Partial<SplitDayDefinition>) => {
+    setSplitDraft((prev) => ({
+      ...prev,
+      days: prev.days.map((day) => day.id === dayId ? { ...day, ...patch } : day),
+    }));
+  };
+
+  const updateDaySlot = (dayId: string, slotIndex: number, value: string) => {
+    setSplitDraft((prev) => ({
+      ...prev,
+      days: prev.days.map((day) => {
+        if (day.id !== dayId) return day;
+        const slots = [...day.slots];
+        if (value) slots[slotIndex] = value as SplitDayDefinition["slots"][number];
+        return { ...day, slots: slots.filter(Boolean).slice(0, 6) };
+      }),
+    }));
+  };
+
+  const addCustomDay = () => {
+    setSplitDraft((prev) => ({
+      preset: "custom",
+      days: [...prev.days, makeDay(`Day ${prev.days.length + 1}`, ["PrimaryPress", "SecondaryPress", "Triceps", "Pump", "Shoulders"])],
+    }));
+  };
+
+  const moveDay = (dayId: string, dir: -1 | 1) => {
+    setSplitDraft((prev) => {
+      const idx = prev.days.findIndex((day) => day.id === dayId);
+      if (idx < 0) return prev;
+      const nextIdx = idx + dir;
+      if (nextIdx < 0 || nextIdx >= prev.days.length) return prev;
+      const days = [...prev.days];
+      const [item] = days.splice(idx, 1);
+      days.splice(nextIdx, 0, item);
+      return { ...prev, days };
+    });
+  };
+
+  const removeDay = (dayId: string) => {
+    setSplitDraft((prev) => ({
+      ...prev,
+      days: prev.days.length <= 1 ? prev.days : prev.days.filter((day) => day.id !== dayId),
+    }));
+  };
+
+  const saveSplit = async () => {
+    setSplitSaving(true);
+    try {
+      const cleaned: TrainingSplitConfig = {
+        preset: splitDraft.preset,
+        days: splitDraft.days.map((day, idx) => ({
+          id: day.id || `day-${idx + 1}`,
+          name: day.name.trim() || `Day ${idx + 1}`,
+          slots: day.slots.filter(Boolean).slice(0, 6),
+        })).filter((day) => day.slots.length > 0),
+      };
+      await saveTrainingSplitConfig(cleaned.days.length ? cleaned : pplPreset());
+    } finally {
+      setSplitSaving(false);
+    }
+  };
+
+  const applyPreset = (preset: "ppl" | "bro" | "custom") => {
+    if (preset === "ppl") setSplitDraft(pplPreset());
+    else if (preset === "bro") setSplitDraft(broPreset());
+    else setSplitDraft(initialCustomPreset());
+  };
 
   const readinessInput = useMemo(
     () => mapSeriesToReadinessInput(setsSeries, weightSeries, preferenceHistory),
@@ -510,6 +621,88 @@ export default function DashboardView(props: Props) {
         })}
       </div>
 
+      <div style={{ ...cardStyle, marginTop: 14, background: "#f8fbff" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Split setup</div>
+            <div style={{ fontSize: 28, fontWeight: 800 }}>Define the split you actually run</div>
+            <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>Pick a preset or build your own days. The engine uses this to decide what day is next, then prescribes the work.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => applyPreset("ppl")}>Load PPL</button>
+            <button onClick={() => applyPreset("bro")}>Load Bro Split</button>
+            <button onClick={() => applyPreset("custom")}>Start Custom</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+          {(["ppl", "bro", "custom"] as const).map((option) => (
+            <button
+              key={option}
+              onClick={() => setSplitDraft((prev) => ({ ...prev, preset: option }))}
+              style={{
+                border: splitDraft.preset === option ? "2px solid #111" : "1px solid #ccc",
+                background: splitDraft.preset === option ? "#111" : "#fff",
+                color: splitDraft.preset === option ? "#fff" : "#111",
+                borderRadius: 10,
+                padding: "10px 14px",
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              {option === "ppl" ? "PPL" : option === "bro" ? "Bro" : "Custom"}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+          {splitDraft.days.map((day, idx) => (
+            <div key={day.id} style={{ ...cardStyle, background: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ display: "grid", gap: 6, minWidth: 220, flex: 1 }}>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>Day {idx + 1}</div>
+                  <input
+                    value={day.name}
+                    onChange={(e) => updateDay(day.id, { name: e.target.value })}
+                    placeholder="Day name"
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => moveDay(day.id, -1)}>↑</button>
+                  <button onClick={() => moveDay(day.id, 1)}>↓</button>
+                  <button onClick={() => removeDay(day.id)}>Remove</button>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 10 }}>
+                {[0, 1, 2, 3, 4, 5].map((slotIndex) => (
+                  <label key={slotIndex} style={{ fontSize: 12 }}>
+                    Slot {slotIndex + 1}
+                    <select
+                      value={day.slots[slotIndex] ?? ""}
+                      onChange={(e) => updateDaySlot(day.id, slotIndex, e.target.value)}
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">—</option>
+                      {SLOT_OPTIONS.map((slot) => (
+                        <option key={slot} value={slot}>{slot}</option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <button onClick={addCustomDay}>Add day</button>
+          <button onClick={saveSplit} disabled={splitSaving} style={{ fontWeight: 800 }}>
+            {splitSaving ? "Saving…" : "Save split and rebuild recommendation"}
+          </button>
+        </div>
+      </div>
+
       {frictionProfile && (
         <>
           <h4 style={{ marginTop: 18, marginBottom: 8 }}>Recovery & Friction Constraints — Phase 5C</h4>
@@ -654,67 +847,6 @@ export default function DashboardView(props: Props) {
                     <li key={item} style={{ marginTop: 4 }}>{item}</li>
                   ))}
                 </ul>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ ...cardStyle, marginTop: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>Split Builder</div>
-                <div style={{ fontSize: 22, fontWeight: 800 }}>Define your split in the UI</div>
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => props.loadRecommendationPreset("current")}>Use current default</button>
-                <button type="button" onClick={() => props.loadRecommendationPreset("dave")}>Load hybrid preset</button>
-                <button type="button" onClick={() => props.loadRecommendationPreset("tim")}>Load bro split preset</button>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              <label style={{ display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session types (comma separated)</div>
-                <input
-                  value={props.splitSessionTypesInput}
-                  onChange={(e) => props.setSplitSessionTypesInput(e.target.value)}
-                  placeholder="Upper, Lower, Pull, Push, ArmsShoulders"
-                />
-              </label>
-
-              <label style={{ display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session sequence (comma separated)</div>
-                <input
-                  value={props.splitSessionSequenceInput}
-                  onChange={(e) => props.setSplitSessionSequenceInput(e.target.value)}
-                  placeholder="Upper, Lower, Pull, Push, ArmsShoulders"
-                />
-              </label>
-
-              <label style={{ display: "grid", gap: 6 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session slot map (JSON)</div>
-                <textarea
-                  value={props.splitSessionSlotMapInput}
-                  onChange={(e) => props.setSplitSessionSlotMapInput(e.target.value)}
-                  rows={14}
-                  style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
-                />
-              </label>
-
-              <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
-                Valid slot names: {validSessionSlots.join(", ")}
-              </div>
-
-              {props.splitConfigError ? (
-                <div style={{ color: "#8b0000", fontWeight: 700 }}>{props.splitConfigError}</div>
-              ) : null}
-              {props.splitConfigMessage ? (
-                <div style={{ color: "#155724", fontWeight: 700 }}>{props.splitConfigMessage}</div>
-              ) : null}
-
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={props.saveRecommendationSplitConfig} disabled={props.splitConfigBusy}>
-                  {props.splitConfigBusy ? "Saving split..." : "Save split and rebuild recommendation"}
-                </button>
               </div>
             </div>
           </div>
@@ -1008,6 +1140,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
