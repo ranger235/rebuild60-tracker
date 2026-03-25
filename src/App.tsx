@@ -17,7 +17,7 @@ import QuickLogView from "./components/QuickLogView";
 import WorkoutLoggerView from "./components/WorkoutLoggerView";
 import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory, type SessionTypeCounts } from "./lib/brainEngine";
+import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory, type TrainingSplitConfig } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
@@ -420,92 +420,6 @@ function dominantFocusFromCounts(counts: FocusCounts): BrainFocus {
   return entries[0][0];
 }
 
-
-function dominantKeyFromCounts<T extends string>(counts: Record<T, number>): T | null {
-  const entries = Object.entries(counts) as Array<[T, number]>;
-  entries.sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0 || entries[0][1] === 0) return null;
-  if ((entries[1]?.[1] ?? -1) === entries[0][1]) return null;
-  return entries[0][0];
-}
-
-function toGenericBrainFocus(value: string | null | undefined): BrainFocus {
-  const key = String(value || "").trim().toLowerCase();
-  if (!key) return "Mixed";
-  if (["push", "chest", "shoulders", "triceps"].includes(key)) return "Push";
-  if (["pull", "back", "biceps"].includes(key)) return "Pull";
-  if (["lower", "legs", "leg", "quads", "hamstrings", "glutes"].includes(key)) return "Lower";
-  return "Mixed";
-}
-
-function parseRecommendationStringArray(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of parsed) {
-      const value = String(item || "").trim();
-      if (!value) continue;
-      const key = value.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(value);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-function parseRecommendationSessionSlotMap(raw: string | null | undefined): Record<string, string[]> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: Record<string, string[]> = {};
-    for (const [sessionType, slots] of Object.entries(parsed as Record<string, unknown>)) {
-      const key = String(sessionType || "").trim();
-      if (!key || !Array.isArray(slots)) continue;
-      out[key] = slots.map((slot) => String(slot || "").trim()).filter(Boolean);
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function inferSessionTypeForSession(
-  exerciseNames: string[],
-  configuredSessionTypes: string[]
-): string | null {
-  if (!exerciseNames.length) return null;
-
-  const detailedCounts: Record<string, number> = {};
-  const genericCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-
-  for (const name of exerciseNames) {
-    const detailed = String(focusFromExerciseKey(exerciseKey(name)) || "Mixed");
-    detailedCounts[detailed] = (detailedCounts[detailed] ?? 0) + 1;
-    genericCounts[toGenericBrainFocus(detailed)] += 1;
-  }
-
-  const dominantDetailed = dominantKeyFromCounts(detailedCounts);
-  if (dominantDetailed) {
-    const exact = configuredSessionTypes.find((item) => item.toLowerCase() === dominantDetailed.toLowerCase());
-    if (exact) return exact;
-  }
-
-  const dominantGeneric = dominantFocusFromCounts(genericCounts);
-  if (dominantGeneric !== "Mixed") {
-    const genericMatch = configuredSessionTypes.find((item) => item.toLowerCase() === dominantGeneric.toLowerCase());
-    if (genericMatch) return genericMatch;
-  }
-
-  return dominantDetailed;
-}
-
 function compareRecommendationToSession(params: {
   recommendation: RecommendationFingerprint | null;
   coachSessionSeed?: CoachSessionSeed | null;
@@ -522,7 +436,7 @@ function compareRecommendationToSession(params: {
 
   for (const ex of sessionExercises) {
     const key = exerciseKey(ex.name);
-    const focus = toGenericBrainFocus(focusFromExerciseKey(key));
+    const focus = focusFromExerciseKey(key);
     actualCounts[focus] += 1;
     const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
     let topLoad: number | null = null;
@@ -955,6 +869,43 @@ useEffect(() => {
   loadBandEquiv();
 }, [userId]);
 
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    if (!userId) {
+      if (!cancelled) setSplitConfig(null);
+      return;
+    }
+    try {
+      const row = await localdb.localSettings.get([userId, "training_split_config_v1"]);
+      const parsed = row?.value ? JSON.parse(row.value) as TrainingSplitConfig : null;
+      if (!cancelled) setSplitConfig(parsed);
+    } catch {
+      if (!cancelled) setSplitConfig(null);
+    }
+  })();
+  return () => {
+    cancelled = true;
+  };
+}, [userId]);
+
+useEffect(() => {
+  if (!userId) return;
+  void refreshDashboard(splitConfig);
+}, [userId, splitConfig]);
+
+async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
+  if (!userId) return;
+  await localdb.localSettings.put({
+    user_id: userId,
+    key: "training_split_config_v1",
+    value: JSON.stringify(next),
+    updatedAt: Date.now(),
+  });
+  setSplitConfig(next);
+  await refreshDashboard(next);
+}
+
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
@@ -1009,12 +960,7 @@ useEffect(() => {
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
-  const [splitSessionTypesInput, setSplitSessionTypesInput] = useState("");
-  const [splitSessionSequenceInput, setSplitSessionSequenceInput] = useState("");
-  const [splitSessionSlotMapInput, setSplitSessionSlotMapInput] = useState("");
-  const [splitConfigBusy, setSplitConfigBusy] = useState(false);
-  const [splitConfigError, setSplitConfigError] = useState<string | null>(null);
-  const [splitConfigMessage, setSplitConfigMessage] = useState<string | null>(null);
+  const [splitConfig, setSplitConfig] = useState<TrainingSplitConfig | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -1094,41 +1040,6 @@ useEffect(() => {
     void loadBandEquiv();
   }, [userId]);
 
-  useEffect(() => {
-    if (!userId) return;
-    let cancelled = false;
-    void (async () => {
-      const knownUserIds = new Set<string>([userId]);
-      try {
-        const [settingsRows, sessionRows, templateRows] = await Promise.all([
-          localdb.localSettings.toArray(),
-          localdb.localSessions.toArray(),
-          localdb.localTemplates.toArray(),
-        ]);
-        for (const row of settingsRows) if (row.user_id) knownUserIds.add(row.user_id);
-        for (const row of sessionRows) if (row.user_id) knownUserIds.add(row.user_id);
-        for (const row of templateRows) if (row.user_id) knownUserIds.add(row.user_id);
-      } catch {
-        knownUserIds.add(userId);
-      }
-
-      const currentProfile = recommendationProfileForEmail(email);
-      const writes: Promise<unknown>[] = [];
-      for (const knownUserId of knownUserIds) {
-        writes.push(ensureRecommendationProfile(
-          knownUserId,
-          knownUserId === userId ? currentProfile : TIM_RECOMMENDATION_PROFILE
-        ));
-      }
-      await Promise.all(writes);
-      if (!cancelled) {
-        await refreshDashboard();
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId, email]);
 
   // AI Coach Add-on: load cached weekly AI coach from localStorage
   useEffect(() => {
@@ -2805,215 +2716,10 @@ function daysBetweenISO(a: string, b: string): number {
   return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
-function parseRecommendationFocusSequence(raw: string | null | undefined): Array<"Push" | "Pull" | "Lower"> {
-  return parseRecommendationStringArray(raw)
-    .map((item) => item.trim())
-    .filter((item): item is "Push" | "Pull" | "Lower" => item === "Push" || item === "Pull" || item === "Lower");
-}
 
 
-function parseAllowedExerciseKeys(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return [...new Set(parsed.map((value) => exerciseKey(String(value || ""))).filter(Boolean))];
-  } catch {
-    return [];
-  }
-}
 
-type RecommendationSessionProfile = {
-  sessionTypes: string[];
-  sessionSequence: string[];
-  sessionSlotMap: Record<string, string[]>;
-};
-
-const DAVE_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
-  sessionTypes: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
-  sessionSequence: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
-  sessionSlotMap: {
-    Upper: ["PrimaryPress", "PrimaryRow", "VerticalPull", "SecondaryPress", "Shoulders", "Biceps"],
-    Lower: ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"],
-    Pull: ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps"],
-    Push: ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
-    ArmsShoulders: ["Shoulders", "Shoulders", "Biceps", "Triceps", "Pump"],
-  },
-};
-
-const TIM_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
-  sessionTypes: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
-  sessionSequence: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
-  sessionSlotMap: {
-    Chest: ["PrimaryPress", "SecondaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
-    Back: ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps", "Pump"],
-    Shoulders: ["Shoulders", "Shoulders", "RearDelts", "Triceps", "Pump"],
-    Biceps: ["Biceps", "Biceps", "RearDelts", "Pump"],
-    Triceps: ["Triceps", "Triceps", "Shoulders", "Pump"],
-    Legs: ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"],
-  },
-};
-
-function parseRecommendationSessionTypes(raw: string | null | undefined): string[] {
-  return parseRecommendationStringArray(raw)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function parseRecommendationSessionSlotMap(raw: string | null | undefined): Record<string, string[]> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const next: Record<string, string[]> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!key || !Array.isArray(value)) continue;
-      const slots = value.map((item) => String(item || "").trim()).filter(Boolean);
-      if (slots.length > 0) next[key] = slots;
-    }
-    return next;
-  } catch {
-    return {};
-  }
-}
-
-function recommendationProfileForEmail(email: string | null | undefined): RecommendationSessionProfile {
-  const normalized = String(email || "").trim().toLowerCase();
-  if (
-    normalized.includes("rebuild60.dev") ||
-    normalized.includes("rebuild60dev") ||
-    normalized.includes("tim")
-  ) {
-    return TIM_RECOMMENDATION_PROFILE;
-  }
-  return DAVE_RECOMMENDATION_PROFILE;
-}
-
-async function ensureRecommendationProfile(userId: string, profile: RecommendationSessionProfile) {
-  const updatedAt = Date.now();
-  const [typesRow, sequenceRow, slotMapRow] = await Promise.all([
-    localdb.localSettings.get([userId, "recommendation_session_types_v1"]),
-    localdb.localSettings.get([userId, "recommendation_session_sequence_v1"]),
-    localdb.localSettings.get([userId, "recommendation_session_slot_map_v1"]),
-  ]);
-
-  const writes: Promise<unknown>[] = [];
-  if (!parseRecommendationSessionTypes(typesRow?.value).length) {
-    writes.push(localdb.localSettings.put({
-      user_id: userId,
-      key: "recommendation_session_types_v1",
-      value: JSON.stringify(profile.sessionTypes),
-      updatedAt,
-    }));
-  }
-  if (!parseRecommendationSessionTypes(sequenceRow?.value).length) {
-    writes.push(localdb.localSettings.put({
-      user_id: userId,
-      key: "recommendation_session_sequence_v1",
-      value: JSON.stringify(profile.sessionSequence),
-      updatedAt,
-    }));
-  }
-  if (!Object.keys(parseRecommendationSessionSlotMap(slotMapRow?.value)).length) {
-    writes.push(localdb.localSettings.put({
-      user_id: userId,
-      key: "recommendation_session_slot_map_v1",
-      value: JSON.stringify(profile.sessionSlotMap),
-      updatedAt,
-    }));
-  }
-
-  await Promise.all(writes);
-}
-
-
-function prettyRecommendationProfile(profile: RecommendationSessionProfile) {
-  return {
-    sessionTypes: profile.sessionTypes.join(", "),
-    sessionSequence: profile.sessionSequence.join(", "),
-    sessionSlotMap: JSON.stringify(profile.sessionSlotMap, null, 2),
-  };
-}
-
-async function saveRecommendationSplitConfig() {
-  if (!userId) return;
-  setSplitConfigBusy(true);
-  setSplitConfigError(null);
-  setSplitConfigMessage(null);
-  try {
-    const sessionTypes = parseRecommendationStringArray(splitSessionTypesInput);
-    const sessionSequence = parseRecommendationStringArray(splitSessionSequenceInput);
-    const sessionSlotMap = parseRecommendationSessionSlotMap(splitSessionSlotMapInput);
-
-    if (sessionTypes.length === 0) {
-      throw new Error("Add at least one session type.");
-    }
-    if (sessionSequence.length === 0) {
-      throw new Error("Add a session sequence.");
-    }
-    if (Object.keys(sessionSlotMap).length === 0) {
-      throw new Error("Session slot map must be valid JSON with at least one day definition.");
-    }
-
-    const normalizedTypes = new Set(sessionTypes.map((item) => item.toLowerCase()));
-    const sequenceOutsideTypes = sessionSequence.filter((item) => !normalizedTypes.has(item.toLowerCase()));
-    if (sequenceOutsideTypes.length > 0) {
-      throw new Error(`Sequence includes session types that are not defined: ${sequenceOutsideTypes.join(", ")}`);
-    }
-
-    const slotMapOutsideTypes = Object.keys(sessionSlotMap).filter((item) => !normalizedTypes.has(item.toLowerCase()));
-    if (slotMapOutsideTypes.length > 0) {
-      throw new Error(`Slot map contains day names not listed in session types: ${slotMapOutsideTypes.join(", ")}`);
-    }
-
-    const updatedAt = Date.now();
-    await Promise.all([
-      localdb.localSettings.put({
-        user_id: userId,
-        key: "recommendation_session_types_v1",
-        value: JSON.stringify(sessionTypes),
-        updatedAt,
-      }),
-      localdb.localSettings.put({
-        user_id: userId,
-        key: "recommendation_session_sequence_v1",
-        value: JSON.stringify(sessionSequence),
-        updatedAt,
-      }),
-      localdb.localSettings.put({
-        user_id: userId,
-        key: "recommendation_session_slot_map_v1",
-        value: JSON.stringify(sessionSlotMap),
-        updatedAt,
-      }),
-    ]);
-
-    setSplitConfigMessage("Split saved. Recommendation rebuilt from your current definition.");
-    await refreshDashboard();
-  } catch (error) {
-    setSplitConfigError(error instanceof Error ? error.message : "Could not save split settings.");
-  } finally {
-    setSplitConfigBusy(false);
-  }
-}
-
-function loadRecommendationPreset(preset: "current" | "dave" | "tim") {
-  const profile =
-    preset === "dave"
-      ? DAVE_RECOMMENDATION_PROFILE
-      : preset === "tim"
-      ? TIM_RECOMMENDATION_PROFILE
-      : recommendationProfileForEmail(email);
-  const pretty = prettyRecommendationProfile(profile);
-  setSplitSessionTypesInput(pretty.sessionTypes);
-  setSplitSessionSequenceInput(pretty.sessionSequence);
-  setSplitSessionSlotMapInput(pretty.sessionSlotMap);
-  setSplitConfigError(null);
-  setSplitConfigMessage(null);
-}
-
-
-async function refreshDashboard() {
+async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
     if (!userId) return;
     setDashBusy(true);
     try {
@@ -3022,63 +2728,14 @@ async function refreshDashboard() {
 
       // Map session_id -> day
       const sessionDay = new Map<string, string>();
-      const userSessionIds = new Set<string>();
       for (const s of allSessions) {
         const day = s.day_date || isoToDay(s.started_at);
         sessionDay.set(s.id, day);
-        userSessionIds.add(s.id);
       }
-
-      const [
-        explicitAllowedRow,
-        focusSequenceRow,
-        sessionTypesRow,
-        sessionSequenceRow,
-        sessionSlotMapRow,
-      ] = await Promise.all([
-        localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]),
-        localdb.localSettings.get([userId, "recommendation_focus_sequence_v1"]),
-        localdb.localSettings.get([userId, "recommendation_session_types_v1"]),
-        localdb.localSettings.get([userId, "recommendation_session_sequence_v1"]),
-        localdb.localSettings.get([userId, "recommendation_session_slot_map_v1"]),
-      ]);
-      const explicitAllowedKeys = parseAllowedExerciseKeys(explicitAllowedRow?.value);
-      const configuredFocusSequence = parseRecommendationFocusSequence(focusSequenceRow?.value);
-      const profileFallback = recommendationProfileForEmail(email);
-      const configuredSessionTypes = parseRecommendationSessionTypes(sessionTypesRow?.value);
-      const configuredSessionSequence = parseRecommendationSessionTypes(sessionSequenceRow?.value);
-      const configuredSessionSlotMap = parseRecommendationSessionSlotMap(sessionSlotMapRow?.value);
-      const effectiveSessionTypes = configuredSessionTypes.length > 0 ? configuredSessionTypes : profileFallback.sessionTypes;
-      const effectiveSessionSequence = configuredSessionSequence.length > 0 ? configuredSessionSequence : profileFallback.sessionSequence;
-      const effectiveSessionSlotMap = Object.keys(configuredSessionSlotMap).length > 0 ? configuredSessionSlotMap : profileFallback.sessionSlotMap;
-      setSplitSessionTypesInput(effectiveSessionTypes.join(", "));
-      setSplitSessionSequenceInput(effectiveSessionSequence.join(", "));
-      setSplitSessionSlotMapInput(JSON.stringify(effectiveSessionSlotMap, null, 2));
-
-      const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
-      const userTemplateIds = new Set(userTemplates.map((row) => row.id));
-      const allTemplateExercises = await localdb.localTemplateExercises.toArray();
 
       // Load all exercises/sets (local)
       const allExercises = await localdb.localExercises.toArray();
       const allSets = await localdb.localSets.toArray();
-
-      const derivedAllowedKeys = new Set<string>();
-      for (const ex of allExercises) {
-        if (!userSessionIds.has(ex.session_id)) continue;
-        const key = exerciseKey(ex.name);
-        if (key) derivedAllowedKeys.add(key);
-      }
-      for (const ex of allTemplateExercises) {
-        if (!userTemplateIds.has(ex.template_id)) continue;
-        const key = exerciseKey(ex.name);
-        if (key) derivedAllowedKeys.add(key);
-      }
-      const allowedExerciseKeys = explicitAllowedKeys.length > 0
-        ? explicitAllowedKeys
-        : derivedAllowedKeys.size > 0
-        ? Array.from(derivedAllowedKeys).sort()
-        : null;
 
       // exerciseId -> { sessionId, name }
       const exInfo = new Map<string, { session_id: string; name: string }>();
@@ -3301,6 +2958,7 @@ async function refreshDashboard() {
         return last7.reduce((a, b) => a + b, 0) / last7.length;
       })();
 
+      const userSessionIds = new Set(allSessions.map((s) => s.id));
       const setsByExerciseId = new Map<string, LocalWorkoutSet[]>();
       for (const st of allSets) {
         const info = exInfo.get(st.exercise_id);
@@ -3323,10 +2981,6 @@ async function refreshDashboard() {
         .sort((a, b) => (a.day_date || isoToDay(a.started_at)) < (b.day_date || isoToDay(b.started_at)) ? 1 : -1);
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-      const recentSessionTypeCounts: SessionTypeCounts = {};
-      for (const sessionType of (effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence)) {
-        recentSessionTypeCounts[sessionType] = 0;
-      }
       const recentFocusWindow = recentSessions.slice(0, 9);
       const exerciseHistoryMap = new Map<string, ExerciseHistory>();
 
@@ -3335,18 +2989,10 @@ async function refreshDashboard() {
         const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
         for (const ex of exercisesForSession) {
           const key = exerciseKey(ex.name);
-          const focus = toGenericBrainFocus(focusFromExerciseKey(key));
+          const focus = focusFromExerciseKey(key);
           focusCounts[focus] += 1;
         }
         recentFocusCounts[dominantFocusFromCounts(focusCounts)] += 1;
-
-        const inferredSessionType = inferSessionTypeForSession(
-          exercisesForSession.map((ex) => ex.name),
-          effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence
-        );
-        if (inferredSessionType) {
-          recentSessionTypeCounts[inferredSessionType] = (recentSessionTypeCounts[inferredSessionType] ?? 0) + 1;
-        }
       }
 
       const today = fmt(endDay);
@@ -3355,7 +3001,7 @@ async function refreshDashboard() {
         for (const ex of exercisesForSession) {
           const key = exerciseKey(ex.name);
           if (exerciseHistoryMap.has(key)) continue;
-          const focus = toGenericBrainFocus(focusFromExerciseKey(key));
+          const focus = focusFromExerciseKey(key);
           const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
           let lastLoad: number | null = null;
           let lastReps: number | null = null;
@@ -3444,7 +3090,7 @@ async function refreshDashboard() {
           const sessionFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of exercisesForSession) {
             const key = exerciseKey(ex.name);
-            const focus = toGenericBrainFocus(focusFromExerciseKey(key));
+            const focus = focusFromExerciseKey(key);
             sessionFocusCounts[focus] += 1;
             const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
             weekSets += sets.length;
@@ -3547,6 +3193,8 @@ async function refreshDashboard() {
       }
 
       const brain = computeBrainSnapshot({
+        splitConfig: splitOverride ?? splitConfig,
+        recentSessionTitles: recentSessions.map((s) => s.title),
         sleepAvg7,
         proteinAvg7,
         trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
@@ -3563,25 +3211,13 @@ async function refreshDashboard() {
           const session = recentFocusWindow[0];
           const counts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of sessionExercisesMap.get(session.id) ?? []) {
-            counts[toGenericBrainFocus(focusFromExerciseKey(exerciseKey(ex.name)))] += 1;
+            counts[focusFromExerciseKey(exerciseKey(ex.name))] += 1;
           }
           return dominantFocusFromCounts(counts);
         })() : null,
         exerciseHistory: [...exerciseHistoryMap.values()],
         preferenceSignals,
-        frictionProfile: friction,
-        allowedExerciseKeys,
-        focusSequence: configuredFocusSequence.length > 0 ? configuredFocusSequence : null,
-        sessionTypes: effectiveSessionTypes.length > 0 ? effectiveSessionTypes : null,
-        sessionSequence: effectiveSessionSequence.length > 0 ? effectiveSessionSequence : null,
-        recentSessionTypeCounts,
-        lastSessionType: recentFocusWindow.length > 0
-          ? inferSessionTypeForSession(
-              (sessionExercisesMap.get(recentFocusWindow[0].id) ?? []).map((ex) => ex.name),
-              effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence
-            )
-          : null,
-        sessionSlotMap: Object.keys(effectiveSessionSlotMap).length > 0 ? effectiveSessionSlotMap as Record<string, any> : null
+        frictionProfile: friction
       });
 
       setTimelineWeeks(timeline);
@@ -4140,6 +3776,8 @@ async function syncNow() {
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
+          splitConfig={splitConfig}
+          saveTrainingSplitConfig={saveTrainingSplitConfig}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
           setTimerOn={setTimerOn}
@@ -4246,6 +3884,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
