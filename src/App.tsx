@@ -1088,6 +1088,41 @@ useEffect(() => {
     void loadBandEquiv();
   }, [userId]);
 
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void (async () => {
+      const knownUserIds = new Set<string>([userId]);
+      try {
+        const [settingsRows, sessionRows, templateRows] = await Promise.all([
+          localdb.localSettings.toArray(),
+          localdb.localSessions.toArray(),
+          localdb.localTemplates.toArray(),
+        ]);
+        for (const row of settingsRows) if (row.user_id) knownUserIds.add(row.user_id);
+        for (const row of sessionRows) if (row.user_id) knownUserIds.add(row.user_id);
+        for (const row of templateRows) if (row.user_id) knownUserIds.add(row.user_id);
+      } catch {
+        knownUserIds.add(userId);
+      }
+
+      const currentProfile = recommendationProfileForEmail(email);
+      const writes: Promise<unknown>[] = [];
+      for (const knownUserId of knownUserIds) {
+        writes.push(applyRecommendationProfile(
+          knownUserId,
+          knownUserId === userId ? currentProfile : TIM_RECOMMENDATION_PROFILE
+        ));
+      }
+      await Promise.all(writes);
+      if (!cancelled) {
+        await refreshDashboard();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, email]);
 
   // AI Coach Add-on: load cached weekly AI coach from localStorage
   useEffect(() => {
@@ -2782,6 +2817,96 @@ function parseAllowedExerciseKeys(raw: string | null | undefined): string[] {
   }
 }
 
+type RecommendationSessionProfile = {
+  sessionTypes: string[];
+  sessionSequence: string[];
+  sessionSlotMap: Record<string, string[]>;
+};
+
+const DAVE_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
+  sessionTypes: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
+  sessionSequence: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
+  sessionSlotMap: {
+    Upper: ["PrimaryPress", "PrimaryRow", "SecondaryPress", "VerticalPull", "Shoulders"],
+    Lower: ["PrimarySquat", "Hinge", "Hamstrings", "Calves", "Core"],
+    Pull: ["PrimaryRow", "VerticalPull", "RearDelts", "Biceps", "Pump"],
+    Push: ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
+    ArmsShoulders: ["OverheadPress", "LateralRaise", "Biceps", "Triceps", "Pump"],
+  },
+};
+
+const TIM_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
+  sessionTypes: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
+  sessionSequence: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
+  sessionSlotMap: {
+    Chest: ["PrimaryPress", "SecondaryPress", "ChestIso", "Triceps", "Pump"],
+    Back: ["PrimaryRow", "VerticalPull", "RearDelts", "Biceps", "Pump"],
+    Shoulders: ["OverheadPress", "LateralRaise", "RearDelts", "Traps", "Pump"],
+    Biceps: ["Biceps", "Biceps", "Forearms", "Pump"],
+    Triceps: ["Triceps", "Triceps", "Pump"],
+    Legs: ["PrimarySquat", "Hinge", "Hamstrings", "Calves", "Core"],
+  },
+};
+
+function parseRecommendationSessionTypes(raw: string | null | undefined): string[] {
+  return parseRecommendationStringArray(raw)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseRecommendationSessionSlotMap(raw: string | null | undefined): Record<string, string[]> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const next: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!key || !Array.isArray(value)) continue;
+      const slots = value.map((item) => String(item || "").trim()).filter(Boolean);
+      if (slots.length > 0) next[key] = slots;
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function recommendationProfileForEmail(email: string | null | undefined): RecommendationSessionProfile {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (
+    normalized.includes("rebuild60.dev") ||
+    normalized.includes("rebuild60dev") ||
+    normalized.includes("tim")
+  ) {
+    return TIM_RECOMMENDATION_PROFILE;
+  }
+  return DAVE_RECOMMENDATION_PROFILE;
+}
+
+async function applyRecommendationProfile(userId: string, profile: RecommendationSessionProfile) {
+  const updatedAt = Date.now();
+  await Promise.all([
+    localdb.localSettings.put({
+      user_id: userId,
+      key: "recommendation_session_types_v1",
+      value: JSON.stringify(profile.sessionTypes),
+      updatedAt,
+    }),
+    localdb.localSettings.put({
+      user_id: userId,
+      key: "recommendation_session_sequence_v1",
+      value: JSON.stringify(profile.sessionSequence),
+      updatedAt,
+    }),
+    localdb.localSettings.put({
+      user_id: userId,
+      key: "recommendation_session_slot_map_v1",
+      value: JSON.stringify(profile.sessionSlotMap),
+      updatedAt,
+    }),
+  ]);
+}
+
 
 async function refreshDashboard() {
     if (!userId) return;
@@ -2799,7 +2924,13 @@ async function refreshDashboard() {
         userSessionIds.add(s.id);
       }
 
-      const [explicitAllowedRow, focusSequenceRow, sessionTypesRow, sessionSequenceRow, sessionSlotMapRow] = await Promise.all([
+      const [
+        explicitAllowedRow,
+        focusSequenceRow,
+        sessionTypesRow,
+        sessionSequenceRow,
+        sessionSlotMapRow,
+      ] = await Promise.all([
         localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]),
         localdb.localSettings.get([userId, "recommendation_focus_sequence_v1"]),
         localdb.localSettings.get([userId, "recommendation_session_types_v1"]),
@@ -2808,9 +2939,13 @@ async function refreshDashboard() {
       ]);
       const explicitAllowedKeys = parseAllowedExerciseKeys(explicitAllowedRow?.value);
       const configuredFocusSequence = parseRecommendationFocusSequence(focusSequenceRow?.value);
-      const configuredSessionTypes = parseRecommendationStringArray(sessionTypesRow?.value);
-      const configuredSessionSequence = parseRecommendationStringArray(sessionSequenceRow?.value);
+      const profileFallback = recommendationProfileForEmail(email);
+      const configuredSessionTypes = parseRecommendationSessionTypes(sessionTypesRow?.value);
+      const configuredSessionSequence = parseRecommendationSessionTypes(sessionSequenceRow?.value);
       const configuredSessionSlotMap = parseRecommendationSessionSlotMap(sessionSlotMapRow?.value);
+      const effectiveSessionTypes = configuredSessionTypes.length > 0 ? configuredSessionTypes : profileFallback.sessionTypes;
+      const effectiveSessionSequence = configuredSessionSequence.length > 0 ? configuredSessionSequence : profileFallback.sessionSequence;
+      const effectiveSessionSlotMap = Object.keys(configuredSessionSlotMap).length > 0 ? configuredSessionSlotMap : profileFallback.sessionSlotMap;
 
       const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
       const userTemplateIds = new Set(userTemplates.map((row) => row.id));
@@ -3081,7 +3216,7 @@ async function refreshDashboard() {
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
       const recentSessionTypeCounts: SessionTypeCounts = {};
-      for (const sessionType of (configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence)) {
+      for (const sessionType of (effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence)) {
         recentSessionTypeCounts[sessionType] = 0;
       }
       const recentFocusWindow = recentSessions.slice(0, 9);
@@ -3099,7 +3234,7 @@ async function refreshDashboard() {
 
         const inferredSessionType = inferSessionTypeForSession(
           exercisesForSession.map((ex) => ex.name),
-          configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence
+          effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence
         );
         if (inferredSessionType) {
           recentSessionTypeCounts[inferredSessionType] = (recentSessionTypeCounts[inferredSessionType] ?? 0) + 1;
@@ -3329,16 +3464,16 @@ async function refreshDashboard() {
         frictionProfile: friction,
         allowedExerciseKeys,
         focusSequence: configuredFocusSequence.length > 0 ? configuredFocusSequence : null,
-        sessionTypes: configuredSessionTypes.length > 0 ? configuredSessionTypes : null,
-        sessionSequence: configuredSessionSequence.length > 0 ? configuredSessionSequence : null,
+        sessionTypes: effectiveSessionTypes.length > 0 ? effectiveSessionTypes : null,
+        sessionSequence: effectiveSessionSequence.length > 0 ? effectiveSessionSequence : null,
         recentSessionTypeCounts,
         lastSessionType: recentFocusWindow.length > 0
           ? inferSessionTypeForSession(
               (sessionExercisesMap.get(recentFocusWindow[0].id) ?? []).map((ex) => ex.name),
-              configuredSessionTypes.length > 0 ? configuredSessionTypes : configuredSessionSequence
+              effectiveSessionTypes.length > 0 ? effectiveSessionTypes : effectiveSessionSequence
             )
           : null,
-        sessionSlotMap: Object.keys(configuredSessionSlotMap).length > 0 ? configuredSessionSlotMap as Record<string, any> : null
+        sessionSlotMap: Object.keys(effectiveSessionSlotMap).length > 0 ? effectiveSessionSlotMap as Record<string, any> : null
       });
 
       setTimelineWeeks(timeline);
@@ -4003,6 +4138,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
