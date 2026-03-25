@@ -2160,25 +2160,38 @@ This removes it locally immediately and queues a cloud delete.`
     const label = t ? `"${t.name}"` : "this template";
     if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
 
-    // Local-first delete
-    await localdb.transaction("rw", localdb.localTemplates, localdb.localTemplateExercises, async () => {
-      await localdb.localTemplateExercises.where({ template_id: templateId }).delete();
-      await localdb.localTemplates.delete(templateId);
-    });
+    // Local delete + queue cloud delete in one transaction so autosync cannot
+    // pull a stale remote copy back in before the delete op is recorded.
+    try {
+      await localdb.transaction(
+        "rw",
+        localdb.localTemplates,
+        localdb.localTemplateExercises,
+        localdb.pendingOps,
+        async () => {
+          await localdb.localTemplateExercises.where({ template_id: templateId }).delete();
+          await localdb.localTemplates.delete(templateId);
+          await localdb.pendingOps.add({
+            createdAt: Date.now(),
+            op: "delete_template",
+            payload: { user_id: userId, template_id: templateId },
+            status: "queued"
+          });
+        }
+      );
+    } catch (e) {
+      console.warn("Failed to queue delete_template:", e);
+      throw e;
+    }
 
     // UI state
     if (openTemplateId === templateId) {
       setOpenTemplateId(null);
+      setEditTemplateName("");
+      setEditTemplateDesc("");
       setTemplateExercises([]);
     }
     await loadTemplates();
-
-    // Queue cloud delete (best-effort)
-    try {
-      await enqueue("delete_template", { user_id: userId, template_id: templateId });
-    } catch (e) {
-      console.warn("Failed to enqueue delete_template:", e);
-    }
   }
 
 
@@ -2226,18 +2239,28 @@ async function deleteTemplateExercise(templateExerciseId: string) {
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((x, i) => ({ ...x, sort_order: i }));
 
-  await localdb.transaction("rw", localdb.localTemplateExercises, async () => {
+  await localdb.transaction("rw", localdb.localTemplateExercises, localdb.pendingOps, async () => {
     await localdb.localTemplateExercises.delete(templateExerciseId);
     for (const row of remaining) {
       await localdb.localTemplateExercises.put(row);
     }
+    await localdb.pendingOps.add({
+      createdAt: Date.now(),
+      op: "delete_template_exercise",
+      payload: { template_exercise_id: templateExerciseId },
+      status: "queued"
+    });
+    await localdb.pendingOps.add({
+      createdAt: Date.now() + 1,
+      op: "reorder_template_exercises",
+      payload: {
+        ordered_template_exercise_ids: remaining.map((x) => x.id)
+      },
+      status: "queued"
+    });
   });
 
   setTemplateExercises(remaining);
-  await enqueue("delete_template_exercise", { template_exercise_id: templateExerciseId });
-  await enqueue("reorder_template_exercises", {
-    ordered_template_exercise_ids: remaining.map((x) => x.id)
-  });
 }
 
 async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 1) {
@@ -3927,6 +3950,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
