@@ -3,6 +3,7 @@ import {
   candidatesForSlot,
   pickBestCandidateForSlot,
   type Slot,
+  type AllowedExerciseFilter,
 } from "./slotEngine";
 import {
   applyPreferenceSignalsToNeeds,
@@ -61,6 +62,7 @@ export type BrainInput = {
   exerciseHistory: ExerciseHistory[];
   preferenceSignals?: PreferenceSignals | null;
   frictionProfile?: FrictionProfile | null;
+  allowedExerciseKeys?: string[] | null;
 };
 
 export type BrainMetric = {
@@ -691,7 +693,8 @@ function buildExercisesFromSlots(
   history: ExerciseHistory[],
   preferenceSignals?: PreferenceSignals | null,
   frictionProfile?: FrictionProfile | null,
-  priorityProfile?: NextSessionPriorityProfile | null
+  priorityProfile?: NextSessionPriorityProfile | null,
+  allowedExerciseKeys?: AllowedExerciseFilter
 ): RecommendedExercise[] {
   const used = new Set<string>();
   const noveltyCap = frictionProfile?.recommendations.noveltyCap ?? "normal";
@@ -709,10 +712,13 @@ function buildExercisesFromSlots(
   const slotIsAnchor = (slot: Slot) => ["PrimaryPress", "PrimaryRow", "VerticalPull", "PrimarySquat", "Hinge"].includes(slot);
   const slotIsSupport = (slot: Slot) => ["SecondaryPress", "SecondaryRow", "Shoulders", "Triceps", "Pump", "RearDelts", "Biceps", "SecondaryQuad", "Hamstrings", "Calves"].includes(slot);
 
-  return trimmedSlots.map((slot) => {
+  const recommendations: RecommendedExercise[] = [];
+
+  for (const slot of trimmedSlots) {
     const program = SLOT_PROGRAMS[slot];
-    const candidates = candidatesForSlot(slot);
-    const rankedBase = pickBestCandidateForSlot(slot, history, mode, preferenceSignals);
+    const candidates = candidatesForSlot(slot, allowedExerciseKeys);
+    if (candidates.length === 0) continue;
+    const rankedBase = pickBestCandidateForSlot(slot, history, mode, preferenceSignals, undefined, allowedExerciseKeys);
     const ranked = rankedBase
       .map((candidate) => {
         let score = candidate.score;
@@ -859,7 +865,7 @@ function buildExercisesFromSlots(
       note = `${note} ${cleaned}.`;
     }
 
-    return {
+    recommendations.push({
       slot: program.label,
       name,
       sets,
@@ -869,8 +875,10 @@ function buildExercisesFromSlots(
       note,
       eventTag,
       swappedFrom,
-    };
-  });
+    });
+  }
+
+  return recommendations;
 }
 
 export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
@@ -1001,7 +1009,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     input.exerciseHistory,
     input.preferenceSignals,
     input.frictionProfile,
-    nextSessionPriority
+    nextSessionPriority,
+    input.allowedExerciseKeys
   );
 
   const friction = input.frictionProfile;
@@ -1165,6 +1174,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
