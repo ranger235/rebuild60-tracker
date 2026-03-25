@@ -2799,12 +2799,18 @@ async function refreshDashboard() {
         userSessionIds.add(s.id);
       }
 
-      const [explicitAllowedRow, focusSequenceRow] = await Promise.all([
+      const [explicitAllowedRow, focusSequenceRow, sessionTypesRow, sessionSequenceRow, sessionSlotMapRow] = await Promise.all([
         localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]),
         localdb.localSettings.get([userId, "recommendation_focus_sequence_v1"]),
+        localdb.localSettings.get([userId, "recommendation_session_types_v1"]),
+        localdb.localSettings.get([userId, "recommendation_session_sequence_v1"]),
+        localdb.localSettings.get([userId, "recommendation_session_slot_map_v1"]),
       ]);
       const explicitAllowedKeys = parseAllowedExerciseKeys(explicitAllowedRow?.value);
       const configuredFocusSequence = parseRecommendationFocusSequence(focusSequenceRow?.value);
+      const configuredSessionTypes = parseRecommendationStringArray(sessionTypesRow?.value);
+      const configuredSessionSequence = parseRecommendationStringArray(sessionSequenceRow?.value);
+      const configuredSessionSlotMap = parseRecommendationSessionSlotMap(sessionSlotMapRow?.value);
 
       const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
       const userTemplateIds = new Set(userTemplates.map((row) => row.id));
@@ -3997,6 +4003,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
