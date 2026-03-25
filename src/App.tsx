@@ -1639,7 +1639,8 @@ async function saveQuickLog() {
 
   async function openSession(sessionId: string) {
     setOpenSessionId(sessionId);
-    saveOpenWorkoutSessionPointer(sessionId, selectedDayDate);
+    const sessionRow = await localdb.localSessions.get(sessionId);
+    saveOpenWorkoutSessionPointer(sessionId, sessionRow?.day_date || selectedDayDate);
 
     const ex = await localdb.localExercises.where({ session_id: sessionId }).sortBy("sort_order");
     setExercises(ex);
@@ -1671,13 +1672,14 @@ async function saveQuickLog() {
 
     createSessionInFlightRef.current = true;
     try {
+      const targetDayDate = selectedDayDate;
       const id = uuid();
       const started_at = new Date().toISOString();
 
       const local: LocalWorkoutSession = {
         id,
         user_id: userId,
-        day_date: selectedDayDate,
+        day_date: targetDayDate,
         started_at,
         title: "Week 1 Day 1",
         notes: null
@@ -1690,13 +1692,13 @@ async function saveQuickLog() {
       await enqueue("create_workout", {
         id,
         user_id: userId,
-        day_date: selectedDayDate,
+        day_date: targetDayDate,
         started_at,
         title: local.title,
         notes: null
       });
 
-      await loadSessionsForDay(selectedDayDate);
+      await loadSessionsForDay(targetDayDate);
       await openSession(id);
       setTab("workout");
     } finally {
@@ -1709,13 +1711,14 @@ async function saveQuickLog() {
 
     createSessionInFlightRef.current = true;
     try {
+      const targetDayDate = selectedDayDate;
       const id = uuid();
       const started_at = new Date().toISOString();
 
       const local: LocalWorkoutSession = {
         id,
         user_id: userId,
-        day_date: selectedDayDate,
+        day_date: targetDayDate,
         started_at,
         title: brainSnapshot.recommendedSession.title || "Coach Session",
         notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
@@ -1726,7 +1729,7 @@ async function saveQuickLog() {
       await enqueue("create_workout", {
         id,
         user_id: userId,
-        day_date: selectedDayDate,
+        day_date: targetDayDate,
         started_at,
         title: local.title,
         notes: local.notes
@@ -1793,7 +1796,7 @@ async function saveQuickLog() {
       exercises: coachExercises
     });
 
-    await loadSessionsForDay(selectedDayDate);
+    await loadSessionsForDay(targetDayDate);
     await openSession(id);
     setCoachSessionSeed({
       sessionId: id,
@@ -3279,7 +3282,15 @@ async function refreshLocalUiFromDexie() {
   await loadTemplates();
 
   if (openSessionId) {
-    await openSession(openSessionId);
+    const openRow = await localdb.localSessions.get(openSessionId);
+    if (openRow && openRow.user_id === userId && openRow.day_date === selectedDayDate) {
+      await openSession(openSessionId);
+    } else {
+      setOpenSessionId(null);
+      setExercises([]);
+      setSets([]);
+      await recoverOpenSessionForDay(selectedDayDate);
+    }
   } else {
     await recoverOpenSessionForDay(selectedDayDate);
   }
@@ -3884,6 +3895,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
