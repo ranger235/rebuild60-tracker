@@ -2678,7 +2678,16 @@ function daysBetweenISO(a: string, b: string): number {
   return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
-
+function parseAllowedExerciseKeys(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.map((value) => exerciseKey(String(value || ""))).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
 
 
 async function refreshDashboard() {
@@ -2690,14 +2699,40 @@ async function refreshDashboard() {
 
       // Map session_id -> day
       const sessionDay = new Map<string, string>();
+      const userSessionIds = new Set<string>();
       for (const s of allSessions) {
         const day = s.day_date || isoToDay(s.started_at);
         sessionDay.set(s.id, day);
+        userSessionIds.add(s.id);
       }
+
+      const explicitAllowedRow = await localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]);
+      const explicitAllowedKeys = parseAllowedExerciseKeys(explicitAllowedRow?.value);
+
+      const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
+      const userTemplateIds = new Set(userTemplates.map((row) => row.id));
+      const allTemplateExercises = await localdb.localTemplateExercises.toArray();
 
       // Load all exercises/sets (local)
       const allExercises = await localdb.localExercises.toArray();
       const allSets = await localdb.localSets.toArray();
+
+      const derivedAllowedKeys = new Set<string>();
+      for (const ex of allExercises) {
+        if (!userSessionIds.has(ex.session_id)) continue;
+        const key = exerciseKey(ex.name);
+        if (key) derivedAllowedKeys.add(key);
+      }
+      for (const ex of allTemplateExercises) {
+        if (!userTemplateIds.has(ex.template_id)) continue;
+        const key = exerciseKey(ex.name);
+        if (key) derivedAllowedKeys.add(key);
+      }
+      const allowedExerciseKeys = explicitAllowedKeys.length > 0
+        ? explicitAllowedKeys
+        : derivedAllowedKeys.size > 0
+        ? Array.from(derivedAllowedKeys).sort()
+        : null;
 
       // exerciseId -> { sessionId, name }
       const exInfo = new Map<string, { session_id: string; name: string }>();
@@ -2920,7 +2955,6 @@ async function refreshDashboard() {
         return last7.reduce((a, b) => a + b, 0) / last7.length;
       })();
 
-      const userSessionIds = new Set(allSessions.map((s) => s.id));
       const setsByExerciseId = new Map<string, LocalWorkoutSet[]>();
       for (const st of allSets) {
         const info = exInfo.get(st.exercise_id);
@@ -3177,7 +3211,8 @@ async function refreshDashboard() {
         })() : null,
         exerciseHistory: [...exerciseHistoryMap.values()],
         preferenceSignals,
-        frictionProfile: friction
+        frictionProfile: friction,
+        allowedExerciseKeys
       });
 
       setTimelineWeeks(timeline);
@@ -3842,6 +3877,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
