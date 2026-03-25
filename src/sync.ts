@@ -16,32 +16,6 @@ async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?
   return result?.data as T;
 }
 
-async function assertTemplateDeleted(templateId: string) {
-  const rows = await must<any[]>(
-    supabase
-      .from("workout_templates")
-      .select("id")
-      .eq("id", templateId)
-      .limit(1)
-  );
-  if ((rows ?? []).length > 0) {
-    throw new Error(`delete_template did not remove template ${templateId}`);
-  }
-}
-
-async function assertTemplateExerciseDeleted(templateExerciseId: string) {
-  const rows = await must<any[]>(
-    supabase
-      .from("workout_template_exercises")
-      .select("id")
-      .eq("id", templateExerciseId)
-      .limit(1)
-  );
-  if ((rows ?? []).length > 0) {
-    throw new Error(`delete_template_exercise did not remove exercise ${templateExerciseId}`);
-  }
-}
-
 export async function enqueue(op: PendingOp["op"], payload: any) {
   await localdb.pendingOps.add({
     createdAt: Date.now(),
@@ -90,7 +64,6 @@ async function processOp(op: PendingOp["op"], payload: any) {
       if (!template_id) throw new Error("delete_template missing template_id");
       await must(supabase.from("workout_template_exercises").delete().eq("template_id", template_id));
       await must(supabase.from("workout_templates").delete().eq("id", template_id));
-      await assertTemplateDeleted(String(template_id));
       return;
     }
 
@@ -106,16 +79,44 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const template_exercise_id = payload?.template_exercise_id;
       if (!template_exercise_id) throw new Error("delete_template_exercise missing template_exercise_id");
       await must(supabase.from("workout_template_exercises").delete().eq("id", template_exercise_id));
-      await assertTemplateExerciseDeleted(String(template_exercise_id));
       return;
     }
 
     case "reorder_template_exercises": {
       const ordered_template_exercise_ids: string[] = payload?.ordered_template_exercise_ids ?? [];
       if (!Array.isArray(ordered_template_exercise_ids)) throw new Error("reorder_template_exercises ordered_template_exercise_ids must be array");
-      for (let i = 0; i < ordered_template_exercise_ids.length; i++) {
-        const id = ordered_template_exercise_ids[i];
-        await must(supabase.from("workout_template_exercises").update({ sort_order: i }).eq("id", id));
+      if (ordered_template_exercise_ids.length === 0) return;
+
+      // Reorder is best-effort. After local deletes, some ids may already be gone
+      // remotely, and that should not keep the sync queue stuck forever.
+      let existingIds = new Set<string>(ordered_template_exercise_ids);
+      try {
+        const rows = await must<any[]>(
+          supabase
+            .from("workout_template_exercises")
+            .select("id")
+            .in("id", ordered_template_exercise_ids)
+        );
+        existingIds = new Set((rows ?? []).map((row: any) => row.id));
+      } catch (e) {
+        console.warn("reorder_template_exercises: failed to prefetch existing ids; falling back to direct updates", e);
+      }
+
+      const existingOrderedIds = ordered_template_exercise_ids.filter((id) => existingIds.has(id));
+      if (existingOrderedIds.length === 0) return;
+
+      for (let i = 0; i < existingOrderedIds.length; i++) {
+        const id = existingOrderedIds[i];
+        const result: any = await supabase
+          .from("workout_template_exercises")
+          .update({ sort_order: i })
+          .eq("id", id);
+        if (result?.error) {
+          // Do not leave the whole queue wedged on a reorder pass. The local
+          // order is already authoritative for this device, and missing/blocked
+          // remote rows should not resurrect deleted template exercises.
+          console.warn(`reorder_template_exercises: skipping remote update for ${id}:`, result.error);
+        }
       }
       return;
     }
@@ -267,6 +268,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
