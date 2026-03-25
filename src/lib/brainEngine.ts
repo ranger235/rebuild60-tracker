@@ -17,7 +17,7 @@ import {
   type NeedEngineInput,
   type NeedKey,
 } from "./sessionNeedsEngine";
-import { composeAdaptiveSession } from "./sessionComposer";
+import { composeAdaptiveSession, type SessionSlotMap } from "./sessionComposer";
 import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
 import type { FrictionProfile } from "./frictionEngine";
 import { buildNextSessionPriorityProfile, type NextSessionPriorityProfile } from "./nextSessionPriority";
@@ -30,6 +30,8 @@ export type FocusCounts = {
   Lower: number;
   Mixed: number;
 };
+
+export type SessionTypeCounts = Record<string, number>;
 
 export type ExerciseHistory = {
   key: string;
@@ -63,6 +65,11 @@ export type BrainInput = {
   frictionProfile?: FrictionProfile | null;
   allowedExerciseKeys?: string[] | null;
   focusSequence?: string[] | null;
+  sessionTypes?: string[] | null;
+  sessionSequence?: string[] | null;
+  recentSessionTypeCounts?: SessionTypeCounts | null;
+  lastSessionType?: string | null;
+  sessionSlotMap?: SessionSlotMap | null;
 };
 
 export type BrainMetric = {
@@ -90,6 +97,7 @@ export type RecommendedExercise = {
 
 export type RecommendedSession = {
   focus: Exclude<BrainFocus, "Mixed">;
+  sessionType?: string | null;
   bias: string;
   title: string;
   rationale: string;
@@ -111,6 +119,7 @@ export type BrainSnapshot = {
 };
 
 type Decision = {
+  plannedSessionType: string;
   plannedFocus: Exclude<BrainFocus, "Mixed">;
   focus: Exclude<BrainFocus, "Mixed">;
   mode: "Progression" | "Base" | "Reduced volume";
@@ -338,32 +347,17 @@ function nextFocusFromSequence(
 }
 
 function chooseLeastHitFocus(input: BrainInput): Exclude<BrainFocus, "Mixed"> {
-  const entries: Array<[Exclude<BrainFocus, "Mixed">, number]> = [
-    ["Push", input.recentFocusCounts.Push],
-    ["Pull", input.recentFocusCounts.Pull],
-    ["Lower", input.recentFocusCounts.Lower],
-  ];
-
-  entries.sort((a, b) => {
-    if (a[1] !== b[1]) return a[1] - b[1];
-    if (input.lastSessionFocus && a[0] === input.lastSessionFocus) return 1;
-    if (input.lastSessionFocus && b[0] === input.lastSessionFocus) return -1;
-    return 0;
-  });
-
-  return entries[0][0];
+  return inferGenericFocusFromSessionType(
+    chooseLeastHitSessionType(
+      deriveSessionTypes(input),
+      normalizeSessionTypeCounts(input.recentSessionTypeCounts, deriveSessionTypes(input)),
+      input.lastSessionType
+    )
+  );
 }
 
 function choosePlannedFocus(input: BrainInput): Exclude<BrainFocus, "Mixed"> {
-  const underHit = inferUnderrepresentedFocus(input.recentFocusCounts);
-  const configuredSequence = normalizeFocusSequence(input.focusSequence);
-  const rotated = nextFocusFromSequence(input.lastSessionFocus, configuredSequence);
-
-  if (!rotated) return chooseLeastHitFocus(input);
-
-  const gap = input.recentFocusCounts[rotated] - input.recentFocusCounts[underHit];
-  if (gap >= 2) return underHit;
-  return rotated;
+  return inferGenericFocusFromSessionType(choosePlannedSessionType(input));
 }
 
 function mapNeedToGenericFocus(need: NeedKey): Exclude<BrainFocus, "Mixed"> {
@@ -407,12 +401,14 @@ function chooseDecision(
   momentum: number,
   adaptiveFocus: Exclude<BrainFocus, "Mixed">
 ): Decision {
-  const plannedFocus = choosePlannedFocus(input);
+  const plannedSessionType = choosePlannedSessionType(input);
+  const plannedFocus = inferGenericFocusFromSessionType(plannedSessionType);
   const baseMode = progressionMode(readiness, recovery, momentum, input.frictionProfile);
 
   if (recovery < 45) {
     const focus = adaptiveFocus === "Lower" ? fallbackOverrideFocus(plannedFocus) : adaptiveFocus;
     return {
+      plannedSessionType,
       plannedFocus,
       focus,
       mode: "Reduced volume",
@@ -426,6 +422,7 @@ function chooseDecision(
 
   if (recovery < 60 && adaptiveFocus === "Lower") {
     return {
+      plannedSessionType,
       plannedFocus,
       focus: "Push",
       mode: "Reduced volume",
@@ -436,6 +433,7 @@ function chooseDecision(
   }
 
   return {
+    plannedSessionType,
     plannedFocus,
     focus: adaptiveFocus,
     mode: baseMode,
@@ -970,8 +968,14 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   );
 
   const movementSignals = buildMovementSignals(input.exerciseHistory);
+  const sessionTypes = deriveSessionTypes(input);
+  const plannedSessionType = choosePlannedSessionType(input);
+  const plannedSessionFocus = inferGenericFocusFromSessionType(plannedSessionType);
+  const hasCustomSessionTypes = sessionTypes.some((item) => !["Push", "Pull", "Lower"].includes(item));
+
   const needSnapshot = computeNeedSnapshot({
     recentFocusCounts: input.recentFocusCounts,
+    neutralizeFocusBias: hasCustomSessionTypes,
     recoveryScore,
     readinessScore,
     momentumScore,
@@ -1006,6 +1010,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const composer = composeAdaptiveSession({
     needs: debtWeightedNeeds,
+    sessionType: plannedSessionType,
+    sessionSlotMap: input.sessionSlotMap,
     preferredPairings: {
       row: [...new Set(["triceps", "verticalPull", "biceps", ...((input.preferenceSignals?.preferredPairings?.row) ?? [])])],
       horizontalPress: [...new Set(["biceps", "triceps", "delts", ...((input.preferenceSignals?.preferredPairings?.horizontalPress) ?? [])])],
@@ -1020,7 +1026,9 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
         : [],
   });
 
-  const adaptiveFocus = mapNeedToGenericFocus(composer.topNeeds[0] ?? "horizontalPress");
+  const adaptiveFocus = input.sessionSlotMap?.[plannedSessionType]?.length
+    ? plannedSessionFocus
+    : mapNeedToGenericFocus(composer.topNeeds[0] ?? "horizontalPress");
   const decision = chooseDecision(
     input,
     readinessScore,
@@ -1032,6 +1040,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const nextSessionPriority = buildNextSessionPriorityProfile({
     asOf: new Date().toISOString(),
     focus: decision.focus,
+    sessionType: decision.plannedSessionType,
     mode: decision.mode,
     topNeeds: composer.topNeeds,
     recoveryBias: composer.recoveryBias,
@@ -1129,6 +1138,10 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     );
   }
 
+  if (decision.plannedSessionType && decision.plannedSessionType !== decision.plannedFocus) {
+    rationaleParts.unshift(`${decision.plannedSessionType} is the planned session type, and the day is being built to respect that identity.`);
+  }
+
   if (decision.wasOverride && decision.overrideReason) {
     rationaleParts.unshift(decision.overrideReason);
   }
@@ -1165,7 +1178,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     alerts.push(`Movement debt rising: ${lane.key} (+${lane.debtScore})`);
   }
   if (decision.wasOverride) {
-    alerts.push(`Opinionated call: ${decision.plannedFocus} delayed, ${decision.focus} gets the nod`);
+    alerts.push(`Opinionated call: ${decision.plannedSessionType} delayed, ${decision.focus} gets the nod`);
   }
   if (friction) {
     alerts.push(`Friction ${friction.level}: progression ${friction.recommendations.progressionCap} / volume ${friction.recommendations.volumeCap} / novelty ${friction.recommendations.noveltyCap}`);
@@ -1197,13 +1210,14 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     recovery: { score: recoveryScore, label: metricLabel(recoveryScore) },
     compliance: { score: complianceScore, label: metricLabel(complianceScore) },
     systemTake,
-    nextFocus: `${composer.emphasis} — ${decision.mode}`,
+    nextFocus: `${decision.plannedSessionType} — ${decision.mode}`,
     signalCards,
     nextSessionPriority,
     recommendedSession: {
       focus: decision.focus,
+      sessionType: decision.plannedSessionType,
       bias: decision.mode,
-      title: `${composer.emphasis} Session`,
+      title: `${decision.plannedSessionType} Session`,
       rationale,
       volumeNote,
       alerts,
@@ -1211,6 +1225,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
+
 
 
 
