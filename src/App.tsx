@@ -869,7 +869,6 @@ useEffect(() => {
   loadBandEquiv();
 }, [userId]);
 
-
   // Per-exercise drafts
   const [draftByExerciseId, setDraftByExerciseId] = useState<Record<string, ExerciseDraft>>({});
 
@@ -926,6 +925,9 @@ useEffect(() => {
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
   const [splitConfig, setSplitConfig] = useState<TrainingSplitConfig | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
+  const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
+  const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
+  const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
 
 useEffect(() => {
   let cancelled = false;
@@ -963,11 +965,6 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   setSplitConfig(next);
   await refreshDashboard(next);
 }
-
-  const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
-  const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
-  const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
-  const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
 
   type AiCoach = { text: string; ts: number; model: string };
   const [aiCoach, setAiCoach] = useState<AiCoach | null>(null);
@@ -3887,6 +3884,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
