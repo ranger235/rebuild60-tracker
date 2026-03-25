@@ -781,6 +781,10 @@ export default function App() {
   const createSessionInFlightRef = useRef(false);
   const [exercises, setExercises] = useState<LocalWorkoutExercise[]>([]);
   const [sets, setSets] = useState<LocalWorkoutSet[]>([]);
+  const selectedDayDateRef = useRef(selectedDayDate);
+  const openSessionIdRef = useRef<string | null>(openSessionId);
+  const tabRef = useRef(tab);
+  const userIdRef = useRef<string | null>(userId);
 
   // Workout UI
   const [newExerciseName, setNewExerciseName] = useState("");
@@ -1202,7 +1206,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
       setOpenTemplateId(null);
 
       if (userId) {
-        await loadSessionsForDay(selectedDayDate);
+        await loadSessionsForDay(targetDayDate);
         await loadTemplates();
       }
 
@@ -1638,9 +1642,12 @@ async function saveQuickLog() {
   }
 
   async function openSession(sessionId: string) {
-    setOpenSessionId(sessionId);
     const sessionRow = await localdb.localSessions.get(sessionId);
-    saveOpenWorkoutSessionPointer(sessionId, sessionRow?.day_date || selectedDayDate);
+    const sessionDayDate = sessionRow?.day_date ?? selectedDayDateRef.current;
+
+    setOpenSessionId(sessionId);
+    openSessionIdRef.current = sessionId;
+    saveOpenWorkoutSessionPointer(sessionId, sessionDayDate);
 
     const ex = await localdb.localExercises.where({ session_id: sessionId }).sortBy("sort_order");
     setExercises(ex);
@@ -1668,17 +1675,18 @@ async function saveQuickLog() {
   }
 
   async function createWorkoutSession() {
-    if (!userId || createSessionInFlightRef.current) return;
+    const targetUserId = userIdRef.current;
+    const targetDayDate = selectedDayDateRef.current;
+    if (!targetUserId || createSessionInFlightRef.current) return;
 
     createSessionInFlightRef.current = true;
     try {
-      const targetDayDate = selectedDayDate;
       const id = uuid();
       const started_at = new Date().toISOString();
 
       const local: LocalWorkoutSession = {
         id,
-        user_id: userId,
+        user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: "Week 1 Day 1",
@@ -1691,7 +1699,7 @@ async function saveQuickLog() {
 
       await enqueue("create_workout", {
         id,
-        user_id: userId,
+        user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: local.title,
@@ -1707,17 +1715,18 @@ async function saveQuickLog() {
   }
 
   async function startSessionFromRecommendation() {
-    if (!userId || !brainSnapshot?.recommendedSession || createSessionInFlightRef.current) return;
+    const targetUserId = userIdRef.current;
+    const targetDayDate = selectedDayDateRef.current;
+    if (!targetUserId || !brainSnapshot?.recommendedSession || createSessionInFlightRef.current) return;
 
     createSessionInFlightRef.current = true;
     try {
-      const targetDayDate = selectedDayDate;
       const id = uuid();
       const started_at = new Date().toISOString();
 
       const local: LocalWorkoutSession = {
         id,
-        user_id: userId,
+        user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: brainSnapshot.recommendedSession.title || "Coach Session",
@@ -1728,7 +1737,7 @@ async function saveQuickLog() {
 
       await enqueue("create_workout", {
         id,
-        user_id: userId,
+        user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: local.title,
@@ -1796,7 +1805,7 @@ async function saveQuickLog() {
       exercises: coachExercises
     });
 
-    await loadSessionsForDay(targetDayDate);
+    await loadSessionsForDay(selectedDayDate);
     await openSession(id);
     setCoachSessionSeed({
       sessionId: id,
@@ -3269,33 +3278,39 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
 
 async function refreshLocalUiFromDexie() {
-  if (!userId) return;
+  const currentUserId = userIdRef.current;
+  const currentDay = selectedDayDateRef.current;
+  const currentTab = tabRef.current;
+  const currentOpenSessionId = openSessionIdRef.current;
+
+  if (!currentUserId) return;
 
   // Don't clobber Quick Log inputs while the user is typing.
   // Those fields should reload on day changes and after explicit saves,
   // not every autosync pass.
-  if (tab !== "quick") {
-    await loadQuickLogForDay(selectedDayDate);
+  if (currentTab !== "quick") {
+    await loadQuickLogForDay(currentDay);
   }
 
-  await loadSessionsForDay(selectedDayDate);
+  await loadSessionsForDay(currentDay);
   await loadTemplates();
 
-  if (openSessionId) {
-    const openRow = await localdb.localSessions.get(openSessionId);
-    if (openRow && openRow.user_id === userId && openRow.day_date === selectedDayDate) {
-      await openSession(openSessionId);
+  if (currentOpenSessionId) {
+    const sessionRow = await localdb.localSessions.get(currentOpenSessionId);
+    if (sessionRow && sessionRow.user_id === currentUserId && sessionRow.day_date === currentDay) {
+      await openSession(currentOpenSessionId);
     } else {
+      openSessionIdRef.current = null;
       setOpenSessionId(null);
       setExercises([]);
       setSets([]);
-      await recoverOpenSessionForDay(selectedDayDate);
+      await recoverOpenSessionForDay(currentDay);
     }
   } else {
-    await recoverOpenSessionForDay(selectedDayDate);
+    await recoverOpenSessionForDay(currentDay);
   }
 
-  if (tab === "dash") {
+  if (currentTab === "dash") {
     await refreshDashboard();
   }
 }
@@ -3337,8 +3352,25 @@ async function syncNow() {
   // Effects
   // -----------------------------
   useEffect(() => {
+    selectedDayDateRef.current = selectedDayDate;
+  }, [selectedDayDate]);
+
+  useEffect(() => {
+    openSessionIdRef.current = openSessionId;
+  }, [openSessionId]);
+
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
+
+  useEffect(() => {
     if (!userId) return;
     // Reload local state whenever the selected log date changes
+    openSessionIdRef.current = null;
     setOpenSessionId(null);
     setExercises([]);
     setSets([]);
@@ -3895,6 +3927,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
