@@ -1,8 +1,6 @@
 import type { NeedKey, NeedSnapshot, RecoveryBias } from "./sessionNeedsEngine";
 import type { Slot } from "./slotEngine";
 
-export type SessionSlotMap = Record<string, Slot[]>;
-
 export type SessionBundle = {
   emphasis: string;
   slots: Slot[];
@@ -15,8 +13,10 @@ export type ComposerInput = {
   needs: NeedSnapshot;
   preferredPairings?: Partial<Record<NeedKey, NeedKey[]>>;
   blockedPairings?: Array<[NeedKey, NeedKey]>;
-  sessionType?: string | null;
-  sessionSlotMap?: SessionSlotMap | null;
+  explicitDay?: {
+    name: string;
+    slots: Slot[];
+  } | null;
 };
 
 const PRIMARY_SLOT_BY_NEED: Record<NeedKey, Slot> = {
@@ -44,24 +44,6 @@ const NEED_LABELS: Record<NeedKey, string> = {
   delts: "Delts",
   calves: "Calves",
 };
-
-const VALID_SESSION_SLOTS = new Set<Slot>([
-  "PrimaryPress",
-  "SecondaryPress",
-  "Shoulders",
-  "Triceps",
-  "Pump",
-  "PrimaryRow",
-  "VerticalPull",
-  "SecondaryRow",
-  "RearDelts",
-  "Biceps",
-  "PrimarySquat",
-  "Hinge",
-  "SecondaryQuad",
-  "Hamstrings",
-  "Calves",
-]);
 
 function pairAllowed(
   a: NeedKey,
@@ -140,31 +122,6 @@ function slotBundleForPrimary(primary: NeedKey, recoveryBias: RecoveryBias): Slo
   }
 }
 
-
-function normalizeSessionTypeKey(value: string | null | undefined): string {
-  return String(value || "").trim().toLowerCase();
-}
-
-function slotsForSessionType(
-  sessionType: string | null | undefined,
-  recoveryBias: RecoveryBias,
-  sessionSlotMap?: SessionSlotMap | null
-): Slot[] | null {
-  const key = normalizeSessionTypeKey(sessionType);
-  if (!key || !sessionSlotMap) return null;
-
-  for (const [name, slots] of Object.entries(sessionSlotMap)) {
-    if (normalizeSessionTypeKey(name) !== key) continue;
-    const normalized = (slots || [])
-      .map((slot) => String(slot || "").trim())
-      .filter((slot): slot is Slot => VALID_SESSION_SLOTS.has(slot as Slot));
-    if (normalized.length === 0) return null;
-    return recoveryBias === "red" ? normalized.slice(0, 5) : normalized.slice(0, 6);
-  }
-
-  return null;
-}
-
 function uniqueSlots(slots: Slot[]): Slot[] {
   const seen = new Set<Slot>();
   const out: Slot[] = [];
@@ -179,30 +136,40 @@ function uniqueSlots(slots: Slot[]): Slot[] {
 
 export function composeAdaptiveSession(input: ComposerInput): SessionBundle {
   const ranked = input.needs.ranked;
+  if (input.explicitDay?.slots?.length) {
+    const filtered = input.explicitDay.slots.filter(Boolean).slice(0, input.needs.recoveryBias === "red" ? 4 : 6);
+    return {
+      emphasis: input.explicitDay.name,
+      slots: filtered,
+      reasons: [
+        `${input.explicitDay.name} is being driven directly from your selected split definition.`,
+        `Need scoring is still influencing exercise choice and progression inside the day, but the split decides the day identity.`
+      ],
+      topNeeds: ranked.slice(0, 4).map((n) => n.key),
+      recoveryBias: input.needs.recoveryBias,
+    };
+  }
   const recoveryBias = input.needs.recoveryBias;
   const topNeeds = ranked.slice(0, 4).map((n) => n.key);
 
   const primary = topNeeds[0];
-  const sessionTypeSlots = slotsForSessionType(input.sessionType, recoveryBias, input.sessionSlotMap);
-  let slots = sessionTypeSlots ?? slotBundleForPrimary(primary, recoveryBias);
-  const reasons: string[] = sessionTypeSlots
-    ? [`${input.sessionType} is the planned session type, so the slot bundle follows that day definition.`]
-    : [`${NEED_LABELS[primary]} scored highest, so it becomes the anchor for this session.`];
+  let slots = slotBundleForPrimary(primary, recoveryBias);
+  const reasons: string[] = [
+    `${NEED_LABELS[primary]} scored highest, so it becomes the anchor for this session.`,
+  ];
 
   const userPairings = input.preferredPairings?.[primary] ?? [];
   const defaultPairs = defaultPairingsForNeed(primary);
   const pairCandidates = [...userPairings, ...defaultPairs];
 
-  if (!sessionTypeSlots) {
-    for (const pair of pairCandidates) {
-      if (!topNeeds.includes(pair)) continue;
-      if (!pairAllowed(primary, pair, input.blockedPairings)) continue;
+  for (const pair of pairCandidates) {
+    if (!topNeeds.includes(pair)) continue;
+    if (!pairAllowed(primary, pair, input.blockedPairings)) continue;
 
-      const pairSlot = PRIMARY_SLOT_BY_NEED[pair];
-      if (pairSlot && !slots.includes(pairSlot)) {
-        slots.push(pairSlot);
-        reasons.push(`${NEED_LABELS[pair]} also scored well and pairs cleanly with the anchor pattern.`);
-      }
+    const pairSlot = PRIMARY_SLOT_BY_NEED[pair];
+    if (pairSlot && !slots.includes(pairSlot)) {
+      slots.push(pairSlot);
+      reasons.push(`${NEED_LABELS[pair]} also scored well and pairs cleanly with the anchor pattern.`);
     }
   }
 
@@ -214,9 +181,7 @@ export function composeAdaptiveSession(input: ComposerInput): SessionBundle {
     reasons.push("Recovery is green, so the composer allows a fuller session bundle.");
   }
 
-  slots = sessionTypeSlots
-    ? slots.slice(0, recoveryBias === "red" ? 5 : 6)
-    : uniqueSlots(slots).slice(0, recoveryBias === "red" ? 4 : 5);
+  slots = uniqueSlots(slots).slice(0, recoveryBias === "red" ? 4 : 5);
 
   const emphasis =
     topNeeds.length > 1
@@ -231,5 +196,6 @@ export function composeAdaptiveSession(input: ComposerInput): SessionBundle {
     recoveryBias,
   };
 }
+
 
 
