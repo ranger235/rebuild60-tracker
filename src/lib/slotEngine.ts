@@ -92,19 +92,31 @@ export function blueprintForFocus(focus: string): SessionBlueprint {
   return LOWER_BLUEPRINT;
 }
 
-export function candidatesForSlot(slot: Slot): string[] {
-  return SLOT_CANDIDATES[slot] ?? [];
+export type AllowedExerciseFilter = ReadonlySet<string> | readonly string[] | null | undefined;
+
+function normalizeAllowedExerciseFilter(allowedExerciseKeys?: AllowedExerciseFilter): ReadonlySet<string> | null {
+  if (!allowedExerciseKeys) return null;
+  if (allowedExerciseKeys instanceof Set) return allowedExerciseKeys;
+  const next = new Set((allowedExerciseKeys ?? []).map((key) => String(key || "").trim()).filter(Boolean));
+  return next.size > 0 ? next : null;
 }
 
-export function slotHasCandidate(slot: Slot, exerciseKey: string): boolean {
-  return candidatesForSlot(slot).includes(exerciseKey);
+export function candidatesForSlot(slot: Slot, allowedExerciseKeys?: AllowedExerciseFilter): string[] {
+  const base = SLOT_CANDIDATES[slot] ?? [];
+  const allowed = normalizeAllowedExerciseFilter(allowedExerciseKeys);
+  if (!allowed) return base;
+  return base.filter((key) => allowed.has(key));
 }
 
-export function allSlotsForFocus(focus: string): Array<{ slot: Slot; candidates: string[] }> {
+export function slotHasCandidate(slot: Slot, exerciseKey: string, allowedExerciseKeys?: AllowedExerciseFilter): boolean {
+  return candidatesForSlot(slot, allowedExerciseKeys).includes(exerciseKey);
+}
+
+export function allSlotsForFocus(focus: string, allowedExerciseKeys?: AllowedExerciseFilter): Array<{ slot: Slot; candidates: string[] }> {
   const blueprint = blueprintForFocus(focus);
   return blueprint.slots.map((slot) => ({
     slot,
-    candidates: candidatesForSlot(slot),
+    candidates: candidatesForSlot(slot, allowedExerciseKeys),
   }));
 }
 
@@ -255,12 +267,14 @@ export function pickBestCandidateForSlot(
   history: CandidateHistory[],
   mode: "Progression" | "Base" | "Reduced volume",
   preferences?: PreferenceLike,
-  blockBias?: BlockBiasLike
+  blockBias?: BlockBiasLike,
+  allowedExerciseKeys?: AllowedExerciseFilter
 ): ScoredCandidate[] {
-  return candidatesForSlot(slot)
+  return candidatesForSlot(slot, allowedExerciseKeys)
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
 
 
 
