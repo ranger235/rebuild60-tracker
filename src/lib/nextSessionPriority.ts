@@ -28,6 +28,7 @@ export type NextSessionPriorityProfile = {
 export type NextSessionPriorityInput = {
   asOf: string;
   focus: Exclude<BrainFocus, "Mixed">;
+  sessionType?: string | null;
   mode: "Progression" | "Base" | "Reduced volume";
   topNeeds: NeedKey[];
   recoveryBias: RecoveryBias;
@@ -55,6 +56,12 @@ const NEED_LABELS: Record<NeedKey, string> = {
   delts: "delts",
   calves: "calves",
 };
+
+
+function sessionTypeLabel(input: NextSessionPriorityInput): string | null {
+  const label = String(input.sessionType || "").trim();
+  return label ? label : null;
+}
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(n)));
@@ -112,7 +119,7 @@ function scoreAnchorProgression(input: NextSessionPriorityInput): NextSessionPri
 
   return {
     category: "anchor_progression",
-    target: input.focus === "Push" ? "main press anchor" : input.focus === "Pull" ? "main row / pull anchor" : "main squat / hinge anchor",
+    target: sessionTypeLabel(input) ?? (input.focus === "Push" ? "main press anchor" : input.focus === "Pull" ? "main row / pull anchor" : "main squat / hinge anchor"),
     priorityScore: clamp(score, 0, 100),
     reasons: [
       opportunity >= 35 ? "A live progression path is showing in recent logged work." : "There is still room to earn another productive exposure.",
@@ -156,7 +163,9 @@ function scorePatternRepeat(input: NextSessionPriorityInput): NextSessionPriorit
 
   return {
     category: "pattern_repeat",
-    target: input.focus === "Push" ? "repeat pressing pattern" : input.focus === "Pull" ? "repeat pulling pattern" : "repeat lower pattern",
+    target: sessionTypeLabel(input)
+      ? `repeat ${sessionTypeLabel(input)!.toLowerCase()} pattern`
+      : (input.focus === "Push" ? "repeat pressing pattern" : input.focus === "Pull" ? "repeat pulling pattern" : "repeat lower pattern"),
     priorityScore: clamp(score, 0, 100),
     reasons: [
       focusHistCount >= 2 ? "There is enough recent exposure to make a repeat useful instead of stale." : "A clean repeat would build continuity faster than a cute rotation.",
@@ -269,3 +278,4 @@ export function buildNextSessionPriorityProfile(input: NextSessionPriorityInput)
     rationaleSummary,
   };
 }
+
