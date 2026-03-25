@@ -31,6 +31,7 @@ export type NeedEngineInput = {
     Lower: number;
     Mixed: number;
   };
+  neutralizeFocusBias?: boolean;
   recoveryScore: number;
   readinessScore: number;
   momentumScore: number;
@@ -305,11 +306,15 @@ export function computeNeedSnapshot(input: NeedEngineInput): NeedSnapshot {
     let score = baseNeedScore(key);
     const reasons: string[] = [];
 
-    const under = undertrainingBonus(key, input.recentFocusCounts);
+    const effectiveFocusCounts = input.neutralizeFocusBias
+      ? { Push: 0, Pull: 0, Lower: 0, Mixed: 0 }
+      : input.recentFocusCounts;
+
+    const under = undertrainingBonus(key, effectiveFocusCounts);
     score += under.bonus;
     if (under.reason) reasons.push(under.reason);
 
-    const bucket = recentBucketPenalty(key, input.recentFocusCounts);
+    const bucket = recentBucketPenalty(key, effectiveFocusCounts);
     score -= bucket.penalty;
     if (bucket.reason) reasons.push(bucket.reason);
 
@@ -350,3 +355,4 @@ export function computeNeedSnapshot(input: NeedEngineInput): NeedSnapshot {
     recoveryBias,
   };
 }
+
