@@ -346,6 +346,96 @@ function nextFocusFromSequence(
   return sequence[(idx + 1) % sequence.length] ?? null;
 }
 
+function normalizeSessionTypeKey(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function uniqueNonEmptyStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const label = String(value || "").trim();
+    if (!label) continue;
+    const key = normalizeSessionTypeKey(label);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
+}
+
+function inferGenericFocusFromSessionType(sessionType: string | null | undefined): Exclude<BrainFocus, "Mixed"> {
+  const key = normalizeSessionTypeKey(sessionType);
+  if (["push", "chest", "shoulders", "shoulder", "triceps", "press", "arms", "arm"].includes(key)) return "Push";
+  if (["pull", "back", "biceps", "row", "rows"].includes(key)) return "Pull";
+  if (["lower", "legs", "leg", "quads", "hamstrings", "glutes", "hinge"].includes(key)) return "Lower";
+  return "Push";
+}
+
+function deriveSessionTypes(input: BrainInput): string[] {
+  const configured = uniqueNonEmptyStrings([...(input.sessionTypes ?? []), ...(input.sessionSequence ?? [])]);
+  if (configured.length > 0) return configured;
+
+  const focusSequence = normalizeFocusSequence(input.focusSequence);
+  if (focusSequence.length > 0) return focusSequence;
+
+  return ["Push", "Pull", "Lower"];
+}
+
+function normalizeSessionTypeCounts(
+  counts: SessionTypeCounts | null | undefined,
+  sessionTypes: string[]
+): SessionTypeCounts {
+  const out: SessionTypeCounts = {};
+  for (const sessionType of sessionTypes) out[sessionType] = 0;
+  if (!counts) return out;
+
+  for (const [rawKey, rawValue] of Object.entries(counts)) {
+    const key = String(rawKey || "").trim();
+    if (!key) continue;
+    const numeric = Number(rawValue ?? 0);
+    const value = Number.isFinite(numeric) ? numeric : 0;
+    const match = sessionTypes.find((item) => normalizeSessionTypeKey(item) === normalizeSessionTypeKey(key));
+    if (match) out[match] = value;
+  }
+
+  return out;
+}
+
+function chooseLeastHitSessionType(
+  sessionTypes: string[],
+  counts: SessionTypeCounts,
+  lastSessionType?: string | null
+): string {
+  const normalizedLast = normalizeSessionTypeKey(lastSessionType);
+  const ranked = [...sessionTypes].sort((a, b) => {
+    const delta = (counts[a] ?? 0) - (counts[b] ?? 0);
+    if (delta !== 0) return delta;
+    const aIsLast = normalizeSessionTypeKey(a) === normalizedLast ? 1 : 0;
+    const bIsLast = normalizeSessionTypeKey(b) === normalizedLast ? 1 : 0;
+    if (aIsLast !== bIsLast) return aIsLast - bIsLast;
+    return a.localeCompare(b);
+  });
+  return ranked[0] ?? "Push";
+}
+
+function choosePlannedSessionType(input: BrainInput): string {
+  const sessionTypes = deriveSessionTypes(input);
+  const counts = normalizeSessionTypeCounts(input.recentSessionTypeCounts, sessionTypes);
+  const sequence = uniqueNonEmptyStrings([...(input.sessionSequence ?? []), ...(input.sessionTypes ?? [])])
+    .filter((item) => sessionTypes.some((candidate) => normalizeSessionTypeKey(candidate) === normalizeSessionTypeKey(item)));
+
+  if (sequence.length > 0) {
+    const lastKey = normalizeSessionTypeKey(input.lastSessionType);
+    if (!lastKey) return sequence[0] ?? sessionTypes[0] ?? "Push";
+    const idx = sequence.findIndex((item) => normalizeSessionTypeKey(item) === lastKey);
+    if (idx >= 0) return sequence[(idx + 1) % sequence.length] ?? sequence[0] ?? sessionTypes[0] ?? "Push";
+    return chooseLeastHitSessionType(sequence, counts, input.lastSessionType);
+  }
+
+  return chooseLeastHitSessionType(sessionTypes, counts, input.lastSessionType);
+}
+
 function chooseLeastHitFocus(input: BrainInput): Exclude<BrainFocus, "Mixed"> {
   return inferGenericFocusFromSessionType(
     chooseLeastHitSessionType(
@@ -1225,6 +1315,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
