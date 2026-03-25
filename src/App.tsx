@@ -2678,6 +2678,27 @@ function daysBetweenISO(a: string, b: string): number {
   return Math.round((db.getTime() - da.getTime()) / 86400000);
 }
 
+function parseRecommendationFocusSequence(raw: string | null | undefined): Array<"Push" | "Pull" | "Lower"> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const allowed = new Set(["Push", "Pull", "Lower"]);
+    const normalized: Array<"Push" | "Pull" | "Lower"> = [];
+    for (const value of parsed) {
+      const next = String(value || "").trim();
+      if (!allowed.has(next)) continue;
+      if (!normalized.includes(next as "Push" | "Pull" | "Lower")) {
+        normalized.push(next as "Push" | "Pull" | "Lower");
+      }
+    }
+    return normalized;
+  } catch {
+    return [];
+  }
+}
+
+
 function parseAllowedExerciseKeys(raw: string | null | undefined): string[] {
   if (!raw) return [];
   try {
@@ -2706,8 +2727,12 @@ async function refreshDashboard() {
         userSessionIds.add(s.id);
       }
 
-      const explicitAllowedRow = await localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]);
+      const [explicitAllowedRow, focusSequenceRow] = await Promise.all([
+        localdb.localSettings.get([userId, "allowed_exercise_keys_v1"]),
+        localdb.localSettings.get([userId, "recommendation_focus_sequence_v1"]),
+      ]);
       const explicitAllowedKeys = parseAllowedExerciseKeys(explicitAllowedRow?.value);
+      const configuredFocusSequence = parseRecommendationFocusSequence(focusSequenceRow?.value);
 
       const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
       const userTemplateIds = new Set(userTemplates.map((row) => row.id));
@@ -3212,7 +3237,8 @@ async function refreshDashboard() {
         exerciseHistory: [...exerciseHistoryMap.values()],
         preferenceSignals,
         frictionProfile: friction,
-        allowedExerciseKeys
+        allowedExerciseKeys,
+        focusSequence: configuredFocusSequence.length > 0 ? configuredFocusSequence : null
       });
 
       setTimelineWeeks(timeline);
@@ -3877,6 +3903,8 @@ async function syncNow() {
     </div>
   );
 }
+
+
 
 
 
