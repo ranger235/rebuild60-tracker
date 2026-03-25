@@ -45,6 +45,24 @@ const NEED_LABELS: Record<NeedKey, string> = {
   calves: "Calves",
 };
 
+const VALID_SESSION_SLOTS = new Set<Slot>([
+  "PrimaryPress",
+  "SecondaryPress",
+  "Shoulders",
+  "Triceps",
+  "Pump",
+  "PrimaryRow",
+  "VerticalPull",
+  "SecondaryRow",
+  "RearDelts",
+  "Biceps",
+  "PrimarySquat",
+  "Hinge",
+  "SecondaryQuad",
+  "Hamstrings",
+  "Calves",
+]);
+
 function pairAllowed(
   a: NeedKey,
   b: NeedKey,
@@ -137,9 +155,11 @@ function slotsForSessionType(
 
   for (const [name, slots] of Object.entries(sessionSlotMap)) {
     if (normalizeSessionTypeKey(name) !== key) continue;
-    const normalized = (slots || []).filter(Boolean) as Slot[];
+    const normalized = (slots || [])
+      .map((slot) => String(slot || "").trim())
+      .filter((slot): slot is Slot => VALID_SESSION_SLOTS.has(slot as Slot));
     if (normalized.length === 0) return null;
-    return recoveryBias === "red" ? normalized.slice(0, 4) : normalized.slice(0, 5);
+    return recoveryBias === "red" ? normalized.slice(0, 5) : normalized.slice(0, 6);
   }
 
   return null;
@@ -194,7 +214,9 @@ export function composeAdaptiveSession(input: ComposerInput): SessionBundle {
     reasons.push("Recovery is green, so the composer allows a fuller session bundle.");
   }
 
-  slots = uniqueSlots(slots).slice(0, recoveryBias === "red" ? 4 : 5);
+  slots = sessionTypeSlots
+    ? slots.slice(0, recoveryBias === "red" ? 5 : 6)
+    : uniqueSlots(slots).slice(0, recoveryBias === "red" ? 4 : 5);
 
   const emphasis =
     topNeeds.length > 1
@@ -209,4 +231,5 @@ export function composeAdaptiveSession(input: ComposerInput): SessionBundle {
     recoveryBias,
   };
 }
+
 
