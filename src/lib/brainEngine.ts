@@ -360,19 +360,86 @@ function summarizeSplitHistory(titles: string[] | undefined, split: TrainingSpli
   return { counts, lastDayName };
 }
 
-function chooseSplitDay(input: BrainInput, split: TrainingSplitConfig): SplitDayDefinition {
+function focusNeedScoreForDay(
+  focus: Exclude<BrainFocus, "Mixed">,
+  scores: Partial<Record<NeedKey, { score: number }>>
+): number {
+  const sum = (keys: NeedKey[]) =>
+    keys.reduce((total, key) => total + (scores[key]?.score ?? 0), 0);
+
+  if (focus === "Push") {
+    return sum(["horizontalPress", "verticalPress", "triceps", "delts"]);
+  }
+  if (focus === "Pull") {
+    return sum(["row", "verticalPull", "biceps"]);
+  }
+  return sum(["quadDominant", "hinge", "calves"]);
+}
+
+function findDaysSinceLastSplitDay(dayName: string, titles: string[] | undefined, split: TrainingSplitConfig): number | null {
+  const recentTitles = titles || [];
+  for (let idx = 0; idx < recentTitles.length; idx += 1) {
+    const matched = matchSplitDayName(recentTitles[idx], split);
+    if (matched === dayName) return idx;
+  }
+  return null;
+}
+
+function chooseSplitDay(
+  input: BrainInput,
+  split: TrainingSplitConfig,
+  weightedNeeds: ReturnType<typeof applyMovementDebtToNeeds>,
+  recoveryScore: number,
+  readinessScore: number
+): SplitDayDefinition {
   const history = summarizeSplitHistory(input.recentSessionTitles, split);
   const first = split.days[0];
-  if (!history.lastDayName) return first;
-  const currentIdx = split.days.findIndex((day) => day.name === history.lastDayName);
-  const rotated = currentIdx >= 0 ? split.days[(currentIdx + 1) % split.days.length] : first;
-  const leastHit = split.days
-    .slice()
-    .sort((a, b) => (history.counts[a.name] || 0) - (history.counts[b.name] || 0))[0] || first;
-  const rotatedCount = history.counts[rotated.name] || 0;
-  const leastHitCount = history.counts[leastHit.name] || 0;
-  if (rotatedCount - leastHitCount >= 2) return leastHit;
-  return rotated;
+  if (split.days.length === 1) return first;
+
+  const recentTitles = input.recentSessionTitles || [];
+  const totalHits = split.days.reduce((total, day) => total + (history.counts[day.name] || 0), 0);
+  const averageHits = split.days.length > 0 ? totalHits / split.days.length : 0;
+  const maxRecencyWindow = Math.max(split.days.length * 2, recentTitles.length, 1);
+
+  let bestDay = first;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const day of split.days) {
+    const focus = inferFocusFromSlots(day.slots);
+    const count = history.counts[day.name] || 0;
+    const daysSince = findDaysSinceLastSplitDay(day.name, recentTitles, split);
+    const normalizedDaysSince = daysSince == null ? maxRecencyWindow : daysSince;
+    const needScore = focusNeedScoreForDay(focus, weightedNeeds.scores);
+    const underHitBonus = (averageHits - count) * 6;
+    const overdueBonus = Math.min(24, normalizedDaysSince * 4);
+    const repeatPenalty = history.lastDayName === day.name ? 28 : 0;
+    const underRecoveryPenalty =
+      recoveryScore < 55 && focus === "Lower"
+        ? 12
+        : recoveryScore < 60 && focus === "Lower"
+        ? 6
+        : recoveryScore < 50 && focus !== "Lower"
+        ? 3
+        : 0;
+    const readinessPenalty = readinessScore < 55 && history.lastDayName === day.name ? 8 : 0;
+    const noveltyBonus = daysSince == null ? 6 : 0;
+
+    const score =
+      needScore * 1.15 +
+      overdueBonus +
+      underHitBonus +
+      noveltyBonus -
+      repeatPenalty -
+      underRecoveryPenalty -
+      readinessPenalty;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestDay = day;
+    }
+  }
+
+  return bestDay;
 }
 
 function enrichSplitDay(day: SplitDayDefinition): SplitDayDefinition {
@@ -1071,7 +1138,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const debtWeightedNeeds = applyMovementDebtToNeeds(preferenceWeightedNeeds, movementDebt);
 
   const split = sanitizeSplitConfig(input.splitConfig);
-  const chosenSplitDay = enrichSplitDay(chooseSplitDay(input, split));
+  const chosenSplitDay = enrichSplitDay(chooseSplitDay(input, split, debtWeightedNeeds, recoveryScore, readinessScore));
 
   const composer = composeAdaptiveSession({
     needs: debtWeightedNeeds,
@@ -1284,6 +1351,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
