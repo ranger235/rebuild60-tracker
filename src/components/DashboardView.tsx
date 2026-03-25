@@ -98,6 +98,17 @@ type Props = {
   timelineWeeks: TimelineWeek[];
   brainSnapshot: BrainSnapshot | null;
   frictionProfile: FrictionProfile | null;
+  splitSessionTypesInput: string;
+  setSplitSessionTypesInput: (value: string) => void;
+  splitSessionSequenceInput: string;
+  setSplitSessionSequenceInput: (value: string) => void;
+  splitSessionSlotMapInput: string;
+  setSplitSessionSlotMapInput: (value: string) => void;
+  splitConfigBusy: boolean;
+  splitConfigError: string | null;
+  splitConfigMessage: string | null;
+  saveRecommendationSplitConfig: () => void;
+  loadRecommendationPreset: (preset: "current" | "dave" | "tim") => void;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
 
@@ -113,6 +124,24 @@ const cardStyle: CSSProperties = {
   padding: 12,
   background: "#fafafa"
 };
+
+const validSessionSlots = [
+  "PrimaryPress",
+  "SecondaryPress",
+  "Shoulders",
+  "Triceps",
+  "Pump",
+  "PrimaryRow",
+  "VerticalPull",
+  "SecondaryRow",
+  "RearDelts",
+  "Biceps",
+  "PrimarySquat",
+  "Hinge",
+  "SecondaryQuad",
+  "Hamstrings",
+  "Calves",
+];
 
 function sumPoints(points: Point[]) {
   return points.reduce((acc, p) => acc + (Number(p.y) || 0), 0);
@@ -629,6 +658,67 @@ export default function DashboardView(props: Props) {
             </div>
           </div>
 
+          <div style={{ ...cardStyle, marginTop: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>Split Builder</div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>Define your split in the UI</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => props.loadRecommendationPreset("current")}>Use current default</button>
+                <button type="button" onClick={() => props.loadRecommendationPreset("dave")}>Load hybrid preset</button>
+                <button type="button" onClick={() => props.loadRecommendationPreset("tim")}>Load bro split preset</button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session types (comma separated)</div>
+                <input
+                  value={props.splitSessionTypesInput}
+                  onChange={(e) => props.setSplitSessionTypesInput(e.target.value)}
+                  placeholder="Upper, Lower, Pull, Push, ArmsShoulders"
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session sequence (comma separated)</div>
+                <input
+                  value={props.splitSessionSequenceInput}
+                  onChange={(e) => props.setSplitSessionSequenceInput(e.target.value)}
+                  placeholder="Upper, Lower, Pull, Push, ArmsShoulders"
+                />
+              </label>
+
+              <label style={{ display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.8 }}>Session slot map (JSON)</div>
+                <textarea
+                  value={props.splitSessionSlotMapInput}
+                  onChange={(e) => props.setSplitSessionSlotMapInput(e.target.value)}
+                  rows={14}
+                  style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
+                />
+              </label>
+
+              <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
+                Valid slot names: {validSessionSlots.join(", ")}
+              </div>
+
+              {props.splitConfigError ? (
+                <div style={{ color: "#8b0000", fontWeight: 700 }}>{props.splitConfigError}</div>
+              ) : null}
+              {props.splitConfigMessage ? (
+                <div style={{ color: "#155724", fontWeight: 700 }}>{props.splitConfigMessage}</div>
+              ) : null}
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={props.saveRecommendationSplitConfig} disabled={props.splitConfigBusy}>
+                  {props.splitConfigBusy ? "Saving split..." : "Save split and rebuild recommendation"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div style={{ ...cardStyle, marginTop: 10, background: focusTone(brainSnapshot.recommendedSession.focus) }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
               <div>
@@ -918,6 +1008,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
