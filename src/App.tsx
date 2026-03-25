@@ -1009,6 +1009,12 @@ useEffect(() => {
   const [timelineWeeks, setTimelineWeeks] = useState<DashboardTimelineWeek[]>([]);
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
+  const [splitSessionTypesInput, setSplitSessionTypesInput] = useState("");
+  const [splitSessionSequenceInput, setSplitSessionSequenceInput] = useState("");
+  const [splitSessionSlotMapInput, setSplitSessionSlotMapInput] = useState("");
+  const [splitConfigBusy, setSplitConfigBusy] = useState(false);
+  const [splitConfigError, setSplitConfigError] = useState<string | null>(null);
+  const [splitConfigMessage, setSplitConfigMessage] = useState<string | null>(null);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -1109,7 +1115,7 @@ useEffect(() => {
       const currentProfile = recommendationProfileForEmail(email);
       const writes: Promise<unknown>[] = [];
       for (const knownUserId of knownUserIds) {
-        writes.push(applyRecommendationProfile(
+        writes.push(ensureRecommendationProfile(
           knownUserId,
           knownUserId === userId ? currentProfile : TIM_RECOMMENDATION_PROFILE
         ));
@@ -2827,11 +2833,11 @@ const DAVE_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
   sessionTypes: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
   sessionSequence: ["Upper", "Lower", "Pull", "Push", "ArmsShoulders"],
   sessionSlotMap: {
-    Upper: ["PrimaryPress", "PrimaryRow", "SecondaryPress", "VerticalPull", "Shoulders"],
-    Lower: ["PrimarySquat", "Hinge", "Hamstrings", "Calves", "Core"],
-    Pull: ["PrimaryRow", "VerticalPull", "RearDelts", "Biceps", "Pump"],
+    Upper: ["PrimaryPress", "PrimaryRow", "VerticalPull", "SecondaryPress", "Shoulders", "Biceps"],
+    Lower: ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"],
+    Pull: ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps"],
     Push: ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
-    ArmsShoulders: ["OverheadPress", "LateralRaise", "Biceps", "Triceps", "Pump"],
+    ArmsShoulders: ["Shoulders", "Shoulders", "Biceps", "Triceps", "Pump"],
   },
 };
 
@@ -2839,12 +2845,12 @@ const TIM_RECOMMENDATION_PROFILE: RecommendationSessionProfile = {
   sessionTypes: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
   sessionSequence: ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs"],
   sessionSlotMap: {
-    Chest: ["PrimaryPress", "SecondaryPress", "ChestIso", "Triceps", "Pump"],
-    Back: ["PrimaryRow", "VerticalPull", "RearDelts", "Biceps", "Pump"],
-    Shoulders: ["OverheadPress", "LateralRaise", "RearDelts", "Traps", "Pump"],
-    Biceps: ["Biceps", "Biceps", "Forearms", "Pump"],
-    Triceps: ["Triceps", "Triceps", "Pump"],
-    Legs: ["PrimarySquat", "Hinge", "Hamstrings", "Calves", "Core"],
+    Chest: ["PrimaryPress", "SecondaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"],
+    Back: ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps", "Pump"],
+    Shoulders: ["Shoulders", "Shoulders", "RearDelts", "Triceps", "Pump"],
+    Biceps: ["Biceps", "Biceps", "RearDelts", "Pump"],
+    Triceps: ["Triceps", "Triceps", "Shoulders", "Pump"],
+    Legs: ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"],
   },
 };
 
@@ -2883,28 +2889,127 @@ function recommendationProfileForEmail(email: string | null | undefined): Recomm
   return DAVE_RECOMMENDATION_PROFILE;
 }
 
-async function applyRecommendationProfile(userId: string, profile: RecommendationSessionProfile) {
+async function ensureRecommendationProfile(userId: string, profile: RecommendationSessionProfile) {
   const updatedAt = Date.now();
-  await Promise.all([
-    localdb.localSettings.put({
+  const [typesRow, sequenceRow, slotMapRow] = await Promise.all([
+    localdb.localSettings.get([userId, "recommendation_session_types_v1"]),
+    localdb.localSettings.get([userId, "recommendation_session_sequence_v1"]),
+    localdb.localSettings.get([userId, "recommendation_session_slot_map_v1"]),
+  ]);
+
+  const writes: Promise<unknown>[] = [];
+  if (!parseRecommendationSessionTypes(typesRow?.value).length) {
+    writes.push(localdb.localSettings.put({
       user_id: userId,
       key: "recommendation_session_types_v1",
       value: JSON.stringify(profile.sessionTypes),
       updatedAt,
-    }),
-    localdb.localSettings.put({
+    }));
+  }
+  if (!parseRecommendationSessionTypes(sequenceRow?.value).length) {
+    writes.push(localdb.localSettings.put({
       user_id: userId,
       key: "recommendation_session_sequence_v1",
       value: JSON.stringify(profile.sessionSequence),
       updatedAt,
-    }),
-    localdb.localSettings.put({
+    }));
+  }
+  if (!Object.keys(parseRecommendationSessionSlotMap(slotMapRow?.value)).length) {
+    writes.push(localdb.localSettings.put({
       user_id: userId,
       key: "recommendation_session_slot_map_v1",
       value: JSON.stringify(profile.sessionSlotMap),
       updatedAt,
-    }),
-  ]);
+    }));
+  }
+
+  await Promise.all(writes);
+}
+
+
+function prettyRecommendationProfile(profile: RecommendationSessionProfile) {
+  return {
+    sessionTypes: profile.sessionTypes.join(", "),
+    sessionSequence: profile.sessionSequence.join(", "),
+    sessionSlotMap: JSON.stringify(profile.sessionSlotMap, null, 2),
+  };
+}
+
+async function saveRecommendationSplitConfig() {
+  if (!userId) return;
+  setSplitConfigBusy(true);
+  setSplitConfigError(null);
+  setSplitConfigMessage(null);
+  try {
+    const sessionTypes = parseRecommendationStringArray(splitSessionTypesInput);
+    const sessionSequence = parseRecommendationStringArray(splitSessionSequenceInput);
+    const sessionSlotMap = parseRecommendationSessionSlotMap(splitSessionSlotMapInput);
+
+    if (sessionTypes.length === 0) {
+      throw new Error("Add at least one session type.");
+    }
+    if (sessionSequence.length === 0) {
+      throw new Error("Add a session sequence.");
+    }
+    if (Object.keys(sessionSlotMap).length === 0) {
+      throw new Error("Session slot map must be valid JSON with at least one day definition.");
+    }
+
+    const normalizedTypes = new Set(sessionTypes.map((item) => item.toLowerCase()));
+    const sequenceOutsideTypes = sessionSequence.filter((item) => !normalizedTypes.has(item.toLowerCase()));
+    if (sequenceOutsideTypes.length > 0) {
+      throw new Error(`Sequence includes session types that are not defined: ${sequenceOutsideTypes.join(", ")}`);
+    }
+
+    const slotMapOutsideTypes = Object.keys(sessionSlotMap).filter((item) => !normalizedTypes.has(item.toLowerCase()));
+    if (slotMapOutsideTypes.length > 0) {
+      throw new Error(`Slot map contains day names not listed in session types: ${slotMapOutsideTypes.join(", ")}`);
+    }
+
+    const updatedAt = Date.now();
+    await Promise.all([
+      localdb.localSettings.put({
+        user_id: userId,
+        key: "recommendation_session_types_v1",
+        value: JSON.stringify(sessionTypes),
+        updatedAt,
+      }),
+      localdb.localSettings.put({
+        user_id: userId,
+        key: "recommendation_session_sequence_v1",
+        value: JSON.stringify(sessionSequence),
+        updatedAt,
+      }),
+      localdb.localSettings.put({
+        user_id: userId,
+        key: "recommendation_session_slot_map_v1",
+        value: JSON.stringify(sessionSlotMap),
+        updatedAt,
+      }),
+    ]);
+
+    setSplitConfigMessage("Split saved. Recommendation rebuilt from your current definition.");
+    await refreshDashboard();
+  } catch (error) {
+    setSplitConfigError(error instanceof Error ? error.message : "Could not save split settings.");
+  } finally {
+    setSplitConfigBusy(false);
+  }
+}
+
+function loadRecommendationPreset(preset: "current" | "dave" | "tim") {
+  const profile =
+    preset === "dave"
+      ? DAVE_RECOMMENDATION_PROFILE
+      : preset === "tim"
+      ? TIM_RECOMMENDATION_PROFILE
+      : recommendationProfileForEmail(email);
+  const pretty = prettyRecommendationProfile(profile);
+  setSplitSessionTypesInput(pretty.sessionTypes);
+  setSplitSessionSequenceInput(pretty.sessionSequence);
+  setSplitSessionSlotMapInput(pretty.sessionSlotMap);
+  setSplitConfigError(null);
+  setSplitConfigMessage(null);
 }
 
 
@@ -2946,6 +3051,9 @@ async function refreshDashboard() {
       const effectiveSessionTypes = configuredSessionTypes.length > 0 ? configuredSessionTypes : profileFallback.sessionTypes;
       const effectiveSessionSequence = configuredSessionSequence.length > 0 ? configuredSessionSequence : profileFallback.sessionSequence;
       const effectiveSessionSlotMap = Object.keys(configuredSessionSlotMap).length > 0 ? configuredSessionSlotMap : profileFallback.sessionSlotMap;
+      setSplitSessionTypesInput(effectiveSessionTypes.join(", "));
+      setSplitSessionSequenceInput(effectiveSessionSequence.join(", "));
+      setSplitSessionSlotMapInput(JSON.stringify(effectiveSessionSlotMap, null, 2));
 
       const userTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
       const userTemplateIds = new Set(userTemplates.map((row) => row.id));
@@ -4138,6 +4246,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
