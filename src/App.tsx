@@ -63,6 +63,49 @@ function addDays(day: string, delta: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+const SESSION_IDENTITY_PREFIX = "[[rb60-session]]";
+
+type SessionIdentityMeta = {
+  splitDay?: string | null;
+  focus?: BrainFocus | null;
+};
+
+function encodeSessionIdentityMeta(meta: SessionIdentityMeta): string {
+  return `${SESSION_IDENTITY_PREFIX}${JSON.stringify({
+    splitDay: String(meta.splitDay || "").trim() || null,
+    focus: meta.focus ?? null,
+  })}`;
+}
+
+function extractSessionIdentityMeta(notes: string | null | undefined): SessionIdentityMeta | null {
+  const raw = String(notes || "");
+  const idx = raw.indexOf(SESSION_IDENTITY_PREFIX);
+  if (idx === -1) return null;
+  const json = raw.slice(idx + SESSION_IDENTITY_PREFIX.length).trim();
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as SessionIdentityMeta;
+    return {
+      splitDay: String(parsed?.splitDay || "").trim() || null,
+      focus: parsed?.focus ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function appendSessionIdentityMeta(notes: string | null | undefined, meta: SessionIdentityMeta): string {
+  const base = String(notes || "").split(SESSION_IDENTITY_PREFIX)[0].trim();
+  const encoded = encodeSessionIdentityMeta(meta);
+  return base ? `${base}\n${encoded}` : encoded;
+}
+
+function sessionHistoryIdentityLabel(session: Pick<LocalWorkoutSession, "title" | "notes">): string {
+  const meta = extractSessionIdentityMeta(session.notes);
+  if (meta?.splitDay) return meta.splitDay;
+  return String(session.title || "");
+}
+
 
 // -----------------------------
 // Exercise name normalization + aliases
@@ -1724,13 +1767,18 @@ async function saveQuickLog() {
       const id = uuid();
       const started_at = new Date().toISOString();
 
+      const sessionIdentityDay = String(brainSnapshot.recommendedSession.sessionType || "").trim() || (brainSnapshot.recommendedSession.title || "Coach Session").replace(/\s+Session$/i, "").trim() || null;
+
       const local: LocalWorkoutSession = {
         id,
         user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: brainSnapshot.recommendedSession.title || "Coach Session",
-        notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
+        notes: appendSessionIdentityMeta(
+          `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`,
+          { splitDay: sessionIdentityDay, focus: brainSnapshot.recommendedSession.focus }
+        )
       };
 
       await localdb.localSessions.put(local);
@@ -3270,7 +3318,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfig,
-        recentSessionTitles: recentSessions.map((s) => s.title),
+        recentSessionTitles: recentSessions.map((s) => sessionHistoryIdentityLabel(s)),
         sleepAvg7,
         proteinAvg7,
         trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
@@ -3991,6 +4039,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
