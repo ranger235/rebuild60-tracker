@@ -103,7 +103,6 @@ export type RecommendedSession = {
   focus: Exclude<BrainFocus, "Mixed">;
   bias: string;
   title: string;
-  sessionType?: string | null;
   rationale: string;
   volumeNote: string;
   alerts: string[];
@@ -1286,7 +1285,6 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       focus: decision.focus,
       bias: decision.mode,
       title: `${decision.plannedDayName ?? composer.emphasis} Session`,
-      sessionType: decision.plannedDayName ?? composer.emphasis,
       rationale,
       volumeNote,
       alerts,
@@ -1294,6 +1292,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
