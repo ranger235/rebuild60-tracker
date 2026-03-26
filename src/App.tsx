@@ -2137,42 +2137,39 @@ This removes it locally immediately and queues a cloud delete.`
   // -----------------------------
   // Templates
   // -----------------------------
-  async function getPendingTemplateSyncIntent() {
-    const pending = await localdb.pendingOps.toArray();
-    const pendingDeleteTemplateIds = new Set<string>();
-    const pendingDeleteTemplateExerciseIds = new Set<string>();
-
-    for (const item of pending) {
-      const payload = item?.payload ?? {};
-      if (item.op === "delete_template" && payload?.template_id) {
-        pendingDeleteTemplateIds.add(String(payload.template_id));
-      }
-      if (item.op === "delete_template_exercise" && payload?.template_exercise_id) {
-        pendingDeleteTemplateExerciseIds.add(String(payload.template_exercise_id));
-      }
-    }
-
-    return { pendingDeleteTemplateIds, pendingDeleteTemplateExerciseIds };
-  }
-
   async function loadTemplates() {
     if (!userId) return;
-    const { pendingDeleteTemplateIds } = await getPendingTemplateSyncIntent();
-    const rows = (await localdb.localTemplates.where({ user_id: userId }).sortBy("created_at"))
-      .filter((row) => !pendingDeleteTemplateIds.has(String(row.id)));
+    const [rows, pendingOps] = await Promise.all([
+      localdb.localTemplates.where({ user_id: userId }).sortBy("created_at"),
+      localdb.pendingOps
+        .where("op")
+        .anyOf("delete_template", "delete_template_exercise")
+        .toArray()
+    ]);
 
-    if (openTemplateId && pendingDeleteTemplateIds.has(String(openTemplateId))) {
-      setOpenTemplateId(null);
-      setEditTemplateName("");
-      setEditTemplateDesc("");
-      setTemplateExercises([]);
-    }
+    const pendingDeleteTemplateIds = new Set(
+      pendingOps
+        .filter((op) => op.op === "delete_template")
+        .map((op) => String(op.payload?.template_id ?? ""))
+        .filter(Boolean)
+    );
 
-    setTemplates(rows.reverse());
+    setTemplates(rows.filter((row) => !pendingDeleteTemplateIds.has(String(row.id))).reverse());
   }
 
   async function openTemplate(templateId: string) {
-    const { pendingDeleteTemplateIds, pendingDeleteTemplateExerciseIds } = await getPendingTemplateSyncIntent();
+    const pendingOps = await localdb.pendingOps
+      .where("op")
+      .anyOf("delete_template", "delete_template_exercise")
+      .toArray();
+
+    const pendingDeleteTemplateIds = new Set(
+      pendingOps
+        .filter((op) => op.op === "delete_template")
+        .map((op) => String(op.payload?.template_id ?? ""))
+        .filter(Boolean)
+    );
+
     if (pendingDeleteTemplateIds.has(String(templateId))) {
       setOpenTemplateId(null);
       setEditTemplateName("");
@@ -2181,13 +2178,19 @@ This removes it locally immediately and queues a cloud delete.`
       return;
     }
 
+    const pendingDeleteTemplateExerciseIds = new Set(
+      pendingOps
+        .filter((op) => op.op === "delete_template_exercise")
+        .map((op) => String(op.payload?.template_exercise_id ?? ""))
+        .filter(Boolean)
+    );
+
     setOpenTemplateId(templateId);
     const t = await localdb.localTemplates.get(templateId);
     setEditTemplateName(t?.name ?? "");
     setEditTemplateDesc(t?.description ?? "");
-    const ex = (await localdb.localTemplateExercises.where({ template_id: templateId }).sortBy("sort_order"))
-      .filter((row) => !pendingDeleteTemplateExerciseIds.has(String(row.id)));
-    setTemplateExercises(ex);
+    const ex = await localdb.localTemplateExercises.where({ template_id: templateId }).sortBy("sort_order");
+    setTemplateExercises(ex.filter((row) => !pendingDeleteTemplateExerciseIds.has(String(row.id))));
   }
 
 
@@ -3988,6 +3991,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
