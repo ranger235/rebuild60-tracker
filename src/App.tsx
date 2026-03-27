@@ -651,7 +651,11 @@ function estimateBandLoad(
   return Math.round(primary);
 }
 
-function formatSet(s: SetLite) {
+function formatSet(
+  s: SetLite,
+  bandMap: Record<string, number>,
+  comboFactor: number
+) {
   const r = s.reps ?? "—";
   const wu = s.is_warmup ? " WU" : "";
   const rpe = s.rpe != null ? ` @${s.rpe}` : "";
@@ -677,8 +681,8 @@ function formatSet(s: SetLite) {
             typeof s.band_level === "number" ? s.band_level : null,
             s.band_config,
             null,
-            bandEquivMap,
-            bandComboFactor
+            bandMap,
+            comboFactor
           );
     const estTxt = est != null ? `~${est}` : "";
     return `B${lvl}${cfg}${mode}${estTxt} x${r}${wu}${rpe}`;
@@ -1206,7 +1210,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
       setOpenTemplateId(null);
 
       if (userId) {
-        await loadSessionsForDay(targetDayDate);
+        await loadSessionsForDay(selectedDayDateRef.current);
         await loadTemplates();
       }
 
@@ -3991,6 +3995,8 @@ async function syncNow() {
     </div>
   );
 }
+
+
 
 
 
