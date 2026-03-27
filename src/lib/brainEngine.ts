@@ -360,18 +360,33 @@ function summarizeSplitHistory(titles: string[] | undefined, split: TrainingSpli
   return { counts, lastDayName };
 }
 
+function matchSplitDayFromFocus(
+  focus: BrainFocus | null | undefined,
+  split: TrainingSplitConfig
+): string | null {
+  if (!focus || focus === "Mixed") return null;
+  const exactName = split.days.find((day) => normalizeText(day.name) === normalizeText(focus));
+  if (exactName) return exactName.name;
+
+  const inferred = split.days.find((day) => inferFocusFromSlots(day.slots) === focus);
+  return inferred?.name ?? null;
+}
+
 function chooseSplitDay(input: BrainInput, split: TrainingSplitConfig): SplitDayDefinition {
   const history = summarizeSplitHistory(input.recentSessionTitles, split);
   const first = split.days[0];
-  if (!history.lastDayName) return first;
+  const lastDayName =
+    matchSplitDayFromFocus(input.lastSessionFocus, split) ?? history.lastDayName;
 
-  const eligibleDays = split.days.filter((day) => day.name !== history.lastDayName);
+  if (!lastDayName) return first;
+
+  const eligibleDays = split.days.filter((day) => day.name !== lastDayName);
   if (!eligibleDays.length) return first;
 
-  const currentIdx = split.days.findIndex((day) => day.name === history.lastDayName);
+  const currentIdx = split.days.findIndex((day) => day.name === lastDayName);
   const rotated = currentIdx >= 0 ? split.days[(currentIdx + 1) % split.days.length] : first;
 
-  if (rotated.name !== history.lastDayName) {
+  if (rotated.name !== lastDayName) {
     const rotatedEligible = eligibleDays.find((day) => day.name === rotated.name);
     if (rotatedEligible) return rotatedEligible;
   }
@@ -1292,6 +1307,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
