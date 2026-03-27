@@ -343,10 +343,57 @@ type CoachSessionSeed = {
   title: string;
   bias: string;
   summary: string;
+  plannedDayId?: string | null;
+  plannedDayName?: string | null;
+  splitPreset?: TrainingSplitConfig["preset"] | null;
   exercises: CoachSessionExerciseSeed[];
 };
 
+type SessionSplitMeta = {
+  plannedDayId?: string | null;
+  plannedDayName?: string | null;
+  splitPreset?: TrainingSplitConfig["preset"] | null;
+};
 
+const SESSION_META_PREFIX = "\n\n<!--R60_META:";
+const SESSION_META_SUFFIX = ":R60_META-->";
+
+function appendSessionSplitMeta(notes: string | null | undefined, meta: SessionSplitMeta | null | undefined): string | null {
+  const clean = stripSessionSplitMeta(notes);
+  if (!meta || (!meta.plannedDayId && !meta.plannedDayName && !meta.splitPreset)) {
+    return clean || null;
+  }
+  const payload = JSON.stringify(meta);
+  return `${clean ? `${clean}` : ""}${SESSION_META_PREFIX}${payload}${SESSION_META_SUFFIX}`;
+}
+
+function parseSessionSplitMeta(notes: string | null | undefined): SessionSplitMeta | null {
+  const text = String(notes || "");
+  const start = text.indexOf(SESSION_META_PREFIX);
+  const end = text.indexOf(SESSION_META_SUFFIX, start + SESSION_META_PREFIX.length);
+  if (start === -1 || end === -1) return null;
+  const raw = text.slice(start + SESSION_META_PREFIX.length, end).trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      plannedDayId: typeof (parsed as any).plannedDayId === "string" ? (parsed as any).plannedDayId : null,
+      plannedDayName: typeof (parsed as any).plannedDayName === "string" ? (parsed as any).plannedDayName : null,
+      splitPreset: typeof (parsed as any).splitPreset === "string" ? (parsed as any).splitPreset : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function stripSessionSplitMeta(notes: string | null | undefined): string {
+  const text = String(notes || "");
+  const start = text.indexOf(SESSION_META_PREFIX);
+  const end = text.indexOf(SESSION_META_SUFFIX, start + SESSION_META_PREFIX.length);
+  if (start === -1 || end === -1) return text.trim();
+  return `${text.slice(0, start)}${text.slice(end + SESSION_META_SUFFIX.length)}`.trim();
+}
 
 function firstNumberFromText(value: string | null | undefined): number | null {
   const text = String(value || "");
@@ -651,11 +698,7 @@ function estimateBandLoad(
   return Math.round(primary);
 }
 
-function formatSet(
-  s: SetLite,
-  bandMap: Record<string, number>,
-  comboFactor: number
-) {
+function formatSet(s: SetLite) {
   const r = s.reps ?? "—";
   const wu = s.is_warmup ? " WU" : "";
   const rpe = s.rpe != null ? ` @${s.rpe}` : "";
@@ -681,8 +724,8 @@ function formatSet(
             typeof s.band_level === "number" ? s.band_level : null,
             s.band_config,
             null,
-            bandMap,
-            comboFactor
+            bandEquivMap,
+            bandComboFactor
           );
     const estTxt = est != null ? `~${est}` : "";
     return `B${lvl}${cfg}${mode}${estTxt} x${r}${wu}${rpe}`;
@@ -1210,7 +1253,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
       setOpenTemplateId(null);
 
       if (userId) {
-        await loadSessionsForDay(selectedDayDateRef.current);
+        await loadSessionsForDay(targetDayDate);
         await loadTemplates();
       }
 
@@ -1351,7 +1394,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
           day_date: derivedDay,
           started_at: s.started_at,
           title: s.title,
-          notes: s.notes ?? null,
+          notes: stripSessionSplitMeta(s.notes ?? null) || null,
           exercises: exSummaries
         });
       }
@@ -1728,13 +1771,19 @@ async function saveQuickLog() {
       const id = uuid();
       const started_at = new Date().toISOString();
 
+      const sessionSplitMeta: SessionSplitMeta = {
+        plannedDayId: brainSnapshot.recommendedSession.plannedDayId ?? null,
+        plannedDayName: brainSnapshot.recommendedSession.plannedDayName ?? null,
+        splitPreset: splitConfig?.preset ?? null,
+      };
+
       const local: LocalWorkoutSession = {
         id,
         user_id: targetUserId,
         day_date: targetDayDate,
         started_at,
         title: brainSnapshot.recommendedSession.title || "Coach Session",
-        notes: `Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`
+        notes: appendSessionSplitMeta(`Created from coach recommendation • ${brainSnapshot.recommendedSession.bias}`, sessionSplitMeta)
       };
 
       await localdb.localSessions.put(local);
@@ -1806,6 +1855,9 @@ async function saveQuickLog() {
       title: brainSnapshot.recommendedSession.title || "Coach Session",
       bias: brainSnapshot.recommendedSession.bias,
       summary: brainSnapshot.recommendedSession.rationale,
+      plannedDayId: brainSnapshot.recommendedSession.plannedDayId ?? null,
+      plannedDayName: brainSnapshot.recommendedSession.plannedDayName ?? null,
+      splitPreset: splitConfig?.preset ?? null,
       exercises: coachExercises
     });
 
@@ -1816,6 +1868,9 @@ async function saveQuickLog() {
       title: brainSnapshot.recommendedSession.title || "Coach Session",
       bias: brainSnapshot.recommendedSession.bias,
       summary: brainSnapshot.recommendedSession.rationale,
+      plannedDayId: brainSnapshot.recommendedSession.plannedDayId ?? null,
+      plannedDayName: brainSnapshot.recommendedSession.plannedDayName ?? null,
+      splitPreset: splitConfig?.preset ?? null,
       exercises: coachExercises
     });
     setDraftByExerciseId((prev) => ({ ...prev, ...nextDrafts }));
@@ -3060,8 +3115,22 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         .filter((s) => s.exclude_from_analytics !== true)
         .sort((a, b) => (a.day_date || isoToDay(a.started_at)) < (b.day_date || isoToDay(b.started_at)) ? 1 : -1);
 
+      const sessionHasWork = (sessionId: string) => {
+        const exercisesForSession = sessionExercisesMap.get(sessionId) ?? [];
+        return exercisesForSession.some((ex) => (setsByExerciseId.get(ex.id) ?? []).some((st) => !st.is_warmup));
+      };
+
+      const completedSessions = recentSessions.filter((session) => sessionHasWork(session.id));
+      const recentCompletedSplitDays = completedSessions.map((session) => {
+        const meta = parseSessionSplitMeta(session.notes ?? null);
+        return {
+          dayId: meta?.plannedDayId ?? null,
+          dayName: meta?.plannedDayName ?? null,
+        };
+      });
+
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
-      const recentFocusWindow = recentSessions.slice(0, 9);
+      const recentFocusWindow = completedSessions.slice(0, 9);
       const exerciseHistoryMap = new Map<string, ExerciseHistory>();
 
       for (const session of recentFocusWindow) {
@@ -3076,7 +3145,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       }
 
       const today = fmt(endDay);
-      for (const session of recentSessions) {
+      for (const session of completedSessions) {
         const exercisesForSession = (sessionExercisesMap.get(session.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
         for (const ex of exercisesForSession) {
           const key = exerciseKey(ex.name);
@@ -3234,8 +3303,8 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         if (e.primaryOutcome === "regressed") return 45;
         return 60;
       }));
-      const lastWorkoutDays = recentSessions.length > 0
-        ? daysBetweenISO(recentSessions[0].day_date || isoToDay(recentSessions[0].started_at), today)
+      const lastWorkoutDays = completedSessions.length > 0
+        ? daysBetweenISO(completedSessions[0].day_date || isoToDay(completedSessions[0].started_at), today)
         : null;
       const readinessTrend = sleepAvg7 != null && proteinAvg7 != null && sleepAvg7 >= 6.5 && proteinAvg7 >= 170 ? "up" : sleepAvg7 != null && sleepAvg7 >= 5.5 ? "flat" : "down";
       const sleepReadiness = sleepAvg7 != null ? Math.max(35, Math.min(100, Math.round(35 + sleepAvg7 * 9))) : 60;
@@ -3274,7 +3343,8 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfig,
-        recentSessionTitles: recentSessions.map((s) => s.title),
+        recentSessionTitles: completedSessions.map((s) => s.title),
+        recentCompletedSplitDays,
         sleepAvg7,
         proteinAvg7,
         trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length,
@@ -3995,6 +4065,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
