@@ -360,33 +360,32 @@ function summarizeSplitHistory(titles: string[] | undefined, split: TrainingSpli
   return { counts, lastDayName };
 }
 
-function matchSplitDayFromFocus(
-  focus: BrainFocus | null | undefined,
-  split: TrainingSplitConfig
-): string | null {
-  if (!focus || focus === "Mixed") return null;
-  const exactName = split.days.find((day) => normalizeText(day.name) === normalizeText(focus));
-  if (exactName) return exactName.name;
-
-  const inferred = split.days.find((day) => inferFocusFromSlots(day.slots) === focus);
-  return inferred?.name ?? null;
+function dayMatchesFocus(day: SplitDayDefinition, focus: BrainFocus | null): boolean {
+  if (!focus || focus === "Mixed") return false;
+  const inferred = inferFocusFromSlots(day.slots);
+  if (inferred === focus) return true;
+  const normalizedName = normalizeText(day.name);
+  if (focus === "Push") return normalizedName.includes("push") || normalizedName.includes("upper");
+  if (focus === "Pull") return normalizedName.includes("pull") || normalizedName.includes("back");
+  if (focus === "Lower") return normalizedName.includes("lower") || normalizedName.includes("legs") || normalizedName.includes("leg");
+  return false;
 }
 
 function chooseSplitDay(input: BrainInput, split: TrainingSplitConfig): SplitDayDefinition {
   const history = summarizeSplitHistory(input.recentSessionTitles, split);
   const first = split.days[0];
-  const lastDayName =
-    matchSplitDayFromFocus(input.lastSessionFocus, split) ?? history.lastDayName;
 
-  if (!lastDayName) return first;
+  const focusMatchedLastDay = split.days.find((day) => dayMatchesFocus(day, input.lastSessionFocus)) ?? null;
+  const effectiveLastDayName = focusMatchedLastDay?.name ?? history.lastDayName;
+  if (!effectiveLastDayName) return first;
 
-  const eligibleDays = split.days.filter((day) => day.name !== lastDayName);
+  const eligibleDays = split.days.filter((day) => day.name !== effectiveLastDayName);
   if (!eligibleDays.length) return first;
 
-  const currentIdx = split.days.findIndex((day) => day.name === lastDayName);
+  const currentIdx = split.days.findIndex((day) => day.name === effectiveLastDayName);
   const rotated = currentIdx >= 0 ? split.days[(currentIdx + 1) % split.days.length] : first;
 
-  if (rotated.name !== lastDayName) {
+  if (rotated.name !== effectiveLastDayName) {
     const rotatedEligible = eligibleDays.find((day) => day.name === rotated.name);
     if (rotatedEligible) return rotatedEligible;
   }
@@ -1307,6 +1306,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
