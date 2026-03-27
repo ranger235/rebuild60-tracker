@@ -559,6 +559,7 @@ const [aiBusy, setAiBusy] = useState(false);
   const [scoreHistory, setScoreHistory] = useState<Scorecard[]>([]);
   const [lastScoreSignals, setLastScoreSignals] = useState<any | null>(null);
   const [scoreShowHistory, setScoreShowHistory] = useState(false);
+  const [showSignalDebug, setShowSignalDebug] = useState(false);
 
   const scorecardMetrics: Array<{ key: "conditioning" | "muscularity" | "symmetry" | "waist_control" | "consistency"; label: string }> = [
     { key: "conditioning", label: "Conditioning" },
@@ -1240,7 +1241,7 @@ if (CORE_POSES.includes(pose)) {
   if (is_anchor === true) {
     try {
       const priorAnchors = rows
-        .filter((r) => r.pose === pose && (r.is_anchor ?? false) && r.taken_on < takenOnIso)
+        .filter((r) => r.pose === pose && (r.is_anchor ?? false) && r.taken_on < dayDate)
         .sort((a, b) => (a.taken_on > b.taken_on ? -1 : 1));
 
       const last = priorAnchors[0];
@@ -1776,6 +1777,9 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
             scorecardMetrics={scorecardMetrics}
             formatDelta={formatDelta}
             deltaTone={deltaTone}
+            lastScoreSignals={lastScoreSignals}
+            showSignalDebug={showSignalDebug}
+            setShowSignalDebug={setShowSignalDebug}
           />
 
           <ProgressFlipbook
@@ -1909,6 +1913,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
