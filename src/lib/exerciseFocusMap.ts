@@ -1,78 +1,51 @@
-export type ExerciseFocus =
-  | "Push"
-  | "Pull"
-  | "Lower"
-  | "Chest"
-  | "Back"
-  | "Shoulders"
-  | "Biceps"
-  | "Triceps"
-  | "Quads"
-  | "Hamstrings"
-  | "Glutes"
-  | "Mixed"
+export type ExerciseFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
 export function focusFromExerciseKey(key: string): ExerciseFocus {
-  const k = key.toLowerCase()
+  const k = key.toLowerCase();
 
-  // --- CHEST ---
+  // Push: chest, shoulders, triceps
   if (
     k.includes("bench") ||
     k.includes("chest press") ||
-    k.includes("dip")
-  ) return "Chest"
+    k.includes("dip") ||
+    k.includes("overhead press") ||
+    k.includes("shoulder press") ||
+    k.includes("lateral raise") ||
+    k.includes("tricep") ||
+    k.includes("pushdown") ||
+    k.includes("skull") ||
+    k.includes("push-up") ||
+    k.includes("push up") ||
+    k.includes("pec deck")
+  ) return "Push";
 
-  // --- BACK ---
+  // Pull: back, rear delts, biceps
   if (
     k.includes("row") ||
     k.includes("pull") ||
-    k.includes("chin")
-  ) return "Back"
-
-  // --- SHOULDERS ---
-  if (
-    k.includes("overhead press") ||
-    k.includes("shoulder press") ||
-    k.includes("lateral raise")
-  ) return "Shoulders"
-
-  // --- BICEPS ---
-  if (
+    k.includes("chin") ||
+    k.includes("lat pulldown") ||
+    k.includes("face pull") ||
+    k.includes("reverse pec deck") ||
     k.includes("curl")
-  ) return "Biceps"
+  ) return "Pull";
 
-  // --- TRICEPS ---
-  if (
-    k.includes("tricep") ||
-    k.includes("pushdown") ||
-    k.includes("skull")
-  ) return "Triceps"
-
-  // --- QUADS ---
+  // Lower: quads, hamstrings, glutes, general leg work
   if (
     k.includes("squat") ||
-    k.includes("leg press")
-  ) return "Quads"
-
-  // --- HAMSTRINGS ---
-  if (
+    k.includes("leg press") ||
     k.includes("rdl") ||
-    k.includes("hamstring")
-  ) return "Hamstrings"
-
-  // --- GLUTES ---
-  if (
+    k.includes("romanian deadlift") ||
+    k.includes("hamstring") ||
     k.includes("hip thrust") ||
-    k.includes("glute")
-  ) return "Glutes"
-
-  // --- FALLBACK LOWER ---
-  if (
+    k.includes("glute") ||
     k.includes("deadlift") ||
     k.includes("lunge") ||
-    k.includes("leg")
-  ) return "Lower"
+    k.includes("leg") ||
+    k.includes("calf")
+  ) return "Lower";
 
-  return "Mixed"
+  return "Mixed";
 }
+
 
