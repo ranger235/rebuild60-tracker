@@ -74,6 +74,10 @@ export type BrainInput = {
   frictionProfile?: FrictionProfile | null;
   splitConfig?: TrainingSplitConfig | null;
   recentSessionTitles?: string[];
+  recentCompletedSplitDays?: Array<{
+    dayId?: string | null;
+    dayName?: string | null;
+  }>;
 };
 
 export type BrainMetric = {
@@ -106,6 +110,8 @@ export type RecommendedSession = {
   rationale: string;
   volumeNote: string;
   alerts: string[];
+  plannedDayId: string | null;
+  plannedDayName: string | null;
   exercises: RecommendedExercise[];
 };
 
@@ -124,6 +130,7 @@ export type BrainSnapshot = {
 type Decision = {
   plannedFocus: Exclude<BrainFocus, "Mixed">;
   focus: Exclude<BrainFocus, "Mixed">;
+  plannedDayId: string | null;
   plannedDayName: string | null;
   mode: "Progression" | "Base" | "Reduced volume";
   wasOverride: boolean;
@@ -348,45 +355,70 @@ function matchSplitDayName(title: string | null | undefined, split: TrainingSpli
   return null;
 }
 
-function summarizeSplitHistory(titles: string[] | undefined, split: TrainingSplitConfig): { counts: Record<string, number>; lastDayName: string | null } {
-  const counts: Record<string, number> = Object.fromEntries(split.days.map((day) => [day.name, 0]));
-  let lastDayName: string | null = null;
-  for (const title of titles || []) {
-    const matched = matchSplitDayName(title, split);
-    if (!matched) continue;
-    counts[matched] = (counts[matched] || 0) + 1;
-    if (!lastDayName) lastDayName = matched;
+function resolveSplitDay(def: { dayId?: string | null; dayName?: string | null } | null | undefined, split: TrainingSplitConfig): SplitDayDefinition | null {
+  if (!def) return null;
+  if (def.dayId) {
+    const byId = split.days.find((day) => day.id === def.dayId);
+    if (byId) return byId;
   }
-  return { counts, lastDayName };
+  const normalizedName = normalizeText(def.dayName);
+  if (normalizedName) {
+    const byName = split.days.find((day) => normalizeText(day.name) === normalizedName);
+    if (byName) return byName;
+  }
+  return null;
 }
 
-function dayMatchesFocus(day: SplitDayDefinition, focus: BrainFocus | null): boolean {
-  if (!focus || focus === "Mixed") return false;
-  const inferred = inferFocusFromSlots(day.slots);
-  if (inferred === focus) return true;
-  const normalizedName = normalizeText(day.name);
-  if (focus === "Push") return normalizedName.includes("push") || normalizedName.includes("upper");
-  if (focus === "Pull") return normalizedName.includes("pull") || normalizedName.includes("back");
-  if (focus === "Lower") return normalizedName.includes("lower") || normalizedName.includes("legs") || normalizedName.includes("leg");
-  return false;
+function summarizeSplitHistory(
+  titles: string[] | undefined,
+  split: TrainingSplitConfig,
+  completedSplitDays?: Array<{ dayId?: string | null; dayName?: string | null }>
+): { counts: Record<string, number>; lastDayId: string | null; lastDayName: string | null } {
+  const counts: Record<string, number> = Object.fromEntries(split.days.map((day) => [day.name, 0]));
+  let lastDayId: string | null = null;
+  let lastDayName: string | null = null;
+
+  for (const def of completedSplitDays || []) {
+    const resolved = resolveSplitDay(def, split);
+    if (!resolved) continue;
+    counts[resolved.name] = (counts[resolved.name] || 0) + 1;
+    if (!lastDayName) {
+      lastDayId = resolved.id;
+      lastDayName = resolved.name;
+    }
+  }
+
+  if (!lastDayName) {
+    for (const title of titles || []) {
+      const matched = matchSplitDayName(title, split);
+      if (!matched) continue;
+      counts[matched] = (counts[matched] || 0) + 1;
+      if (!lastDayName) {
+        const resolved = split.days.find((day) => day.name === matched) || null;
+        lastDayId = resolved?.id ?? null;
+        lastDayName = matched;
+      }
+    }
+  }
+
+  return { counts, lastDayId, lastDayName };
 }
 
 function chooseSplitDay(input: BrainInput, split: TrainingSplitConfig): SplitDayDefinition {
-  const history = summarizeSplitHistory(input.recentSessionTitles, split);
+  const history = summarizeSplitHistory(input.recentSessionTitles, split, input.recentCompletedSplitDays);
   const first = split.days[0];
+  if (!history.lastDayName) return first;
 
-  const focusMatchedLastDay = split.days.find((day) => dayMatchesFocus(day, input.lastSessionFocus)) ?? null;
-  const effectiveLastDayName = focusMatchedLastDay?.name ?? history.lastDayName;
-  if (!effectiveLastDayName) return first;
-
-  const eligibleDays = split.days.filter((day) => day.name !== effectiveLastDayName);
+  const eligibleDays = split.days.filter((day) => day.name !== history.lastDayName);
   if (!eligibleDays.length) return first;
 
-  const currentIdx = split.days.findIndex((day) => day.name === effectiveLastDayName);
+  const currentIdx = history.lastDayId
+    ? split.days.findIndex((day) => day.id === history.lastDayId)
+    : split.days.findIndex((day) => day.name === history.lastDayName);
   const rotated = currentIdx >= 0 ? split.days[(currentIdx + 1) % split.days.length] : first;
 
-  if (rotated.name !== effectiveLastDayName) {
-    const rotatedEligible = eligibleDays.find((day) => day.name === rotated.name);
+  if (rotated.name !== history.lastDayName) {
+    const rotatedEligible = eligibleDays.find((day) => day.id === rotated.id);
     if (rotatedEligible) return rotatedEligible;
   }
 
@@ -496,6 +528,7 @@ function chooseDecision(
   recovery: number,
   momentum: number,
   adaptiveFocus: Exclude<BrainFocus, "Mixed">,
+  plannedDayId: string | null,
   plannedDayName: string | null
 ): Decision {
   const plannedFocus = choosePlannedFocus(input);
@@ -506,6 +539,7 @@ function chooseDecision(
     return {
       plannedFocus,
       focus,
+      plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
       wasOverride: focus !== plannedFocus,
@@ -520,6 +554,7 @@ function chooseDecision(
     return {
       plannedFocus,
       focus: "Push",
+      plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
       wasOverride: true,
@@ -531,6 +566,7 @@ function chooseDecision(
   return {
     plannedFocus,
     focus: adaptiveFocus,
+    plannedDayId,
     plannedDayName,
     mode: baseMode,
     wasOverride: adaptiveFocus !== plannedFocus,
@@ -1122,6 +1158,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     recoveryScore,
     momentumScore,
     adaptiveFocus,
+    chosenSplitDay.id,
     chosenSplitDay.name
   );
 
@@ -1302,10 +1339,13 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       rationale,
       volumeNote,
       alerts,
+      plannedDayId: decision.plannedDayId,
+      plannedDayName: decision.plannedDayName,
       exercises: recommendedExercises,
     },
   };
 }
+
 
 
 
