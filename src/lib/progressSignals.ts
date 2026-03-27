@@ -264,7 +264,7 @@ export function buildProgressSignals(args: {
   if (progressionRate != null) momentumComponents.push((progressionRate - 0.5) * 1.1);
   if (waistDelta != null) momentumComponents.push(Math.max(-1, Math.min(1, -waistDelta / 2)) * 0.9);
   if (adherenceScore != null) momentumComponents.push((adherenceScore - 0.5) * 0.8);
-  if (hardSets.length > 0) momentumComponents.push(Math.max(-1, Math.min(1, (hardSets / Math.max(1, expectedWorkouts * 10)) - 0.5)) * 0.5);
+  if (hardSets.length > 0) momentumComponents.push(Math.max(-1, Math.min(1, (hardSets.length / Math.max(1, expectedWorkouts * 10)) - 0.5)) * 0.5);
   const momentumSignal = momentumComponents.length ? round1(momentumComponents.reduce((a, b) => a + b, 0) / momentumComponents.length) : null;
 
   return {
@@ -305,3 +305,4 @@ export function buildProgressSignals(args: {
       anchorDays >= 1,
   };
 }
+
