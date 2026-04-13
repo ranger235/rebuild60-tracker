@@ -1,19 +1,4 @@
-import {
-  const [syncDebugAlways, setSyncDebugAlways] = useState([]);
-
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const ops = await localdb.pendingOps.toArray();
-        if (mounted) setSyncDebugAlways(ops.slice(0, 5));
-      } catch {}
-    };
-    load();
-    const t = setInterval(load, 2000);
-    return () => { mounted = false; clearInterval(t); };
-  }, []);
- useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
 import { enqueue, runSyncPass, startAutoSync } from "./sync";
 import { pullSync } from "./pullSync";
@@ -806,8 +791,7 @@ function isCompoundExercise(name: string): boolean {
 
 // -----------------------------
 // Simple SVG sparkline / line chart
-export default function App(
-) {
+export default function App() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
@@ -3783,17 +3767,7 @@ async function syncNow() {
 
   if (isRecoveryMode && window.location.pathname === "/reset-password") {
     return (
-      <
-<div style={{background:"#200",color:"#fff",padding:10}}>
-<strong>Sync Debug (Always)</strong>
-{syncDebugAlways.map((op,i)=>(
-  <div key={i}>
-    <div>{op.type} — {op.status}</div>
-    <div>{op.lastError || "no error"}</div>
-  </div>
-))}
-</div>
-div style={{ padding: 20, maxWidth: 520 }}>
+      <div style={{ padding: 20, maxWidth: 520 }}>
         <h2>Reset Password</h2>
         <p>Enter your new password below. This screen should be opened from the reset link emailed to you.</p>
 
@@ -4115,6 +4089,7 @@ div style={{ padding: 20, maxWidth: 520 }}>
     </div>
   );
 }
+
 
 
 
