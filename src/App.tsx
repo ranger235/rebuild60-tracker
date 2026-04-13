@@ -792,6 +792,22 @@ function isCompoundExercise(name: string): boolean {
 // -----------------------------
 // Simple SVG sparkline / line chart
 export default function App() {
+  const [syncDebug, setSyncDebug] = React.useState([]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const ops = await localdb.pendingOps.toArray();
+        const failing = ops.filter(o => o.status !== "done");
+        if (mounted) setSyncDebug(failing.slice(0, 5));
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 3000);
+    return () => { mounted = false; clearInterval(t); };
+  }, []);
+
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
@@ -4086,9 +4102,22 @@ async function syncNow() {
           />
         </ErrorBoundary>
       )}
-    </div>
+    
+      {syncDebug && syncDebug.length > 0 && (
+        <div style={{background:"#111",color:"#0f0",padding:10,marginTop:10}}>
+          <strong>Sync Debug</strong>
+          {syncDebug.map((op,i)=>(
+            <div key={i} style={{marginTop:5}}>
+              <div>{op.type}</div>
+              <div style={{fontSize:12,opacity:0.8}}>{op.lastError || "no error"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+</div>
   );
 }
+
 
 
 
