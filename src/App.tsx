@@ -2065,7 +2065,7 @@ async function deleteSet(exerciseId: string, setId: string) {
   if (!target) return;
 
   try {
-    const remainingForExercise = await localdb.transaction("rw", localdb.localSets, async () => {
+    const remainingForExercise = await localdb.transaction("rw", localdb.localSets, localdb.pendingOps, async () => {
       await localdb.localSets.delete(setId);
       const remaining = await localdb.localSets.where({ exercise_id: exerciseId }).sortBy("set_number");
       for (let i = 0; i < remaining.length; i++) {
@@ -2075,11 +2075,22 @@ async function deleteSet(exerciseId: string, setId: string) {
           remaining[i] = { ...remaining[i], set_number: desired };
         }
       }
+
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "delete_set",
+        payload: { set_id: setId },
+        status: "queued"
+      });
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "renumber_sets",
+        payload: { ordered_set_ids: remaining.map((s) => s.id) },
+        status: "queued"
+      });
+
       return remaining;
     });
-
-    await enqueue("delete_set", { set_id: setId });
-    await enqueue("renumber_sets", { ordered_set_ids: remainingForExercise.map((s) => s.id) });
 
     setSets((prev) => {
       const survivors = prev.filter((s) => s.id !== setId);
@@ -2108,7 +2119,7 @@ This removes it locally immediately and queues a cloud delete.`
   if (!ok) return;
 
   try {
-    const remainingExercises = await localdb.transaction("rw", localdb.localExercises, localdb.localSets, async () => {
+    const remainingExercises = await localdb.transaction("rw", localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
       await localdb.localSets.where({ exercise_id: exerciseId }).delete();
       await localdb.localExercises.delete(exerciseId);
 
@@ -2123,11 +2134,21 @@ This removes it locally immediately and queues a cloud delete.`
         }
       }
 
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "delete_exercise",
+        payload: { exercise_id: exerciseId },
+        status: "queued"
+      });
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "reorder_exercises",
+        payload: { ordered_exercise_ids: remaining.map((ex) => ex.id) },
+        status: "queued"
+      });
+
       return remaining;
     });
-
-    await enqueue("delete_exercise", { exercise_id: exerciseId });
-    await enqueue("reorder_exercises", { ordered_exercise_ids: remainingExercises.map((ex) => ex.id) });
 
     setExercises(remainingExercises);
     setSets((prev) => prev.filter((s) => s.exercise_id !== exerciseId));
@@ -2156,8 +2177,8 @@ This removes it locally immediately and queues a cloud delete.`
     if (!ok) return;
 
     try {
-      // local delete in one transaction
-      await localdb.transaction("rw", localdb.localSessions, localdb.localExercises, localdb.localSets, async () => {
+      // local delete + queue cloud delete in one transaction
+      await localdb.transaction("rw", localdb.localSessions, localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
         const ex = await localdb.localExercises.where({ session_id: sessionId }).toArray();
         const exIds = ex.map((e) => e.id);
 
@@ -2166,10 +2187,13 @@ This removes it locally immediately and queues a cloud delete.`
         }
         await localdb.localExercises.where({ session_id: sessionId }).delete();
         await localdb.localSessions.delete(sessionId);
+        await localdb.pendingOps.add({
+          createdAt: Date.now(),
+          op: "delete_session",
+          payload: { session_id: sessionId },
+          status: "queued"
+        });
       });
-
-      // queue cloud delete (handled in sync.ts update below)
-      await enqueue("delete_session", { session_id: sessionId });
       await rememberDeletedSessionId(sessionId);
       await removeCoachSessionSeed(sessionId);
 
@@ -4065,6 +4089,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
