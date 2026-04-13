@@ -89,16 +89,6 @@ async function processOp(op: PendingOp["op"], payload: any) {
       if (!template_id) throw new Error("delete_template missing template_id");
       await must(supabase.from("workout_template_exercises").delete().eq("template_id", template_id));
       await must(supabase.from("workout_templates").delete().eq("id", template_id));
-
-      const { data: templateStillExists, error: templateVerifyError } = await supabase
-        .from("workout_templates")
-        .select("id")
-        .eq("id", template_id)
-        .maybeSingle();
-      if (templateVerifyError) throw templateVerifyError;
-      if (templateStillExists) {
-        throw new Error(`delete_template verification failed for ${template_id}`);
-      }
       return;
     }
 
@@ -226,13 +216,6 @@ export async function runSyncPass(
           if (item.id != null) await localdb.pendingOps.delete(item.id);
         } catch (e: any) {
           failed++;
-
-          console.error("SYNC FAILURE", {
-            op: item.op,
-            payload: item.payload,
-            error: e
-          });
-
           if (item.id != null) {
             await localdb.pendingOps.update(item.id, {
               status: "retry",
@@ -294,6 +277,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
