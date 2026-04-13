@@ -16,6 +16,18 @@ async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?
   return result?.data as T;
 }
 
+async function mustDeleteAffectRows(
+  promise: Promise<{ data: any[] | null; error: any } | { data?: any[] | null; error?: any }>,
+  context: string
+) {
+  const result: any = await promise;
+  if (result?.error) throw result.error;
+  const rows = Array.isArray(result?.data) ? result.data : [];
+  if (rows.length === 0) {
+    throw new Error(`${context} affected 0 rows`);
+  }
+  return rows;
+}
 
 
 async function verifyRowMissingSoft(table: string, idColumn: string, idValue: string) {
@@ -88,7 +100,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const template_id = payload?.template_id;
       if (!template_id) throw new Error("delete_template missing template_id");
       await must(supabase.from("workout_template_exercises").delete().eq("template_id", template_id));
-      await must(supabase.from("workout_templates").delete().eq("id", template_id));
+      await mustDeleteAffectRows(
+        supabase.from("workout_templates").delete().eq("id", template_id).select("id"),
+        `delete_template for ${template_id}`
+      );
       return;
     }
 
@@ -103,17 +118,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
     case "delete_template_exercise": {
       const template_exercise_id = payload?.template_exercise_id;
       if (!template_exercise_id) throw new Error("delete_template_exercise missing template_exercise_id");
-      await must(supabase.from("workout_template_exercises").delete().eq("id", template_exercise_id));
-
-      const { data: templateExerciseStillExists, error: templateExerciseVerifyError } = await supabase
-        .from("workout_template_exercises")
-        .select("id")
-        .eq("id", template_exercise_id)
-        .maybeSingle();
-      if (templateExerciseVerifyError) throw templateExerciseVerifyError;
-      if (templateExerciseStillExists) {
-        throw new Error(`delete_template_exercise verification failed for ${template_exercise_id}`);
-      }
+      await mustDeleteAffectRows(
+        supabase.from("workout_template_exercises").delete().eq("id", template_exercise_id).select("id"),
+        `delete_template_exercise for ${template_exercise_id}`
+      );
       return;
     }
 
@@ -130,8 +138,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
     case "delete_set": {
       const set_id = payload?.set_id;
       if (!set_id) throw new Error("delete_set missing set_id");
-      await must(supabase.from("workout_sets").delete().eq("id", set_id));
-      await verifyRowMissingSoft("workout_sets", "id", set_id);
+      await mustDeleteAffectRows(
+        supabase.from("workout_sets").delete().eq("id", set_id).select("id"),
+        `delete_set for ${set_id}`
+      );
       return;
     }
 
@@ -149,8 +159,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const exercise_id = payload?.exercise_id;
       if (!exercise_id) throw new Error("delete_exercise missing exercise_id");
       await must(supabase.from("workout_sets").delete().eq("exercise_id", exercise_id));
-      await must(supabase.from("workout_exercises").delete().eq("id", exercise_id));
-      await verifyRowMissingSoft("workout_exercises", "id", exercise_id);
+      await mustDeleteAffectRows(
+        supabase.from("workout_exercises").delete().eq("id", exercise_id).select("id"),
+        `delete_exercise for ${exercise_id}`
+      );
       return;
     }
 
@@ -182,8 +194,10 @@ async function processOp(op: PendingOp["op"], payload: any) {
       }
 
       await must(supabase.from("workout_exercises").delete().eq("session_id", session_id));
-      await must(supabase.from("workout_sessions").delete().eq("id", session_id));
-      await verifyRowMissingSoft("workout_sessions", "id", session_id);
+      await mustDeleteAffectRows(
+        supabase.from("workout_sessions").delete().eq("id", session_id).select("id"),
+        `delete_session for ${session_id}`
+      );
       return;
     }
 
@@ -277,6 +291,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
