@@ -226,6 +226,13 @@ export async function runSyncPass(
           if (item.id != null) await localdb.pendingOps.delete(item.id);
         } catch (e: any) {
           failed++;
+
+          console.error("SYNC FAILURE", {
+            op: item.op,
+            payload: item.payload,
+            error: e
+          });
+
           if (item.id != null) {
             await localdb.pendingOps.update(item.id, {
               status: "retry",
@@ -287,6 +294,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
