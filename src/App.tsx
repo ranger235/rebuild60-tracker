@@ -68,7 +68,17 @@ function addDays(day: string, delta: number): string {
 // Exercise name normalization + aliases
 // -----------------------------
 function normalizeExerciseName(raw: string): string {
-  return (raw || "")
+  return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+raw || "")
     .toLowerCase()
     .trim()
     .replace(/[_\-]/g, " ")
@@ -792,6 +802,31 @@ function isCompoundExercise(name: string): boolean {
 // -----------------------------
 // Simple SVG sparkline / line chart
 export default function App() {
+  const [syncDebugAlways, setSyncDebugAlways] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const ops = await localdb.pendingOps.toArray();
+        if (mounted) setSyncDebugAlways(ops.slice(0, 5));
+      } catch {}
+    };
+    load();
+    const t = setInterval(load, 2000);
+    return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+) => { mounted = false; clearInterval(t); };
+  }, []);
+
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("…");
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
@@ -995,7 +1030,17 @@ useEffect(() => {
       if (!cancelled) setSplitConfig(null);
     }
   })();
-  return () => {
+  return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+) => {
     cancelled = true;
   };
 }, [userId]);
@@ -1059,7 +1104,17 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
       }
     });
 
-    return () => sub.subscription.unsubscribe();
+    return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+) => sub.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -1115,7 +1170,17 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   useEffect(() => {
     if (!timerOn) return;
     const t = window.setInterval(() => setSecs((s) => (s > 0 ? s - 1 : 0)), 1000);
-    return () => window.clearInterval(t);
+    return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+) => window.clearInterval(t);
   }, [timerOn]);
 
 
@@ -3005,7 +3070,17 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
       const pct = (a: number, b: number) => {
         if (b === 0) return a === 0 ? 0 : 100;
-        return ((a - b) / b) * 100;
+        return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+(a - b) / b) * 100;
       };
 
       const tonPct = pct(tonThis, tonPrev);
@@ -3504,7 +3579,17 @@ async function syncNow() {
     window.addEventListener("offline", handleOffline);
     window.addEventListener("online", handleOnline);
 
-    return () => {
+    return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+) => {
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
     };
@@ -3767,6 +3852,16 @@ async function syncNow() {
 
   if (isRecoveryMode && window.location.pathname === "/reset-password") {
     return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+
       <div style={{ padding: 20, maxWidth: 520 }}>
         <h2>Reset Password</h2>
         <p>Enter your new password below. This screen should be opened from the reset link emailed to you.</p>
@@ -3816,6 +3911,16 @@ async function syncNow() {
 
   if (!userId) {
     return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+
       <div style={{ padding: 20, maxWidth: 520 }}>
         <h2>Rebuild @ 60 Tracker</h2>
         <p>Login for private, offline-first logging.</p>
@@ -3852,6 +3957,16 @@ async function syncNow() {
   const openSessionObj = sessions.find((s) => s.id === openSessionId) ?? null;
 
   return (
+  <div style={{background:"#200",color:"#fff",padding:10}}>
+    <strong>Sync Debug (Always)</strong>
+    {syncDebugAlways.map((op,i)=>(
+      <div key={i} style={{marginTop:4}}>
+        <div>{op.type} — {op.status}</div>
+        <div style={{fontSize:12}}>{op.lastError || "no error"}</div>
+      </div>
+    ))}
+  </div>
+
     <div style={{ padding: 20, maxWidth: 950 }}>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -4089,6 +4204,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
