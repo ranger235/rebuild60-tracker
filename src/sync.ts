@@ -24,6 +24,7 @@ async function mustDeleteAffectRows(
   if (result?.error) throw result.error;
   const rows = Array.isArray(result?.data) ? result.data : [];
   if (rows.length === 0) {
+    console.error("DELETE NO-OP", `${context} affected 0 rows`);
     throw new Error(`${context} affected 0 rows`);
   }
   return rows;
@@ -291,6 +292,8 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
+
 
 
 
