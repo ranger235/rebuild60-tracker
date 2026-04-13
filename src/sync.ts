@@ -116,6 +116,16 @@ async function processOp(op: PendingOp["op"], payload: any) {
       const set_id = payload?.set_id;
       if (!set_id) throw new Error("delete_set missing set_id");
       await must(supabase.from("workout_sets").delete().eq("id", set_id));
+
+      const { data: setStillExists, error: setVerifyError } = await supabase
+        .from("workout_sets")
+        .select("id")
+        .eq("id", set_id)
+        .maybeSingle();
+      if (setVerifyError) throw setVerifyError;
+      if (setStillExists) {
+        throw new Error(`delete_set verification failed for ${set_id}`);
+      }
       return;
     }
 
@@ -134,6 +144,16 @@ async function processOp(op: PendingOp["op"], payload: any) {
       if (!exercise_id) throw new Error("delete_exercise missing exercise_id");
       await must(supabase.from("workout_sets").delete().eq("exercise_id", exercise_id));
       await must(supabase.from("workout_exercises").delete().eq("id", exercise_id));
+
+      const { data: exerciseStillExists, error: exerciseVerifyError } = await supabase
+        .from("workout_exercises")
+        .select("id")
+        .eq("id", exercise_id)
+        .maybeSingle();
+      if (exerciseVerifyError) throw exerciseVerifyError;
+      if (exerciseStillExists) {
+        throw new Error(`delete_exercise verification failed for ${exercise_id}`);
+      }
       return;
     }
 
@@ -166,6 +186,16 @@ async function processOp(op: PendingOp["op"], payload: any) {
 
       await must(supabase.from("workout_exercises").delete().eq("session_id", session_id));
       await must(supabase.from("workout_sessions").delete().eq("id", session_id));
+
+      const { data: sessionStillExists, error: sessionVerifyError } = await supabase
+        .from("workout_sessions")
+        .select("id")
+        .eq("id", session_id)
+        .maybeSingle();
+      if (sessionVerifyError) throw sessionVerifyError;
+      if (sessionStillExists) {
+        throw new Error(`delete_session verification failed for ${session_id}`);
+      }
       return;
     }
 
@@ -259,6 +289,7 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
 
 
 
