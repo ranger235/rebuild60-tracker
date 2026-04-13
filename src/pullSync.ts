@@ -102,15 +102,18 @@ export async function pullSync(userId: string) {
   if (zone2Err) throw zone2Err;
   if (templatesErr) throw templatesErr;
 
-  const sessionRows = ((sessions ?? []) as any[]).filter((row) => !pendingDeleteSessionIds.has(String(row.id)));
-
   const pending = await localdb.pendingOps.toArray();
   const {
     pendingDeleteTemplateIds,
     pendingDeleteTemplateExerciseIds,
     pendingCreateOrUpdateTemplateIds,
-    pendingCreateOrUpdateTemplateExerciseIds
+    pendingCreateOrUpdateTemplateExerciseIds,
+    pendingDeleteSessionIds,
+    pendingDeleteExerciseIds,
+    pendingDeleteSetIds
   } = collectSyncIntent(pending as PendingOp[]);
+
+  const sessionRows = ((sessions ?? []) as any[]).filter((row) => !pendingDeleteSessionIds.has(String(row.id)));
 
   const templateRows = ((templates ?? []) as any[]).filter((row) => !pendingDeleteTemplateIds.has(String(row.id)));
 
@@ -234,6 +237,7 @@ export async function pullSync(userId: string) {
     }
   );
 }
+
 
 
 
