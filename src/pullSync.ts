@@ -9,11 +9,14 @@ import { localdb, type PendingOp } from "./localdb";
  * - avoid updated_at assumptions until schema is standardized
  */
 
-function collectTemplateSyncIntent(pending: PendingOp[]) {
+function collectSyncIntent(pending: PendingOp[]) {
   const pendingDeleteTemplateIds = new Set<string>();
   const pendingDeleteTemplateExerciseIds = new Set<string>();
   const pendingCreateOrUpdateTemplateIds = new Set<string>();
   const pendingCreateOrUpdateTemplateExerciseIds = new Set<string>();
+  const pendingDeleteSessionIds = new Set<string>();
+  const pendingDeleteExerciseIds = new Set<string>();
+  const pendingDeleteSetIds = new Set<string>();
 
   for (const item of pending) {
     const payload = item?.payload ?? {};
@@ -32,6 +35,15 @@ function collectTemplateSyncIntent(pending: PendingOp[]) {
       case "delete_template_exercise":
         if (payload?.template_exercise_id) pendingDeleteTemplateExerciseIds.add(String(payload.template_exercise_id));
         break;
+      case "delete_session":
+        if (payload?.session_id) pendingDeleteSessionIds.add(String(payload.session_id));
+        break;
+      case "delete_exercise":
+        if (payload?.exercise_id) pendingDeleteExerciseIds.add(String(payload.exercise_id));
+        break;
+      case "delete_set":
+        if (payload?.set_id) pendingDeleteSetIds.add(String(payload.set_id));
+        break;
     }
   }
 
@@ -39,7 +51,10 @@ function collectTemplateSyncIntent(pending: PendingOp[]) {
     pendingDeleteTemplateIds,
     pendingDeleteTemplateExerciseIds,
     pendingCreateOrUpdateTemplateIds,
-    pendingCreateOrUpdateTemplateExerciseIds
+    pendingCreateOrUpdateTemplateExerciseIds,
+    pendingDeleteSessionIds,
+    pendingDeleteExerciseIds,
+    pendingDeleteSetIds
   };
 }
 
@@ -87,7 +102,7 @@ export async function pullSync(userId: string) {
   if (zone2Err) throw zone2Err;
   if (templatesErr) throw templatesErr;
 
-  const sessionRows = (sessions ?? []) as any[];
+  const sessionRows = ((sessions ?? []) as any[]).filter((row) => !pendingDeleteSessionIds.has(String(row.id)));
 
   const pending = await localdb.pendingOps.toArray();
   const {
@@ -95,7 +110,7 @@ export async function pullSync(userId: string) {
     pendingDeleteTemplateExerciseIds,
     pendingCreateOrUpdateTemplateIds,
     pendingCreateOrUpdateTemplateExerciseIds
-  } = collectTemplateSyncIntent(pending as PendingOp[]);
+  } = collectSyncIntent(pending as PendingOp[]);
 
   const templateRows = ((templates ?? []) as any[]).filter((row) => !pendingDeleteTemplateIds.has(String(row.id)));
 
@@ -125,7 +140,13 @@ export async function pullSync(userId: string) {
     return true;
   });
 
-  const exerciseRows = (exercises ?? []) as any[];
+  const exerciseRows = ((exercises ?? []) as any[]).filter((row) => {
+    const id = String(row.id);
+    const sessionId = String(row.session_id);
+    if (pendingDeleteExerciseIds.has(id)) return false;
+    if (pendingDeleteSessionIds.has(sessionId)) return false;
+    return true;
+  });
   const exerciseIds = exerciseRows.map((r) => r.id).filter(Boolean);
 
   const setsPromise = exerciseIds.length
@@ -134,6 +155,15 @@ export async function pullSync(userId: string) {
 
   const { data: sets, error: setsErr } = await setsPromise;
   if (setsErr) throw setsErr;
+
+  const validExerciseIds = new Set(exerciseRows.map((row) => String(row.id)));
+  const setRows = ((sets ?? []) as any[]).filter((row) => {
+    const id = String(row.id);
+    const exerciseId = String(row.exercise_id);
+    if (pendingDeleteSetIds.has(id)) return false;
+    if (pendingDeleteExerciseIds.has(exerciseId)) return false;
+    return validExerciseIds.has(exerciseId);
+  });
 
   // Collapse zone2 to one row per day for Dexie's [user_id+day_date] key.
   const zone2ByDay = new Map<string, any>();
@@ -158,7 +188,7 @@ export async function pullSync(userId: string) {
     async () => {
       await localdb.localSessions.bulkPut(sessionRows as any);
       await localdb.localExercises.bulkPut(exerciseRows as any);
-      await localdb.localSets.bulkPut(((sets ?? []) as any[]) as any);
+      await localdb.localSets.bulkPut(setRows as any);
 
       const remoteTemplateIdSet = new Set(templateRows.map((row) => String(row.id)));
       const remoteTemplateExerciseIdSet = new Set(templateExerciseRows.map((row) => String(row.id)));
@@ -204,5 +234,6 @@ export async function pullSync(userId: string) {
     }
   );
 }
+
 
 
