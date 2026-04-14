@@ -172,6 +172,16 @@ function eventTagTone(text?: string) {
   return { bg: "#f4f4f4", border: "#d9d9d9" };
 }
 
+
+function recommendationTrustLabel(brainSnapshot: BrainSnapshot | null) {
+  if (!brainSnapshot) return "Unavailable";
+  const alerts = brainSnapshot.recommendedSession.alerts?.length ?? 0;
+  const constraints = brainSnapshot.nextSessionPriority.constraintsApplied?.length ?? 0;
+  if (alerts === 0 && constraints <= 1) return "High confidence";
+  if (alerts <= 1 && constraints <= 3) return "Moderate confidence";
+  return "Use judgment";
+}
+
 function readinessTone(status: string) {
   if (status === "ready_to_push") return { bg: "#ebf8ee", border: "#b8dfc0" };
   if (status === "watch_fatigue") return { bg: "#fff8ea", border: "#ebd39e" };
@@ -333,6 +343,7 @@ export default function DashboardView(props: Props) {
 
   const [splitDraft, setSplitDraft] = useState<TrainingSplitConfig>(splitConfig ?? pplPreset());
   const [splitSaving, setSplitSaving] = useState(false);
+  const [showRecommendationWhy, setShowRecommendationWhy] = useState(false);
 
   useEffect(() => {
     setSplitDraft(splitConfig ?? pplPreset());
@@ -860,6 +871,21 @@ export default function DashboardView(props: Props) {
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>{brainSnapshot.recommendedSession.bias}</div>
                 <button
+                  type="button"
+                  onClick={() => setShowRecommendationWhy((prev) => !prev)}
+                  style={{
+                    border: "1px solid #111",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    fontWeight: 800,
+                    background: "transparent",
+                    color: "#111",
+                    cursor: "pointer"
+                  }}
+                >
+                  {showRecommendationWhy ? "Hide Why" : "Why This Session?"}
+                </button>
+                <button
                   onClick={startSessionFromRecommendation}
                   style={{
                     border: "1px solid #111",
@@ -901,6 +927,71 @@ export default function DashboardView(props: Props) {
 
             <div style={{ marginTop: 8, lineHeight: 1.4 }}>{brainSnapshot.recommendedSession.rationale}</div>
             <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>{brainSnapshot.recommendedSession.volumeNote}</div>
+
+            {showRecommendationWhy ? (
+              <div style={{ ...cardStyle, marginTop: 12, background: "rgba(255,255,255,0.72)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <div>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Why this session landed here</div>
+                    <div style={{ fontSize: 18, fontWeight: 800 }}>{recommendationTrustLabel(brainSnapshot)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    {brainSnapshot.recommendedSession.plannedDayName
+                      ? `Configured split day: ${brainSnapshot.recommendedSession.plannedDayName}`
+                      : `Recommended focus: ${brainSnapshot.recommendedSession.focus}`}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 12 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Current call</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{brainSnapshot.recommendedSession.title}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.8 }}>{brainSnapshot.recommendedSession.bias}</div>
+                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                      {brainSnapshot.recommendedSession.plannedDayName
+                        ? `Planned split day: ${brainSnapshot.recommendedSession.plannedDayName}`
+                        : "No named split day available"}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Why it rose to the top</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {brainSnapshot.nextSessionPriority.rationaleSummary.slice(0, 4).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Constraints respected</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {brainSnapshot.nextSessionPriority.constraintsApplied.slice(0, 4).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>What can wait</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {brainSnapshot.nextSessionPriority.deprioritized.slice(0, 4).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>How to read this</div>
+                    <div style={{ marginTop: 8, lineHeight: 1.45, fontSize: 13 }}>
+                      This panel is read-only. It shows the deterministic priorities and constraints that pushed today&apos;s session to the front, so you can see the engine&apos;s homework before you start.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
               {brainSnapshot.recommendedSession.exercises.map((ex) => (
@@ -1140,6 +1231,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
