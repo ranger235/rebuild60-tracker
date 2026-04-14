@@ -528,51 +528,48 @@ function chooseDecision(
   recovery: number,
   momentum: number,
   adaptiveFocus: Exclude<BrainFocus, "Mixed">,
+  plannedFocus: Exclude<BrainFocus, "Mixed">,
   plannedDayId: string | null,
   plannedDayName: string | null
 ): Decision {
-  const plannedFocus = choosePlannedFocus(input);
   const baseMode = progressionMode(readiness, recovery, momentum, input.frictionProfile);
 
   if (recovery < 45) {
-    const focus = adaptiveFocus === "Lower" ? fallbackOverrideFocus(plannedFocus) : adaptiveFocus;
     return {
       plannedFocus,
-      focus,
+      focus: plannedFocus,
       plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
-      wasOverride: focus !== plannedFocus,
+      wasOverride: false,
       overrideReason:
-        focus !== plannedFocus
-          ? `Recovery is low, so ${plannedFocus} is delayed — not skipped — and ${focus} gets the nod for today.`
-          : "Recovery is low, so today stays light and crisp.",
+        "Recovery is low, so the planned split day stays in place but volume and intent are kept light and crisp.",
     };
   }
 
-  if (recovery < 60 && adaptiveFocus === "Lower") {
+  if (recovery < 60 && plannedFocus === "Lower") {
     return {
       plannedFocus,
-      focus: "Push",
+      focus: plannedFocus,
       plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
-      wasOverride: true,
+      wasOverride: false,
       overrideReason:
-        "Recovery is soft, so heavy lower work is delayed until next time. Today shifts to a lighter upper-biased session.",
+        "Recovery is soft, so lower day stays on the calendar but shifts to a reduced-volume version instead of being bumped out.",
     };
   }
 
   return {
     plannedFocus,
-    focus: adaptiveFocus,
+    focus: plannedFocus,
     plannedDayId,
     plannedDayName,
     mode: baseMode,
-    wasOverride: adaptiveFocus !== plannedFocus,
+    wasOverride: false,
     overrideReason:
       adaptiveFocus !== plannedFocus
-        ? `The adaptive composer sees better stimulus value in ${adaptiveFocus} than the default ${plannedFocus} slot today.`
+        ? `The adaptive engine leaned ${adaptiveFocus}, but the configured split day remains the source of truth for today.`
         : null,
   };
 }
@@ -1158,6 +1155,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     recoveryScore,
     momentumScore,
     adaptiveFocus,
+    inferFocusFromSlots(chosenSplitDay.slots),
     chosenSplitDay.id,
     chosenSplitDay.name
   );
@@ -1345,6 +1343,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
