@@ -604,6 +604,89 @@ function normalizeMonthScopedHistory<T extends { monthKey?: string; ts?: string;
   });
 }
 
+type ProgressArtifactType = "scorecard" | "ai_insight" | "vision";
+
+type ProgressArtifactRow = {
+  id: string;
+  user_id: string;
+  month_key: string;
+  artifact_type: ProgressArtifactType;
+  payload_json: any;
+  created_at: string;
+  updated_at: string;
+};
+
+async function loadProgressArtifacts(userId: string) {
+  const { data, error } = await supabase
+    .from("progress_artifacts")
+    .select("*")
+    .eq("user_id", userId)
+    .order("updated_at", { ascending: false });
+
+  if (error && (error as any).code !== "PGRST116") throw error;
+
+  const rows = ((data ?? []) as ProgressArtifactRow[]);
+
+  const scoreHistory = normalizeMonthScopedHistory(
+    rows
+      .filter((row) => row.artifact_type === "scorecard")
+      .map((row) => ({
+        ...(row.payload_json ?? {}),
+        monthKey: row.month_key,
+        ts: String(row.payload_json?.ts ?? row.updated_at ?? row.created_at ?? new Date().toISOString()),
+      }))
+  ).slice(0, 24);
+
+  const aiInsightHistory = normalizeMonthScopedHistory(
+    rows
+      .filter((row) => row.artifact_type === "ai_insight")
+      .map((row) => ({
+        id: String(row.payload_json?.id ?? row.id),
+        ts: String(row.payload_json?.ts ?? row.updated_at ?? row.created_at ?? new Date().toISOString()),
+        monthKey: row.month_key,
+        text: String(row.payload_json?.text ?? ""),
+      }))
+      .filter((row) => row.text.trim().length > 0)
+  ).slice(0, 24);
+
+  const visionHistory = normalizeMonthScopedHistory(
+    rows
+      .filter((row) => row.artifact_type === "vision")
+      .map((row) => ({
+        id: String(row.payload_json?.id ?? row.id),
+        ts: String(row.payload_json?.ts ?? row.updated_at ?? row.created_at ?? new Date().toISOString()),
+        monthKey: row.month_key,
+        pose: (row.payload_json?.pose ?? "front") as Pose,
+        scope: String(row.payload_json?.scope ?? "month"),
+        text: String(row.payload_json?.text ?? ""),
+      }))
+      .filter((row) => row.text.trim().length > 0)
+  ).slice(0, 24);
+
+  return { scoreHistory, aiInsightHistory, visionHistory };
+}
+
+async function saveProgressArtifact(
+  userId: string,
+  monthKey: string,
+  artifactType: ProgressArtifactType,
+  payload: any
+) {
+  const { error } = await supabase
+    .from("progress_artifacts")
+    .upsert(
+      {
+        user_id: userId,
+        month_key: monthKey,
+        artifact_type: artifactType,
+        payload_json: payload,
+      },
+      { onConflict: "user_id,month_key,artifact_type" }
+    );
+
+  if (error) throw error;
+}
+
 useEffect(() => {
   (async () => {
     if (!userId) return;
@@ -671,83 +754,33 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId, dayDate]);
 
-// Load/save scorecard history (local only)
+// Load Progress artifact history (remote-first)
 useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_scorecards_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setScoreHistory(normalizeMonthScopedHistory(parsed));
+  let active = true;
+  (async () => {
+    if (!userId) {
+      if (active) {
+        setScoreHistory([]);
+        setAiInsightHistory([]);
+        setVisionHistory([]);
+      }
+      return;
     }
-  } catch {
-    // ignore
-  }
+    try {
+      const loaded = await loadProgressArtifacts(userId);
+      if (!active) return;
+      setScoreHistory(loaded.scoreHistory as any);
+      setAiInsightHistory(loaded.aiInsightHistory as any);
+      setVisionHistory(loaded.visionHistory as any);
+    } catch (e) {
+      console.error(e);
+    }
+  })();
+  return () => {
+    active = false;
+  };
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_scorecards_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(scoreHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, scoreHistory]);
-
-// Load/save AI history (local only)
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setAiInsightHistory(normalizeMonthScopedHistory(parsed));
-    }
-  } catch {
-    // ignore
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_progress_ai_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(aiInsightHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, aiInsightHistory]);
-
-// Load/save Vision history (local only)
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_vision_${userId}`;
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setVisionHistory(normalizeMonthScopedHistory(parsed));
-    }
-  } catch {
-    // ignore
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [userId]);
-
-useEffect(() => {
-  if (!userId) return;
-  try {
-    const key = `rebuild60_vision_${userId}`;
-    localStorage.setItem(key, JSON.stringify(normalizeMonthScopedHistory(visionHistory).slice(0, 24)));
-  } catch {
-    // ignore
-  }
-}, [userId, visionHistory]);
 useEffect(() => {
   const activeMonth = monthKey(dayDate);
   const latestScore = scoreHistory
@@ -967,7 +1000,11 @@ async function generateAiPhysiqueInsight() {
 
     // Always keep a small history of runs.
     if (nextText) {
-      setAiInsightHistory((prev) => [{ id, ts, monthKey: monthStats.monthKey, text: nextText }, ...prev].slice(0, 12));
+      const nextEntry = { id, ts, monthKey: monthStats.monthKey, text: nextText };
+      setAiInsightHistory((prev) => [nextEntry, ...prev.filter((row) => row.monthKey !== monthStats.monthKey)].slice(0, 24));
+      if (userId) {
+        await saveProgressArtifact(userId, monthStats.monthKey, "ai_insight", nextEntry);
+      }
     }
 
     // Prevent accidental duplicates (double-click, rerender, etc.)
@@ -1015,15 +1052,10 @@ async function generatePhysiqueScorecard() {
     };
 
     setScorecard(next);
-    setScoreHistory((prev) => {
-      // de-dupe same month+scores
-      const sig = `${next.monthKey}|${next.conditioning}|${next.muscularity}|${next.symmetry}|${next.waist_control}|${next.consistency}|${next.momentum}|${next.notes ?? ""}`;
-      const filtered = prev.filter((p) => {
-        const psig = `${p.monthKey}|${p.conditioning}|${p.muscularity}|${p.symmetry}|${p.waist_control}|${p.consistency}|${p.momentum}|${p.notes ?? ""}`;
-        return psig !== sig;
-      });
-      return [next, ...filtered].slice(0, 24);
-    });
+    setScoreHistory((prev) => [next, ...prev.filter((row) => row.monthKey !== next.monthKey)].slice(0, 24));
+    if (userId) {
+      await saveProgressArtifact(userId, next.monthKey, "scorecard", next);
+    }
   } catch (e: any) {
     alert(e?.message ?? String(e));
   } finally {
@@ -1115,8 +1147,12 @@ async function runVisionPhysiqueAnalysis() {
     const ts = new Date().toISOString();
     const id = `${ts}-${Math.random().toString(16).slice(2)}`;
 
-    // Keep a small local history
-    setVisionHistory((prev) => [{ id, ts, monthKey: monthStats.monthKey, pose, scope: visionScope, text: nextText }, ...prev].slice(0, 24));
+    // Keep a small history
+    const nextEntry = { id, ts, monthKey: monthStats.monthKey, pose, scope: visionScope, text: nextText };
+    setVisionHistory((prev) => [nextEntry, ...prev.filter((row) => row.monthKey !== monthStats.monthKey)].slice(0, 24));
+    if (userId) {
+      await saveProgressArtifact(userId, monthStats.monthKey, "vision", nextEntry);
+    }
 
     setVisionText((prev) => {
       const prevTrim = (prev || "").trim();
@@ -1913,6 +1949,7 @@ const { error: insErr } = await supabase.from("progress_photos").insert({
     </div>
   );
 }
+
 
 
 
