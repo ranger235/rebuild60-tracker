@@ -314,8 +314,96 @@ function buildModelFit(history: PreferenceHistoryEntry[]) {
       ? "Confidence is moderated because the recommendation pattern is starting to drift from actual behavior."
       : "Confidence is reduced because recent actual behavior no longer matches the model reliably enough.";
 
-  return { label, score, driftFlags, patternNotes, confidenceReason };
+  return {
+    label,
+    score,
+    driftFlags,
+    patternNotes,
+    confidenceReason,
+    stats: {
+      partialOrAbandoned,
+      substitutionHeavy,
+      lowerMisses,
+      delayed,
+      focusMismatch,
+      recentCount: recent.length,
+    },
+  };
 }
+
+function buildAuditTrail(brainSnapshot: BrainSnapshot | null, history: PreferenceHistoryEntry[]) {
+  if (!brainSnapshot) {
+    return ["No active recommendation available yet."];
+  }
+  const latest = latestRecommendationOutcome(history);
+  const trail: string[] = [];
+
+  if (brainSnapshot.recommendedSession.plannedDayName) {
+    trail.push(`Configured split day selected: ${brainSnapshot.recommendedSession.plannedDayName}.`);
+  } else {
+    trail.push(`Recommended focus lane: ${brainSnapshot.recommendedSession.focus}.`);
+  }
+
+  const topRationale = brainSnapshot.nextSessionPriority.rationaleSummary?.[0];
+  if (topRationale) {
+    trail.push(`Top driver: ${topRationale}`);
+  }
+
+  const topConstraint = brainSnapshot.nextSessionPriority.constraintsApplied?.[0];
+  if (topConstraint) {
+    trail.push(`Constraint applied: ${topConstraint}`);
+  }
+
+  if (latest && typeof latest.fidelityScore === "number") {
+    trail.push(`Last completed recommendation fidelity: ${Math.round(latest.fidelityScore)}%.`);
+  }
+
+  return trail;
+}
+
+function buildSelfCorrectionNarrative(
+  brainSnapshot: BrainSnapshot | null,
+  history: PreferenceHistoryEntry[],
+  modelFit: ReturnType<typeof buildModelFit>
+) {
+  const latest = latestRecommendationOutcome(history);
+  if (!brainSnapshot) {
+    return "No current recommendation means there is nothing to audit yet.";
+  }
+  if (!latest) {
+    return "The engine is still collecting completed recommendation outcomes before it starts correcting its own coaching.";
+  }
+  if (modelFit.stats.lowerMisses >= 2) {
+    return "Lower-day follow-through has been shakier lately, so the engine is treating lower recommendations with more caution and less swagger.";
+  }
+  if (modelFit.stats.substitutionHeavy >= 2) {
+    return "Recent sessions keep drifting through substitutions, so the engine is tightening the core intent while easing up on pretending every accessory choice is sacred.";
+  }
+  if (modelFit.stats.focusMismatch >= 3) {
+    return "Recent actual sessions have pulled away from the original recommendation lane, so the app is reducing confidence and watching for sustained drift before it suggests recalibration.";
+  }
+  if (latest.actualFocus && latest.actualFocus === brainSnapshot.recommendedSession.focus) {
+    return "Recent outcomes still support the same broad lane, so the engine is reinforcing what has been working instead of chasing novelty.";
+  }
+  return "The coach layer is carrying forward the last completed outcome and adjusting its confidence, but it is still leaving the deterministic split logic in charge.";
+}
+
+function buildRecalibrationSignal(
+  history: PreferenceHistoryEntry[],
+  modelFit: ReturnType<typeof buildModelFit>
+) {
+  if (!history.length) {
+    return { state: "Not needed", note: "The model still needs a few more completed recommendation cycles before recalibration would mean anything." };
+  }
+  if (modelFit.score < 60) {
+    return { state: "Suggested", note: "Recent outcomes are drifting enough that the saved model may no longer fit your real training behavior cleanly." };
+  }
+  if (modelFit.stats.lowerMisses >= 2 || modelFit.stats.focusMismatch >= 3) {
+    return { state: "Watch closely", note: "There are early signs that the current split execution and the saved recommendation model are starting to diverge." };
+  }
+  return { state: "Not needed", note: "The current model still fits recent behavior well enough that recalibration can wait." };
+}
+
 
 function readinessTone(status: string) {
   if (status === "ready_to_push") return { bg: "#ebf8ee", border: "#b8dfc0" };
@@ -490,6 +578,9 @@ export default function DashboardView(props: Props) {
   const avgTonnagePerTrainingDay = trainingDays28 > 0 ? Math.round(tonnage28 / trainingDays28) : 0;
   const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
   const modelFit = buildModelFit(preferenceHistory);
+  const auditTrail = buildAuditTrail(brainSnapshot, preferenceHistory);
+  const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, preferenceHistory, modelFit);
+  const recalibrationSignal = buildRecalibrationSignal(preferenceHistory, modelFit);
 
   const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
@@ -1174,6 +1265,32 @@ export default function DashboardView(props: Props) {
                     </ul>
                   </div>
                 </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Audit trail</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {auditTrail.slice(0, 4).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Self-correcting note</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {selfCorrectionNarrative}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Recalibration signal</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSignal.state}</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {recalibrationSignal.note}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1415,6 +1532,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
