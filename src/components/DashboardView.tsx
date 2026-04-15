@@ -182,6 +182,66 @@ function recommendationTrustLabel(brainSnapshot: BrainSnapshot | null) {
   return "Use judgment";
 }
 
+
+function preferenceConfidenceLabel(history: PreferenceHistoryEntry[]) {
+  const recent = history.slice(0, 6);
+  if (!recent.length) return "Calibrating";
+  const scores = recent
+    .map((entry) => (typeof entry.fidelityScore === "number" ? entry.fidelityScore : null))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!scores.length) return "Calibrating";
+  const avg = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  if (avg >= 80) return "High confidence";
+  if (avg >= 60) return "Moderate confidence";
+  return "Use judgment";
+}
+
+function preferenceConfidenceNote(history: PreferenceHistoryEntry[]) {
+  const recent = history.slice(0, 6);
+  if (!recent.length) return "Not enough completed recommendation history yet.";
+  const scores = recent
+    .map((entry) => (typeof entry.fidelityScore === "number" ? entry.fidelityScore : null))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!scores.length) return "The engine is still building evidence from completed sessions.";
+  const avg = Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length);
+  return `Based on the last ${scores.length} logged recommendation outcomes, average fidelity is ${avg}%.`;
+}
+
+function latestRecommendationOutcome(history: PreferenceHistoryEntry[]) {
+  return history.length ? history[0] : null;
+}
+
+function buildOutcomeHeadline(entry: PreferenceHistoryEntry | null) {
+  if (!entry) return "No completed recommendation review yet.";
+  const recommended = entry.recommendedFocus || "Planned session";
+  const actual = entry.actualFocus || "Unknown actual";
+  return `${recommended} → ${actual}`;
+}
+
+function buildOutcomeDetail(entry: PreferenceHistoryEntry | null) {
+  if (!entry) return "Once you complete a recommended session, this panel will show what the engine expected and what actually happened.";
+  const subs = entry.substitutionKeys?.length ?? 0;
+  const extras = entry.extrasKeys?.length ?? 0;
+  const missed = entry.missedKeys?.length ?? 0;
+  const days = typeof entry.daysSinceRecommendation === "number" ? `${entry.daysSinceRecommendation} day delay` : "Same-day or unknown delay";
+  return `${entry.sessionOutcome || "Unknown outcome"} • ${subs} substitutions • ${extras} extras • ${missed} missed • ${days}`;
+}
+
+function buildLearningNote(entry: PreferenceHistoryEntry | null, brainSnapshot: BrainSnapshot | null) {
+  if (!entry || !brainSnapshot) return "The model will start narrating its adjustments once enough completed outcomes exist.";
+  const currentFocus = brainSnapshot.recommendedSession?.focus || "today's";
+  if (entry.actualFocus && entry.actualFocus === currentFocus) {
+    return `Last time, the actual work still supported a ${currentFocus} emphasis, so today stays in the same broad lane with updated constraints and priorities.`;
+  }
+  if ((entry.substitutionKeys?.length ?? 0) > 0) {
+    return `Last time, the session drifted off the original script, so today leans on the configured split while tightening what matters most.`;
+  }
+  if (entry.sessionOutcome === "partial" || entry.sessionOutcome === "abandoned") {
+    return "Last time did not fully land, so today should be read as a best-fit recommendation rather than a hard commandment.";
+  }
+  return "The engine is carrying forward the last completed outcome while keeping today's configured split day as the source of truth.";
+}
+
 function readinessTone(status: string) {
   if (status === "ready_to_push") return { bg: "#ebf8ee", border: "#b8dfc0" };
   if (status === "watch_fatigue") return { bg: "#fff8ea", border: "#ebd39e" };
@@ -933,7 +993,7 @@ export default function DashboardView(props: Props) {
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
                   <div>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Why this session landed here</div>
-                    <div style={{ fontSize: 18, fontWeight: 800 }}>{recommendationTrustLabel(brainSnapshot)}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800 }}>{preferenceConfidenceLabel(preferenceHistory)}</div>
                   </div>
                   <div style={{ fontSize: 12, opacity: 0.75 }}>
                     {brainSnapshot.recommendedSession.plannedDayName
@@ -984,9 +1044,28 @@ export default function DashboardView(props: Props) {
                   </div>
 
                   <div style={cardStyle}>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>How to read this</div>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Confidence evidence</div>
                     <div style={{ marginTop: 8, lineHeight: 1.45, fontSize: 13 }}>
-                      This panel is read-only. It shows the deterministic priorities and constraints that pushed today&apos;s session to the front, so you can see the engine&apos;s homework before you start.
+                      {preferenceConfidenceNote(preferenceHistory)}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Last recommendation vs actual</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>
+                      {buildOutcomeHeadline(latestRecommendationOutcome(preferenceHistory))}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45, opacity: 0.85 }}>
+                      {buildOutcomeDetail(latestRecommendationOutcome(preferenceHistory))}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>What changed from last time</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {buildLearningNote(latestRecommendationOutcome(preferenceHistory), brainSnapshot)}
                     </div>
                   </div>
                 </div>
@@ -1231,6 +1310,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
