@@ -20,6 +20,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory, type TrainingSplitConfig } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { deriveBehaviorFingerprint, buildPredictionScaffold, type BehaviorFingerprint, type PredictionScaffold } from "./lib/behaviorFingerprint";
+import { buildPredictionReview, summarizePredictionReviews, type PredictionAccuracySummary, type PredictionReviewEntry } from "./lib/predictionReview";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -1000,6 +1001,8 @@ useEffect(() => {
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
   const [behaviorFingerprint, setBehaviorFingerprint] = useState<BehaviorFingerprint | null>(null);
   const [predictionScaffold, setPredictionScaffold] = useState<PredictionScaffold | null>(null);
+  const [predictionReviewHistory, setPredictionReviewHistory] = useState<PredictionReviewEntry[]>([]);
+  const [predictionAccuracySummary, setPredictionAccuracySummary] = useState<PredictionAccuracySummary | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
@@ -3353,6 +3356,22 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
+        if (userId) {
+          try {
+            const predictionHistoryRow = await localdb.localSettings.get([userId, "prediction_cycle_reviews_v1"]);
+            const parsedPredictionHistory = predictionHistoryRow?.value ? JSON.parse(predictionHistoryRow.value) : [];
+            setPredictionReviewHistory(Array.isArray(parsedPredictionHistory) ? parsedPredictionHistory as PredictionReviewEntry[] : []);
+          } catch {
+            setPredictionReviewHistory([]);
+          }
+          try {
+            const predictionSummaryRow = await localdb.localSettings.get([userId, "prediction_review_summary_v1"]);
+            const parsedPredictionSummary = predictionSummaryRow?.value ? JSON.parse(predictionSummaryRow.value) : null;
+            setPredictionAccuracySummary(parsedPredictionSummary && typeof parsedPredictionSummary === "object" ? parsedPredictionSummary as PredictionAccuracySummary : null);
+          } catch {
+            setPredictionAccuracySummary(null);
+          }
+        }
       } catch {
         preferenceSignals = null;
       }
@@ -3813,6 +3832,46 @@ async function syncNow() {
         value: JSON.stringify(nextV1),
         updatedAt: Date.now(),
       });
+
+      const review = buildPredictionReview({
+        sessionId: openSessionId,
+        prediction: predictionScaffold,
+        recommendationGeneratedAt: recommendationFingerprint?.generatedAt ?? null,
+        recommendedFocus: recommendationComparison.recommendedFocus,
+        actualFocus: recommendationComparison.actualFocus,
+        actualCompletion: recommendationComparison.sessionOutcome,
+        daysSinceRecommendation,
+        substitutionCount: recommendationComparison.substitutionKeys.length,
+        totalRecommended: recommendationComparison.totalRecommended,
+        primaryOutcome,
+      });
+      if (review) {
+        const existingPredictionHistory = await localdb.localSettings.get([userId, "prediction_cycle_reviews_v1"]);
+        let parsedPredictionHistory: PredictionReviewEntry[] = [];
+        try {
+          parsedPredictionHistory = existingPredictionHistory?.value ? JSON.parse(existingPredictionHistory.value) : [];
+          if (!Array.isArray(parsedPredictionHistory)) parsedPredictionHistory = [];
+        } catch {
+          parsedPredictionHistory = [];
+        }
+        const nextPredictionHistory = [review, ...parsedPredictionHistory.filter((row) => row.sessionId !== openSessionId)].slice(0, 30);
+        const reviewSummary = summarizePredictionReviews(nextPredictionHistory);
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "prediction_cycle_reviews_v1",
+          value: JSON.stringify(nextPredictionHistory),
+          updatedAt: Date.now(),
+        });
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "prediction_review_summary_v1",
+          value: JSON.stringify(reviewSummary),
+          updatedAt: Date.now(),
+        });
+        setPredictionReviewHistory(nextPredictionHistory);
+        setPredictionAccuracySummary(reviewSummary);
+      }
+
       setPreferenceHistory(nextV2);
       setRecommendationComparison((prev) => prev ? {
         ...prev,
@@ -4054,6 +4113,8 @@ async function syncNow() {
           preferenceHistory={preferenceHistory}
           behaviorFingerprint={behaviorFingerprint}
           predictionScaffold={predictionScaffold}
+          predictionReviewHistory={predictionReviewHistory}
+          predictionAccuracySummary={predictionAccuracySummary}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
@@ -4171,6 +4232,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
