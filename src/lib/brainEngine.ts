@@ -1,4 +1,3 @@
-import { DEFAULT_SEQUENCE } from "./sessionSequence";
 import {
   candidatesForSlot,
   pickBestCandidateForSlot,
@@ -456,58 +455,10 @@ function metricLabel(score: number): string {
   return "Needs recovery";
 }
 
-function inferUnderrepresentedFocus(counts: FocusCounts): Exclude<BrainFocus, "Mixed"> {
-  const entries: Array<[Exclude<BrainFocus, "Mixed">, number]> = [
-    ["Push", counts.Push],
-    ["Pull", counts.Pull],
-    ["Lower", counts.Lower],
-  ];
-  entries.sort((a, b) => a[1] - b[1]);
-  return entries[0][0];
-}
 
-function nextFocusFromSplit(
-  lastFocus: BrainFocus | null,
-  sequence: string[]
-): Exclude<BrainFocus, "Mixed"> {
-  if (!sequence || sequence.length === 0) return "Push";
-  if (!lastFocus) return sequence[0] as Exclude<BrainFocus, "Mixed">;
 
-  const idx = sequence.indexOf(lastFocus);
-  if (idx === -1) return sequence[0] as Exclude<BrainFocus, "Mixed">;
 
-  return sequence[(idx + 1) % sequence.length] as Exclude<BrainFocus, "Mixed">;
-}
 
-function choosePlannedFocus(input: BrainInput): Exclude<BrainFocus, "Mixed"> {
-  const rotated = nextFocusFromSplit(input.lastSessionFocus, DEFAULT_SEQUENCE);
-  const underHit = inferUnderrepresentedFocus(input.recentFocusCounts);
-  const gap = input.recentFocusCounts[rotated] - input.recentFocusCounts[underHit];
-
-  if (gap >= 2) return underHit;
-  return rotated;
-}
-
-function mapNeedToGenericFocus(need: NeedKey): Exclude<BrainFocus, "Mixed"> {
-  if (
-    need === "horizontalPress" ||
-    need === "verticalPress" ||
-    need === "triceps" ||
-    need === "delts"
-  ) {
-    return "Push";
-  }
-  if (need === "row" || need === "verticalPull" || need === "biceps") {
-    return "Pull";
-  }
-  return "Lower";
-}
-
-function fallbackOverrideFocus(plannedFocus: Exclude<BrainFocus, "Mixed">): Exclude<BrainFocus, "Mixed"> {
-  if (plannedFocus === "Lower") return "Push";
-  if (plannedFocus === "Push") return "Pull";
-  return "Push";
-}
 
 function progressionMode(
   readiness: number,
@@ -569,7 +520,9 @@ function chooseDecision(
     wasOverride: false,
     overrideReason:
       adaptiveFocus !== plannedFocus
-        ? `The adaptive engine leaned ${adaptiveFocus}, but the configured split day remains the source of truth for today.`
+        ? plannedDayName
+          ? `The adaptive engine leaned ${adaptiveFocus}, but ${plannedDayName} remains the source of truth for today.`
+          : `The adaptive engine leaned ${adaptiveFocus}, but the configured split day remains the source of truth for today.`
         : null,
   };
 }
@@ -1148,7 +1101,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
         : [],
   });
 
-  const adaptiveFocus = inferFocusFromSlots(chosenSplitDay.slots);
+  const adaptiveFocus = inferFocusFromSlots(composer.slots);
   const decision = chooseDecision(
     input,
     readinessScore,
@@ -1343,6 +1296,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
