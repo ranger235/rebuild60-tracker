@@ -35,6 +35,25 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
+function makeDefaultSplitDay(name: string, slots: string[]) {
+  return {
+    id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    slots: slots as TrainingSplitConfig["days"][number]["slots"],
+  };
+}
+
+function defaultPplSplit(): TrainingSplitConfig {
+  return {
+    preset: "ppl",
+    days: [
+      makeDefaultSplitDay("Push", ["PrimaryPress", "SecondaryPress", "Shoulders", "Triceps", "Pump"]),
+      makeDefaultSplitDay("Pull", ["PrimaryRow", "VerticalPull", "SecondaryRow", "RearDelts", "Biceps"]),
+      makeDefaultSplitDay("Lower", ["PrimarySquat", "Hinge", "SecondaryQuad", "Hamstrings", "Calves"]),
+    ],
+  };
+}
+
 function oneRmEpley(weight: number, reps: number): number {
   return Math.round(weight * (1 + reps / 30));
 }
@@ -979,7 +998,6 @@ useEffect(() => {
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
-  const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
 useEffect(() => {
   let cancelled = false;
@@ -991,9 +1009,32 @@ useEffect(() => {
     try {
       const row = await localdb.localSettings.get([userId, "training_split_config_v1"]);
       const parsed = row?.value ? JSON.parse(row.value) as TrainingSplitConfig : null;
-      if (!cancelled) setSplitConfig(parsed);
+      const nextConfig =
+        parsed && Array.isArray(parsed.days) && parsed.days.length > 0
+          ? parsed
+          : defaultPplSplit();
+
+      if (!parsed || !Array.isArray(parsed.days) || parsed.days.length === 0) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "training_split_config_v1",
+          value: JSON.stringify(nextConfig),
+          updatedAt: Date.now(),
+        });
+      }
+
+      if (!cancelled) setSplitConfig(nextConfig);
     } catch {
-      if (!cancelled) setSplitConfig(null);
+      const fallback = defaultPplSplit();
+      try {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "training_split_config_v1",
+          value: JSON.stringify(fallback),
+          updatedAt: Date.now(),
+        });
+      } catch {}
+      if (!cancelled) setSplitConfig(fallback);
     }
   })();
   return () => {
@@ -3153,7 +3194,6 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           dayName: meta?.plannedDayName ?? null,
         };
       });
-      setLastCompletedSplitDayName(recentCompletedSplitDays.find((d) => d.dayName)?.dayName ?? null);
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
       const recentFocusWindow = completedSessions.slice(0, 9);
@@ -3984,12 +4024,6 @@ async function syncNow() {
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
           splitConfig={splitConfig}
-          userEmail={email}
-          syncStatus={status}
-          lastSyncedAt={lastSyncedAt}
-          splitPreset={splitConfig?.preset ?? null}
-          splitDayNames={(splitConfig?.days ?? []).map((day) => day.name)}
-          lastCompletedSplitDayName={lastCompletedSplitDayName}
           saveTrainingSplitConfig={saveTrainingSplitConfig}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
@@ -4097,6 +4131,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
