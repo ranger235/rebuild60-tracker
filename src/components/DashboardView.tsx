@@ -567,6 +567,7 @@ export default function DashboardView(props: Props) {
   const [splitDraft, setSplitDraft] = useState<TrainingSplitConfig>(splitConfig ?? pplPreset());
   const [splitSaving, setSplitSaving] = useState(false);
   const [showRecommendationWhy, setShowRecommendationWhy] = useState(false);
+  const [showDevHatch, setShowDevHatch] = useState(false);
 
   useEffect(() => {
     setSplitDraft(splitConfig ?? pplPreset());
@@ -1100,6 +1101,8 @@ export default function DashboardView(props: Props) {
                 <button
                   type="button"
                   onClick={() => setShowRecommendationWhy((prev) => !prev)}
+                  // Dev hatch toggle below
+                  
                   style={{
                     border: "1px solid #111",
                     borderRadius: 10,
@@ -1110,7 +1113,22 @@ export default function DashboardView(props: Props) {
                     cursor: "pointer"
                   }}
                 >
-                  {showRecommendationWhy ? "Hide Why" : "Why This Session?"}
+                  {showRecommendationWhy ? "Hide Why" : "Why This Session?"} | Dev Hatch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDevHatch((prev) => !prev)}
+                  style={{
+                    border: "1px dashed #999",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    fontWeight: 600,
+                    background: "#f7f7f7",
+                    color: "#333",
+                    cursor: "pointer"
+                  }}
+                >
+                  {showDevHatch ? "Hide Hatch" : "Dev Hatch"}
                 </button>
                 <button
                   onClick={startSessionFromRecommendation}
@@ -1285,6 +1303,23 @@ export default function DashboardView(props: Props) {
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Recalibration signal</div>
+            {showDevHatch ? (
+              <div style={{ ...cardStyle, marginTop: 12, background: "#f2f2f2" }}>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Developer Hatch (read-only)</div>
+
+                <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>
+                  <div><strong>User:</strong> {user?.email || "unknown"}</div>
+                  <div><strong>Split:</strong> {splitConfig?.name || "unknown"}</div>
+                  <div><strong>Days:</strong> {(splitConfig?.days || []).map(d => d.name).join(", ")}</div>
+                  <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus}</div>
+                  <div><strong>Recommendation:</strong> {brainSnapshot?.recommendedSession?.title}</div>
+                  <div><strong>Model Fit:</strong> {typeof modelFit !== "undefined" ? modelFit.label : "n/a"}</div>
+                  <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
+                  <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
+                </div>
+              </div>
+            ) : null}
+
                     <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSignal.state}</div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                       {recalibrationSignal.note}
@@ -1428,6 +1463,21 @@ export default function DashboardView(props: Props) {
               <div style={{ fontWeight: 800 }}>AI Coach Add-on</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(false)}>{aiCoachBusy ? "Thinking…" : "Refresh AI Coach"}</button>
+                <button
+                  type="button"
+                  onClick={() => setShowDevHatch((prev) => !prev)}
+                  style={{
+                    border: "1px dashed #999",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    fontWeight: 600,
+                    background: "#f7f7f7",
+                    color: "#333",
+                    cursor: "pointer"
+                  }}
+                >
+                  {showDevHatch ? "Hide Hatch" : "Dev Hatch"}
+                </button>
                 <button disabled={aiCoachBusy} onClick={() => refreshAiCoach(true)} style={{ opacity: 0.85 }}>Force Refresh</button>
               </div>
             </div>
@@ -1532,6 +1582,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
