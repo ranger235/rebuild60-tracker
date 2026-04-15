@@ -7,6 +7,7 @@ import type { ReadinessInput } from "../lib/readinessTypes";
 import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
 import type { FrictionProfile } from "../lib/frictionEngine";
 import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../lib/behaviorFingerprint";
+import type { PredictionAccuracySummary, PredictionReviewEntry } from "../lib/predictionReview";
 
 export type Point = { xLabel: string; y: number };
 
@@ -111,6 +112,8 @@ type Props = {
   preferenceHistory: PreferenceHistoryEntry[];
   behaviorFingerprint: BehaviorFingerprint | null;
   predictionScaffold: PredictionScaffold | null;
+  predictionReviewHistory: PredictionReviewEntry[];
+  predictionAccuracySummary: PredictionAccuracySummary | null;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -449,6 +452,14 @@ function fmtPredictionOutcome(outcome: PredictionScaffold["predictedCompletion"]
   return "Unknown";
 }
 
+function fmtActualOutcome(outcome: PredictionReviewEntry["actualCompletion"] | null | undefined) {
+  if (outcome === "as_prescribed") return "As prescribed";
+  if (outcome === "modified") return "Modified";
+  if (outcome === "partial") return "Partial";
+  if (outcome === "abandoned") return "Abandoned";
+  return "Unknown";
+}
+
 function behaviorTraitTone(trait: BehaviorTrait) {
   if (trait.key === "substitutionTendency" || trait.key === "delayTendency") {
     if (trait.score >= 55) return { bg: "#fff3e8", border: "#efc9a8" };
@@ -600,6 +611,8 @@ export default function DashboardView(props: Props) {
     preferenceHistory,
     behaviorFingerprint,
     predictionScaffold,
+    predictionReviewHistory,
+    predictionAccuracySummary,
     timerOn,
     setTimerOn,
     secs,
@@ -622,6 +635,7 @@ export default function DashboardView(props: Props) {
   const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
   const modelFit = buildModelFit(preferenceHistory);
   const behaviorTraits = behaviorFingerprint ? Object.values(behaviorFingerprint.traits) : [];
+  const latestPredictionReview = predictionReviewHistory.length ? predictionReviewHistory[0] : null;
   const auditTrail = buildAuditTrail(brainSnapshot, preferenceHistory);
   const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, preferenceHistory, modelFit);
   const recalibrationSignal = buildRecalibrationSignal(preferenceHistory, modelFit);
@@ -1327,6 +1341,30 @@ export default function DashboardView(props: Props) {
                       {predictionScaffold?.reasons?.[1] || "No prediction confidence note yet."}
                     </div>
                   </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction accuracy</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{predictionAccuracySummary ? `${predictionAccuracySummary.label} • ${predictionAccuracySummary.score}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      Confidence {predictionAccuracySummary ? `${predictionAccuracySummary.confidence}/100` : "—"} • Evidence {predictionAccuracySummary?.evidenceWindow ?? 0}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {predictionAccuracySummary?.headline || "Prediction accuracy will show up once the app closes the loop on at least one predicted session."}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Last prediction review</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{latestPredictionReview ? `${latestPredictionReview.label} • ${latestPredictionReview.score}/100` : "Waiting for first review"}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      {latestPredictionReview
+                        ? `${fmtPredictionOutcome(latestPredictionReview.predictedCompletion)} → ${fmtActualOutcome(latestPredictionReview.actualCompletion)}`
+                        : "No closed prediction cycle yet."}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {latestPredictionReview?.summary || "Once you complete a recommended session, the app will grade how right its prediction was."}
+                    </div>
+                  </div>
                 </div>
 
                 {behaviorTraits.length ? (
@@ -1359,6 +1397,15 @@ export default function DashboardView(props: Props) {
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                       {modelFit.confidenceReason}
                     </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction metrics</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      <li style={{ marginTop: 4 }}>Completion {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.completionAccuracy}/100` : "—"}</li>
+                      <li style={{ marginTop: 4 }}>Focus {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.focusCalibration}/100` : "—"}</li>
+                      <li style={{ marginTop: 4 }}>Delay {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.delayAccuracy}/100` : "—"}</li>
+                    </ul>
                   </div>
 
                   <div style={cardStyle}>
@@ -1413,6 +1460,8 @@ export default function DashboardView(props: Props) {
                   <div><strong>Model Fit:</strong> {typeof modelFit !== "undefined" ? modelFit.label : "n/a"}</div>
                   <div><strong>Behavior fingerprint:</strong> {behaviorFingerprint ? `${behaviorFingerprint.confidence}/100` : "n/a"}</div>
                   <div><strong>Prediction:</strong> {predictionScaffold ? `${fmtPredictionOutcome(predictionScaffold.predictedCompletion)} • focus ${predictionScaffold.predictedFocusMatchProbability}%` : "n/a"}</div>
+                  <div><strong>Prediction accuracy:</strong> {predictionAccuracySummary ? `${predictionAccuracySummary.score}/100` : "n/a"}</div>
+                  <div><strong>Last prediction review:</strong> {latestPredictionReview ? `${latestPredictionReview.label} • ${latestPredictionReview.score}/100` : "n/a"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1682,6 +1731,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
