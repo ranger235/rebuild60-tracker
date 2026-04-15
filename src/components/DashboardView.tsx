@@ -242,6 +242,81 @@ function buildLearningNote(entry: PreferenceHistoryEntry | null, brainSnapshot: 
   return "The engine is carrying forward the last completed outcome while keeping today's configured split day as the source of truth.";
 }
 
+
+function buildModelFit(history: PreferenceHistoryEntry[]) {
+  const recent = history.slice(0, 8);
+  if (!recent.length) {
+    return {
+      label: "Calibrating",
+      score: 55,
+      driftFlags: ["Not enough completed recommendation history yet."],
+      patternNotes: ["The model needs a few completed recommendation cycles before drift can be judged."],
+      confidenceReason: "Model fit is provisional because the evidence set is still thin.",
+    };
+  }
+
+  const fidelityScores = recent
+    .map((entry) => (typeof entry.fidelityScore === "number" ? entry.fidelityScore : null))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  const avgFidelity = fidelityScores.length
+    ? fidelityScores.reduce((sum, value) => sum + value, 0) / fidelityScores.length
+    : 60;
+
+  const partialOrAbandoned = recent.filter((entry) => entry.sessionOutcome === "partial" || entry.sessionOutcome === "abandoned").length;
+  const substitutionHeavy = recent.filter((entry) => (entry.substitutionKeys?.length ?? 0) >= 2).length;
+  const lowerMisses = recent.filter((entry) => entry.recommendedFocus === "Lower" && entry.actualFocus !== "Lower").length;
+  const delayed = recent.filter((entry) => (entry.daysSinceRecommendation ?? 0) >= 2).length;
+  const focusMismatch = recent.filter((entry) => entry.recommendedFocus && entry.actualFocus && entry.recommendedFocus !== entry.actualFocus).length;
+
+  let score = Math.round(avgFidelity);
+  score -= partialOrAbandoned * 8;
+  score -= substitutionHeavy * 6;
+  score -= lowerMisses * 8;
+  score -= delayed * 4;
+  score -= focusMismatch * 5;
+  score = Math.max(20, Math.min(95, score));
+
+  const driftFlags: string[] = [];
+  const patternNotes: string[] = [];
+
+  if (lowerMisses >= 2) {
+    driftFlags.push("Lower-day recommendations have recently been redirected or only partly followed.");
+  }
+  if (focusMismatch >= 3) {
+    driftFlags.push("Actual session focus has drifted away from the recommended focus multiple times.");
+  }
+  if (delayed >= 2) {
+    driftFlags.push("Recommendations are often being completed after a delay, which softens model confidence.");
+  }
+  if (substitutionHeavy >= 2) {
+    patternNotes.push("Recent sessions show repeated substitutions, suggesting the model should treat exercise preference with more caution.");
+  }
+  if (partialOrAbandoned >= 2) {
+    patternNotes.push("Recent completion quality has been uneven, so today's recommendation should be read as a best fit rather than a commandment.");
+  }
+  if (!driftFlags.length) {
+    driftFlags.push("Recent outcomes are lining up closely enough that the model still fits your behavior.");
+  }
+  if (!patternNotes.length) {
+    patternNotes.push("Recent recommendation outcomes look coherent, so the model is not seeing major drift right now.");
+  }
+
+  const label =
+    score >= 78 ? "Stable"
+    : score >= 60 ? "Watching drift"
+    : "Recalibration suggested";
+
+  const confidenceReason =
+    score >= 78
+      ? "Confidence stays firm because recent completed sessions are still broadly matching the recommendation pattern."
+      : score >= 60
+      ? "Confidence is moderated because the recommendation pattern is starting to drift from actual behavior."
+      : "Confidence is reduced because recent actual behavior no longer matches the model reliably enough.";
+
+  return { label, score, driftFlags, patternNotes, confidenceReason };
+}
+
 function readinessTone(status: string) {
   if (status === "ready_to_push") return { bg: "#ebf8ee", border: "#b8dfc0" };
   if (status === "watch_fatigue") return { bg: "#fff8ea", border: "#ebd39e" };
@@ -414,6 +489,7 @@ export default function DashboardView(props: Props) {
   const trainingDays28 = activeDays(setsSeries);
   const avgTonnagePerTrainingDay = trainingDays28 > 0 ? Math.round(tonnage28 / trainingDays28) : 0;
   const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
+  const modelFit = buildModelFit(preferenceHistory);
 
   const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
@@ -1069,6 +1145,35 @@ export default function DashboardView(props: Props) {
                     </div>
                   </div>
                 </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Model fit</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{modelFit.label}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>Score: {modelFit.score}/100</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {modelFit.confidenceReason}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Patterns noticed</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {modelFit.patternNotes.slice(0, 3).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Drift watch</div>
+                    <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                      {modelFit.driftFlags.slice(0, 3).map((item) => (
+                        <li key={item} style={{ marginTop: 4 }}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1310,6 +1415,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
