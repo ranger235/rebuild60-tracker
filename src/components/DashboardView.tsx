@@ -1308,7 +1308,7 @@ export default function DashboardView(props: Props) {
                 <div style={{ fontSize: 12, opacity: 0.7 }}>Developer Hatch (read-only)</div>
 
                 <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>
-                  <div><strong>User:</strong> {user?.email || "unknown"}</div>
+                  <div><strong>User:</strong> {"unknown"}</div>
                   <div><strong>Split:</strong> {splitConfig?.name || "unknown"}</div>
                   <div><strong>Days:</strong> {(splitConfig?.days || []).map(d => d.name).join(", ")}</div>
                   <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus}</div>
@@ -1582,6 +1582,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
