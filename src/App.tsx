@@ -19,6 +19,7 @@ import ProgressView from "./components/ProgressView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCounts, type ExerciseHistory, type TrainingSplitConfig } from "./lib/brainEngine";
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
+import { deriveBehaviorFingerprint, buildPredictionScaffold, type BehaviorFingerprint, type PredictionScaffold } from "./lib/behaviorFingerprint";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -997,6 +998,8 @@ useEffect(() => {
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
+  const [behaviorFingerprint, setBehaviorFingerprint] = useState<BehaviorFingerprint | null>(null);
+  const [predictionScaffold, setPredictionScaffold] = useState<PredictionScaffold | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
@@ -3409,6 +3412,17 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         });
       }
 
+      const behaviorFingerprintSnapshot = deriveBehaviorFingerprint(prefHistory, friction);
+      setBehaviorFingerprint(behaviorFingerprintSnapshot);
+      if (userId) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "behavior_fingerprint_v1",
+          value: JSON.stringify(behaviorFingerprintSnapshot),
+          updatedAt: Date.now(),
+        });
+      }
+
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfig,
         recentSessionTitles: completedSessions.map((s) => s.title),
@@ -3448,6 +3462,22 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           updatedAt: Date.now(),
         });
       }
+      const predictionSnapshot = buildPredictionScaffold({
+        history: prefHistory,
+        fingerprint: behaviorFingerprintSnapshot,
+        brainSnapshot: brain,
+        frictionProfile: friction,
+      });
+      setPredictionScaffold(predictionSnapshot);
+      if (userId && predictionSnapshot) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "prediction_scaffold_v1",
+          value: JSON.stringify(predictionSnapshot),
+          updatedAt: Date.now(),
+        });
+      }
+
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -4022,6 +4052,8 @@ async function syncNow() {
           aiCoach={aiCoach}
           milestones={milestones}
           preferenceHistory={preferenceHistory}
+          behaviorFingerprint={behaviorFingerprint}
+          predictionScaffold={predictionScaffold}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
@@ -4139,6 +4171,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
