@@ -6,6 +6,7 @@ import { formatPatternValue, formatPrescriptionTrust, formatReadinessLabel } fro
 import type { ReadinessInput } from "../lib/readinessTypes";
 import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
 import type { FrictionProfile } from "../lib/frictionEngine";
+import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../lib/behaviorFingerprint";
 
 export type Point = { xLabel: string; y: number };
 
@@ -108,6 +109,8 @@ type Props = {
   saveTrainingSplitConfig: (next: TrainingSplitConfig) => Promise<void> | void;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
+  behaviorFingerprint: BehaviorFingerprint | null;
+  predictionScaffold: PredictionScaffold | null;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -432,6 +435,31 @@ function fmtTrend(value: string) {
 }
 
 
+function fmtPredictionBucket(bucket: PredictionScaffold["predictedDelayBucket"] | null | undefined) {
+  if (bucket === "same_day") return "Same day";
+  if (bucket === "1_day") return "About 1 day";
+  if (bucket === "2_plus_days") return "2+ days";
+  return "Unknown";
+}
+
+function fmtPredictionOutcome(outcome: PredictionScaffold["predictedCompletion"] | null | undefined) {
+  if (outcome === "as_prescribed") return "As prescribed";
+  if (outcome === "modified") return "Modified";
+  if (outcome === "partial") return "Partial";
+  return "Unknown";
+}
+
+function behaviorTraitTone(trait: BehaviorTrait) {
+  if (trait.key === "substitutionTendency" || trait.key === "delayTendency") {
+    if (trait.score >= 55) return { bg: "#fff3e8", border: "#efc9a8" };
+    if (trait.score >= 35) return { bg: "#fff8ea", border: "#ebd39e" };
+    return { bg: "#ebf8ee", border: "#b8dfc0" };
+  }
+  if (trait.score >= 75) return { bg: "#ebf8ee", border: "#b8dfc0" };
+  if (trait.score >= 55) return { bg: "#eef7ff", border: "#c9dcf5" };
+  return { bg: "#fff3e8", border: "#efc9a8" };
+}
+
 function frictionTone(level: FrictionProfile["level"]): { bg: string; border: string } {
   if (level === "high") return { bg: "#ffe7e7", border: "#e7b0b0" };
   if (level === "moderate") return { bg: "#fff7e5", border: "#ead39a" };
@@ -439,7 +467,7 @@ function frictionTone(level: FrictionProfile["level"]): { bg: string; border: st
 }
 
 function priorityLabel(category: string) {
-  return category.replace(/_/g, " ").replace(/\w/g, (m) => m.toUpperCase());
+  return category.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function mapSeriesToReadinessInput(setsSeries: Point[], weightSeries: Point[], preferenceHistory: PreferenceHistoryEntry[]): ReadinessInput {
@@ -570,6 +598,8 @@ export default function DashboardView(props: Props) {
     saveTrainingSplitConfig,
     startSessionFromRecommendation,
     preferenceHistory,
+    behaviorFingerprint,
+    predictionScaffold,
     timerOn,
     setTimerOn,
     secs,
@@ -591,6 +621,7 @@ export default function DashboardView(props: Props) {
   const avgTonnagePerTrainingDay = trainingDays28 > 0 ? Math.round(tonnage28 / trainingDays28) : 0;
   const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
   const modelFit = buildModelFit(preferenceHistory);
+  const behaviorTraits = behaviorFingerprint ? Object.values(behaviorFingerprint.traits) : [];
   const auditTrail = buildAuditTrail(brainSnapshot, preferenceHistory);
   const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, preferenceHistory, modelFit);
   const recalibrationSignal = buildRecalibrationSignal(preferenceHistory, modelFit);
@@ -1269,6 +1300,59 @@ export default function DashboardView(props: Props) {
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
                   <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Behavior fingerprint</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>Confidence: {behaviorFingerprint ? `${behaviorFingerprint.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {behaviorFingerprint?.headline || "The self-model is still waiting for enough completed recommendation cycles to say anything useful."}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction scaffold</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>
+                      {predictionScaffold ? fmtPredictionOutcome(predictionScaffold.predictedCompletion) : "Unavailable"}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      Focus match {predictionScaffold ? `${predictionScaffold.predictedFocusMatchProbability}%` : "—"} • Delay {fmtPredictionBucket(predictionScaffold?.predictedDelayBucket)}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {predictionScaffold?.reasons?.[0] || "Prediction scaffolding will start talking once the self-model has enough evidence."}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction confidence</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{predictionScaffold ? `${predictionScaffold.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {predictionScaffold?.reasons?.[1] || "No prediction confidence note yet."}
+                    </div>
+                  </div>
+                </div>
+
+                {behaviorTraits.length ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>Self-model traits</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+                      {behaviorTraits.map((trait) => {
+                        const tone = behaviorTraitTone(trait);
+                        return (
+                          <div key={trait.key} style={{ ...cardStyle, background: tone.bg, border: `1px solid ${tone.border}` }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                              <div style={{ fontSize: 12, opacity: 0.8 }}>{trait.label}</div>
+                              <div style={{ fontSize: 12, fontWeight: 800 }}>{fmtTrend(trait.trend)}</div>
+                            </div>
+                            <div style={{ marginTop: 6, fontWeight: 800 }}>{trait.score}/100</div>
+                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>Confidence {trait.confidence}/100 • Evidence {trait.evidence}</div>
+                            <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>{trait.summary}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
+                  <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Model fit</div>
                     <div style={{ marginTop: 6, fontWeight: 800 }}>{modelFit.label}</div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>Score: {modelFit.score}/100</div>
@@ -1327,6 +1411,8 @@ export default function DashboardView(props: Props) {
                   <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus || "unknown"}</div>
                   <div><strong>Recommendation:</strong> {brainSnapshot?.recommendedSession?.title || "unknown"}</div>
                   <div><strong>Model Fit:</strong> {typeof modelFit !== "undefined" ? modelFit.label : "n/a"}</div>
+                  <div><strong>Behavior fingerprint:</strong> {behaviorFingerprint ? `${behaviorFingerprint.confidence}/100` : "n/a"}</div>
+                  <div><strong>Prediction:</strong> {predictionScaffold ? `${fmtPredictionOutcome(predictionScaffold.predictedCompletion)} • focus ${predictionScaffold.predictedFocusMatchProbability}%` : "n/a"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1596,6 +1682,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
