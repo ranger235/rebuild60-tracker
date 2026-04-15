@@ -99,6 +99,12 @@ type Props = {
   brainSnapshot: BrainSnapshot | null;
   frictionProfile: FrictionProfile | null;
   splitConfig: TrainingSplitConfig | null;
+  userEmail: string;
+  syncStatus: string;
+  lastSyncedAt: string;
+  splitPreset: TrainingSplitConfig["preset"] | null;
+  splitDayNames: string[];
+  lastCompletedSplitDayName: string | null;
   saveTrainingSplitConfig: (next: TrainingSplitConfig) => Promise<void> | void;
   startSessionFromRecommendation: () => void;
   preferenceHistory: PreferenceHistoryEntry[];
@@ -555,6 +561,12 @@ export default function DashboardView(props: Props) {
     brainSnapshot,
     frictionProfile,
     splitConfig,
+    userEmail,
+    syncStatus,
+    lastSyncedAt,
+    splitPreset,
+    splitDayNames,
+    lastCompletedSplitDayName,
     saveTrainingSplitConfig,
     startSessionFromRecommendation,
     preferenceHistory,
@@ -1307,13 +1319,15 @@ export default function DashboardView(props: Props) {
               <div style={{ ...cardStyle, marginTop: 12, background: "#f2f2f2" }}>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>Developer Hatch (read-only)</div>
 
-                <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5 }}>
-                  <div><strong>User:</strong> {"unknown"}</div>
-                  <div><strong>Split:</strong> {splitConfig?.name || "unknown"}</div>
-                  <div><strong>Days:</strong> {(splitConfig?.days || []).map(d => d.name).join(", ")}</div>
-                  <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus}</div>
-                  <div><strong>Recommendation:</strong> {brainSnapshot?.recommendedSession?.title}</div>
+                <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.65 }}>
+                  <div><strong>User:</strong> {userEmail || "unknown"}</div>
+                  <div><strong>Split:</strong> {splitPreset || "unknown"}</div>
+                  <div><strong>Days:</strong> {splitDayNames.length ? splitDayNames.join(", ") : "none configured"}</div>
+                  <div><strong>Last completed day:</strong> {lastCompletedSplitDayName || "unknown"}</div>
+                  <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus || "unknown"}</div>
+                  <div><strong>Recommendation:</strong> {brainSnapshot?.recommendedSession?.title || "unknown"}</div>
                   <div><strong>Model Fit:</strong> {typeof modelFit !== "undefined" ? modelFit.label : "n/a"}</div>
+                  <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
                 </div>
@@ -1582,6 +1596,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
