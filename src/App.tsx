@@ -998,6 +998,7 @@ useEffect(() => {
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
+  const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
 useEffect(() => {
   let cancelled = false;
@@ -3194,6 +3195,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           dayName: meta?.plannedDayName ?? null,
         };
       });
+      setLastCompletedSplitDayName(recentCompletedSplitDays.find((d) => d.dayName)?.dayName ?? null);
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
       const recentFocusWindow = completedSessions.slice(0, 9);
@@ -4024,6 +4026,12 @@ async function syncNow() {
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
           splitConfig={splitConfig}
+          userEmail={email}
+          syncStatus={status}
+          lastSyncedAt={lastSyncedAt}
+          splitPreset={splitConfig?.preset ?? null}
+          splitDayNames={(splitConfig?.days ?? []).map((day) => day.name)}
+          lastCompletedSplitDayName={lastCompletedSplitDayName}
           saveTrainingSplitConfig={saveTrainingSplitConfig}
           startSessionFromRecommendation={startSessionFromRecommendation}
           timerOn={timerOn}
@@ -4131,6 +4139,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
