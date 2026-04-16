@@ -10,19 +10,41 @@ export function classifySessionOutcome(params: {
   substitutionCount: number;
   missedCount: number;
   volumeDelta: number | null;
+  recommendedSetCount?: number | null;
+  completedSetCount?: number | null;
 }): SessionOutcome {
-  const { hasWork, adherenceScore, matchedCount, totalRecommended, substitutionCount, missedCount, volumeDelta } = params;
+  const {
+    hasWork,
+    adherenceScore,
+    matchedCount,
+    totalRecommended,
+    substitutionCount,
+    missedCount,
+    volumeDelta,
+    recommendedSetCount,
+    completedSetCount,
+  } = params;
 
   if (!hasWork) return "abandoned";
 
-  const completionRatio = totalRecommended > 0 ? matchedCount / totalRecommended : 1;
+  const exerciseCompletionRatio = totalRecommended > 0 ? matchedCount / totalRecommended : 1;
+  const setCompletionRatio = typeof recommendedSetCount === "number" && recommendedSetCount > 0
+    ? Math.max(0, Math.min(1, Number(completedSetCount || 0) / recommendedSetCount))
+    : exerciseCompletionRatio;
   const volumeFarBelowPlan = typeof volumeDelta === "number" && volumeDelta <= -40;
 
-  if (completionRatio >= 0.85 && substitutionCount === 0 && missedCount === 0 && adherenceScore >= 85 && !volumeFarBelowPlan) {
+  const structurallyComplete = exerciseCompletionRatio >= 0.9 && setCompletionRatio >= 0.9;
+  const structurallyBroken = (
+    exerciseCompletionRatio < 0.5
+    || setCompletionRatio < 0.5
+    || missedCount >= Math.max(2, Math.ceil(totalRecommended / 2))
+  );
+
+  if (structurallyComplete && substitutionCount === 0 && missedCount === 0 && adherenceScore >= 85 && !volumeFarBelowPlan) {
     return "as_prescribed";
   }
 
-  if (completionRatio < 0.5 || missedCount >= Math.max(2, Math.ceil(totalRecommended / 2)) || volumeFarBelowPlan) {
+  if (structurallyBroken) {
     return "partial";
   }
 
@@ -165,4 +187,5 @@ export function computeSessionFidelity(params: {
     note,
   };
 }
+
 
