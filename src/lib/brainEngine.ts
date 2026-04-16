@@ -17,6 +17,7 @@ import {
   type NeedKey,
 } from "./sessionNeedsEngine";
 import { composeAdaptiveSession } from "./sessionComposer";
+import { applyMovementOverlapPenalty } from "./movementOverlap";
 import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
 import type { FrictionProfile } from "./frictionEngine";
 import { buildNextSessionPriorityProfile, type NextSessionPriorityProfile } from "./nextSessionPriority";
@@ -884,6 +885,12 @@ function buildExercisesFromSlots(
           tags.push("Friction: trim fluff");
         }
 
+        const overlap = applyMovementOverlapPenalty(candidate.key, used, slot);
+        if (overlap.delta !== 0) {
+          score += overlap.delta;
+          if (overlap.reason) tags.push(overlap.reason);
+        }
+
         return { ...candidate, score, tags: [...new Set(tags)] };
       })
       .sort((a, b) => b.score - a.score);
@@ -1296,6 +1303,7 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
 
 
 
