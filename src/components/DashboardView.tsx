@@ -9,6 +9,7 @@ import type { FrictionProfile } from "../lib/frictionEngine";
 import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../lib/behaviorFingerprint";
 import type { PredictionAccuracySummary, PredictionReviewEntry } from "../lib/predictionReview";
 import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "../lib/adaptationWeights";
+import type { RecalibrationAction } from "../lib/recalibrationActions";
 import {
   normalizeAdaptationState,
   normalizeBehaviorFingerprint,
@@ -127,6 +128,7 @@ type Props = {
   adaptationWeights: AdaptationWeights | null;
   mutationLedger: MutationLedgerEntry[];
   recalibrationState: RecalibrationState | null;
+  recalibrationAction: RecalibrationAction | null;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -521,6 +523,25 @@ function fmtActualOutcome(outcome: PredictionReviewEntry["actualCompletion"] | n
   return "Unknown";
 }
 
+function fmtRecalibrationActionType(value: RecalibrationAction["type"]) {
+  if (value === "prediction_confidence_damp") return "Prediction confidence damp";
+  if (value === "prediction_expectation_reset") return "Prediction expectation reset";
+  return value;
+}
+
+function describeRecalibrationAction(action: RecalibrationAction | null) {
+  if (!action) return "No recalibration action has executed yet.";
+  const beforeConfidence = action.before.predictionConfidence != null ? `${action.before.predictionConfidence}/100` : "—";
+  const afterConfidence = action.after.predictionConfidence != null ? `${action.after.predictionConfidence}/100` : "—";
+  const beforeFocus = action.before.expectedFocusProbability != null ? `${action.before.expectedFocusProbability}%` : "—";
+  const afterFocus = action.after.expectedFocusProbability != null ? `${action.after.expectedFocusProbability}%` : "—";
+  const completionShift = [action.before.expectedCompletionLabel, action.after.expectedCompletionLabel].filter(Boolean).join(" → ");
+  const probation = action.status === "active"
+    ? `Probation ${action.probationCyclesRemaining} cycle${action.probationCyclesRemaining === 1 ? "" : "s"} remaining.`
+    : "Probation complete.";
+  return `${fmtRecalibrationActionType(action.type)} • confidence ${beforeConfidence} → ${afterConfidence} • focus ${beforeFocus} → ${afterFocus}${completionShift ? ` • ${completionShift}` : ""}. ${probation}`;
+}
+
 function behaviorTraitTone(trait: BehaviorTrait) {
   if (trait.key === "substitutionTendency" || trait.key === "delayTendency") {
     if (trait.score >= 55) return { bg: "#fff3e8", border: "#efc9a8" };
@@ -710,6 +731,8 @@ export default function DashboardView(props: Props) {
   const behaviorTraits = safeBehaviorFingerprint.traits;
   const latestPredictionReview = safePredictionReviewHistory.latest;
   const latestMutation = safeMutationLedger.latest;
+  const latestRecalibrationAction = props.recalibrationAction || null;
+  const activeRecalibrationAction = latestRecalibrationAction?.status === "active" ? latestRecalibrationAction : null;
   const auditTrail = buildAuditTrail(brainSnapshot, safePreferenceHistory);
   const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, safePreferenceHistory, modelFit);
   const fallbackRecalibration = buildRecalibrationSignal(safePreferenceHistory, modelFit);
@@ -1579,6 +1602,9 @@ export default function DashboardView(props: Props) {
                   <div><strong>Recalibration scope:</strong> {recalibrationSignal.recommendedScope.length ? recalibrationSignal.recommendedScope.join(", ") : "none"}</div>
                   <div><strong>Freeze recommended:</strong> {recalibrationSignal.freezeRecommended ? "yes" : "no"}</div>
                   <div><strong>Probation:</strong> {recalibrationSignal.probationCyclesRemaining ? `${recalibrationSignal.probationCyclesRemaining} cycle(s)` : "none"}</div>
+                  <div><strong>Action:</strong> {latestRecalibrationAction ? `${latestRecalibrationAction.status} • ${fmtRecalibrationActionType(latestRecalibrationAction.type)}` : "none"}</div>
+                  <div><strong>Action freeze:</strong> {latestRecalibrationAction?.freezeAdaptation ? "on" : "off"}</div>
+                  <div><strong>Action probation:</strong> {latestRecalibrationAction?.probationCyclesRemaining ? `${latestRecalibrationAction.probationCyclesRemaining} cycle(s)` : "none"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1599,6 +1625,26 @@ export default function DashboardView(props: Props) {
                     <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
                       Scope: {recalibrationSignal.recommendedScope.length ? recalibrationSignal.recommendedScope.join(", ") : "none"} • Freeze: {recalibrationSignal.freezeRecommended ? "recommended" : "not recommended"}
                       {recalibrationSignal.probationCyclesRemaining ? ` • Probation ${recalibrationSignal.probationCyclesRemaining}` : ""}
+                    </div>
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>Current recalibration action</div>
+                      <div style={{ marginTop: 6, fontWeight: 800 }}>
+                        {activeRecalibrationAction
+                          ? fmtRecalibrationActionType(activeRecalibrationAction.type)
+                          : latestRecalibrationAction
+                            ? `Last action • ${fmtRecalibrationActionType(latestRecalibrationAction.type)}`
+                            : "No active recalibration action"}
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                        {activeRecalibrationAction
+                          ? `Status active • Freeze ${activeRecalibrationAction.freezeAdaptation ? "on" : "off"} • Probation ${activeRecalibrationAction.probationCyclesRemaining}`
+                          : latestRecalibrationAction
+                            ? `Status ${latestRecalibrationAction.status} • Freeze ${latestRecalibrationAction.freezeAdaptation ? "on" : "off"} • Probation ${latestRecalibrationAction.probationCyclesRemaining || 0}`
+                            : "The conservative executor is idle until recalibration is actually warranted."}
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                        {describeRecalibrationAction(latestRecalibrationAction)}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1858,6 +1904,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
