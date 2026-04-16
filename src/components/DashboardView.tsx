@@ -418,15 +418,63 @@ function buildRecalibrationSignal(
   modelFit: ReturnType<typeof buildModelFit>
 ) {
   if (!history.length) {
-    return { state: "Not needed", note: "The model still needs a few more completed recommendation cycles before recalibration would mean anything." };
+    return {
+      phase: "stable",
+      state: "Not needed",
+      score: 42,
+      confidence: 35,
+      evidenceWindow: 0,
+      note: "The model still needs a few more completed recommendation cycles before recalibration would mean anything.",
+      triggers: ["Evidence is still thin."],
+      triggerSummary: "Evidence is still thin.",
+      recommendedScope: [] as string[],
+      freezeRecommended: false,
+      probationCyclesRemaining: 0,
+    };
   }
   if (modelFit.score < 60) {
-    return { state: "Suggested", note: "Recent outcomes are drifting enough that the saved model may no longer fit your real training behavior cleanly." };
+    return {
+      phase: "suggested",
+      state: "Suggested",
+      score: 68,
+      confidence: 58,
+      evidenceWindow: history.length,
+      note: "Recent outcomes are drifting enough that the saved model may no longer fit your real training behavior cleanly.",
+      triggers: ["Model-fit drift is now strong enough to justify a conservative recalibration suggestion."],
+      triggerSummary: "Model-fit drift is now strong enough to justify a conservative recalibration suggestion.",
+      recommendedScope: ["prediction", "fingerprint"],
+      freezeRecommended: true,
+      probationCyclesRemaining: 0,
+    };
   }
   if (modelFit.stats.lowerMisses >= 2 || modelFit.stats.focusMismatch >= 3) {
-    return { state: "Watch closely", note: "There are early signs that the current split execution and the saved recommendation model are starting to diverge." };
+    return {
+      phase: "watch",
+      state: "Watch closely",
+      score: 52,
+      confidence: 46,
+      evidenceWindow: history.length,
+      note: "There are early signs that the current split execution and the saved recommendation model are starting to diverge.",
+      triggers: ["Recent focus or lower-day drift is worth watching before the app recommends intervention."],
+      triggerSummary: "Recent focus or lower-day drift is worth watching before the app recommends intervention.",
+      recommendedScope: ["split_confidence"],
+      freezeRecommended: false,
+      probationCyclesRemaining: 0,
+    };
   }
-  return { state: "Not needed", note: "The current model still fits recent behavior well enough that recalibration can wait." };
+  return {
+    phase: "stable",
+    state: "Not needed",
+    score: 82,
+    confidence: 54,
+    evidenceWindow: history.length,
+    note: "The current model still fits recent behavior well enough that recalibration can wait.",
+    triggers: ["No major recalibration triggers are flashing right now."],
+    triggerSummary: "No major recalibration triggers are flashing right now.",
+    recommendedScope: [] as string[],
+    freezeRecommended: false,
+    probationCyclesRemaining: 0,
+  };
 }
 
 
@@ -667,10 +715,17 @@ export default function DashboardView(props: Props) {
   const fallbackRecalibration = buildRecalibrationSignal(safePreferenceHistory, modelFit);
   const recalibrationSignal = safeRecalibration.isAvailable
     ? {
+        phase: safeRecalibration.phase ?? "watch",
         state: safeRecalibration.state ?? "Watch closely",
         score: safeRecalibration.score ?? null,
+        confidence: safeRecalibration.confidence ?? null,
+        evidenceWindow: safeRecalibration.evidenceWindow ?? null,
         note: safeRecalibration.note ?? "Recalibration state is only partially available right now.",
         triggers: safeRecalibration.triggers,
+        triggerSummary: safeRecalibration.triggerSummary ?? (safeRecalibration.triggers[0] ?? "Recalibration state is partially available."),
+        recommendedScope: safeRecalibration.recommendedScope,
+        freezeRecommended: safeRecalibration.freezeRecommended ?? false,
+        probationCyclesRemaining: safeRecalibration.probationCyclesRemaining ?? 0,
       }
     : fallbackRecalibration;
 
@@ -1519,7 +1574,11 @@ export default function DashboardView(props: Props) {
                   <div><strong>Prediction accuracy:</strong> {safePredictionAccuracy.score != null ? `${safePredictionAccuracy.score}/100` : "n/a"}</div>
                   <div><strong>Last prediction review:</strong> {latestPredictionReview ? `${latestPredictionReview.label} • ${latestPredictionReview.score}/100` : "n/a"}</div>
                   <div><strong>Adaptation:</strong> {safeAdaptation.isAvailable ? `${safeAdaptation.active ? "active" : "idle"} • ${safeAdaptation.confidence ?? "—"}/100` : "n/a"}</div>
-                  <div><strong>Recalibration:</strong> {recalibrationSignal.state}</div>
+                  <div><strong>Recalibration:</strong> {recalibrationSignal.state} • {recalibrationSignal.score ?? "—"}/100</div>
+                  <div><strong>Recalibration confidence:</strong> {recalibrationSignal.confidence ?? "—"}/100</div>
+                  <div><strong>Recalibration scope:</strong> {recalibrationSignal.recommendedScope.length ? recalibrationSignal.recommendedScope.join(", ") : "none"}</div>
+                  <div><strong>Freeze recommended:</strong> {recalibrationSignal.freezeRecommended ? "yes" : "no"}</div>
+                  <div><strong>Probation:</strong> {recalibrationSignal.probationCyclesRemaining ? `${recalibrationSignal.probationCyclesRemaining} cycle(s)` : "none"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1529,10 +1588,17 @@ export default function DashboardView(props: Props) {
 
                     <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSignal.state}</div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                      Score {recalibrationSignal.score ?? "—"} • Triggers {Array.isArray(recalibrationSignal.triggers) ? recalibrationSignal.triggers.length : 0}
+                      Score {recalibrationSignal.score ?? "—"} • Confidence {recalibrationSignal.confidence ?? "—"}/100
                     </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                       {recalibrationSignal.note}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                      {recalibrationSignal.triggerSummary}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                      Scope: {recalibrationSignal.recommendedScope.length ? recalibrationSignal.recommendedScope.join(", ") : "none"} • Freeze: {recalibrationSignal.freezeRecommended ? "recommended" : "not recommended"}
+                      {recalibrationSignal.probationCyclesRemaining ? ` • Probation ${recalibrationSignal.probationCyclesRemaining}` : ""}
                     </div>
                   </div>
                 </div>
@@ -1792,6 +1858,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
