@@ -4348,6 +4348,7 @@ async function syncNow() {
           adaptationWeights={adaptationWeights}
           mutationLedger={mutationLedger}
           recalibrationState={recalibrationState}
+          recalibrationAction={recalibrationAction}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
@@ -4465,6 +4466,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
