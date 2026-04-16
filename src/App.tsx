@@ -24,6 +24,7 @@ import { buildPredictionReview, summarizePredictionReviews, type PredictionAccur
 import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts, rebuildLoopMemoryFromPreferenceHistory } from "./lib/loopMemory";
 import { applyAdaptationToPreferenceSignals, deriveAdaptationLayer, type AdaptationWeights, type MutationLedgerEntry, type RecalibrationState } from "./lib/adaptationWeights";
 import { evaluateRecalibrationState } from "./lib/recalibrationPolicy";
+import { applyProbationToRecalibrationState, executePredictionRecalibration, shouldExecutePredictionRecalibration, stepProbationState, type RecalibrationAction } from "./lib/recalibrationActions";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -1090,6 +1091,7 @@ useEffect(() => {
   const [adaptationWeights, setAdaptationWeights] = useState<AdaptationWeights | null>(null);
   const [mutationLedger, setMutationLedger] = useState<MutationLedgerEntry[]>([]);
   const [recalibrationState, setRecalibrationState] = useState<RecalibrationState | null>(null);
+  const [recalibrationAction, setRecalibrationAction] = useState<RecalibrationAction | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
@@ -3440,16 +3442,19 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       let persistedAdaptationWeights: AdaptationWeights | null = null;
       let persistedMutationLedger: MutationLedgerEntry[] = [];
       let persistedRecalibrationState: RecalibrationState | null = null;
+      let persistedRecalibrationAction: RecalibrationAction | null = null;
       try {
         if (userId) {
-          const [adaptRow, ledgerRow, recalRow] = await Promise.all([
+          const [adaptRow, ledgerRow, recalRow, actionRow] = await Promise.all([
             localdb.localSettings.get([userId, "adaptation_weights_v1"]),
             localdb.localSettings.get([userId, "mutation_ledger_v1"]),
             localdb.localSettings.get([userId, "recalibration_state_v1"]),
+            localdb.localSettings.get([userId, "recalibration_action_v1"]),
           ]);
           persistedAdaptationWeights = adaptRow?.value ? JSON.parse(adaptRow.value) as AdaptationWeights : null;
           persistedMutationLedger = ledgerRow?.value ? JSON.parse(ledgerRow.value) as MutationLedgerEntry[] : [];
           persistedRecalibrationState = recalRow?.value ? JSON.parse(recalRow.value) as RecalibrationState : null;
+          persistedRecalibrationAction = actionRow?.value ? JSON.parse(actionRow.value) as RecalibrationAction : null;
           if (!Array.isArray(persistedMutationLedger)) persistedMutationLedger = [];
         }
         const prefRow = userId
@@ -3583,17 +3588,28 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         });
       }
 
+      const adaptationFreezeActive = !!(persistedRecalibrationAction && persistedRecalibrationAction.status === "active" && persistedRecalibrationAction.freezeAdaptation && persistedRecalibrationAction.probationCyclesRemaining > 0);
       const adaptationLayer = deriveAdaptationLayer({
         history: prefHistory,
         fingerprint: behaviorFingerprintSnapshot,
         predictionAccuracySummary: predictionAccuracySnapshot,
         predictionReviewHistory: predictionReviewSnapshot,
       });
-      const adaptationSnapshot = adaptationLayer.weights.active
-        ? adaptationLayer.weights
-        : (persistedAdaptationWeights ?? adaptationLayer.weights);
+      const adaptationSnapshot = adaptationFreezeActive
+        ? {
+            ...(persistedAdaptationWeights ?? adaptationLayer.weights),
+            active: false,
+            summary: `Adaptation is temporarily frozen during recalibration probation (${persistedRecalibrationAction?.probationCyclesRemaining ?? 0} cycle${(persistedRecalibrationAction?.probationCyclesRemaining ?? 0) === 1 ? "" : "s"} remaining).`,
+            notes: [
+              `Prediction recalibration is active, so bounded mutation is paused for ${(persistedRecalibrationAction?.probationCyclesRemaining ?? 0)} more closed cycle${(persistedRecalibrationAction?.probationCyclesRemaining ?? 0) === 1 ? "" : "s"}.`,
+              ...((persistedAdaptationWeights ?? adaptationLayer.weights).notes ?? []),
+            ].slice(0, 6),
+          }
+        : adaptationLayer.weights.active
+          ? adaptationLayer.weights
+          : (persistedAdaptationWeights ?? adaptationLayer.weights);
       let mutationLedgerSnapshot = persistedMutationLedger.slice();
-      if (adaptationLayer.ledgerEntry) {
+      if (!adaptationFreezeActive && adaptationLayer.ledgerEntry) {
         const latestKey = mutationLedgerSnapshot[0]?.generatedAt ?? "";
         if (latestKey !== adaptationLayer.ledgerEntry.generatedAt && mutationLedgerSnapshot[0]?.summary !== adaptationLayer.ledgerEntry.summary) {
           mutationLedgerSnapshot = [adaptationLayer.ledgerEntry, ...mutationLedgerSnapshot].slice(0, 12);
@@ -3601,7 +3617,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           mutationLedgerSnapshot = [adaptationLayer.ledgerEntry];
         }
       }
-      const recalibrationSnapshot = evaluateRecalibrationState({
+      let recalibrationSnapshot = evaluateRecalibrationState({
         behaviorFingerprint: behaviorFingerprintSnapshot,
         predictionAccuracySummary: predictionAccuracySnapshot,
         predictionReviewHistory: predictionReviewSnapshot,
@@ -3610,15 +3626,47 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         mutationLedger: mutationLedgerSnapshot,
         previousState: persistedRecalibrationState,
       });
+
+      let recalibrationActionSnapshot = persistedRecalibrationAction;
+      const latestReviewSessionId = predictionReviewSnapshot[0]?.sessionId ?? null;
+      const probationStep = stepProbationState({
+        action: recalibrationActionSnapshot,
+        recalibrationState: recalibrationSnapshot,
+        latestReviewSessionId,
+      });
+      if (probationStep.changed) {
+        recalibrationActionSnapshot = probationStep.action;
+        recalibrationSnapshot = probationStep.recalibrationState ?? recalibrationSnapshot;
+      }
+
+      if (predictionSnapshot && shouldExecutePredictionRecalibration({
+        recalibrationState: recalibrationSnapshot,
+        predictionScaffold: predictionSnapshot,
+        activeAction: recalibrationActionSnapshot,
+      })) {
+        const executed = executePredictionRecalibration({
+          recalibrationState: recalibrationSnapshot!,
+          predictionScaffold: predictionSnapshot,
+        });
+        predictionSnapshot = executed.nextPredictionScaffold;
+        recalibrationActionSnapshot = executed.action;
+        recalibrationSnapshot = applyProbationToRecalibrationState({
+          state: recalibrationSnapshot!,
+          action: executed.action,
+        });
+      }
+
       setAdaptationWeights(adaptationSnapshot);
       setMutationLedger(mutationLedgerSnapshot);
       setRecalibrationState(recalibrationSnapshot);
+      setRecalibrationAction(recalibrationActionSnapshot);
       if (userId) {
         const now = Date.now();
         await Promise.all([
           localdb.localSettings.put({ user_id: userId, key: "adaptation_weights_v1", value: JSON.stringify(adaptationSnapshot), updatedAt: now }),
           localdb.localSettings.put({ user_id: userId, key: "mutation_ledger_v1", value: JSON.stringify(mutationLedgerSnapshot), updatedAt: now }),
           localdb.localSettings.put({ user_id: userId, key: "recalibration_state_v1", value: JSON.stringify(recalibrationSnapshot), updatedAt: now }),
+          localdb.localSettings.put({ user_id: userId, key: "recalibration_action_v1", value: JSON.stringify(recalibrationActionSnapshot), updatedAt: now }),
         ]);
       }
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
@@ -3662,7 +3710,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           updatedAt: Date.now(),
         });
       }
-      const predictionSnapshot = canDeriveLoopState
+      let predictionSnapshot = canDeriveLoopState
         ? buildPredictionScaffold({
             history: prefHistory,
             fingerprint: behaviorFingerprintSnapshot,
@@ -4299,6 +4347,7 @@ async function syncNow() {
           adaptationWeights={adaptationWeights}
           mutationLedger={mutationLedger}
           recalibrationState={recalibrationState}
+          recalibrationAction={recalibrationAction}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
@@ -4416,6 +4465,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
