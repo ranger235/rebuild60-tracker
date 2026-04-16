@@ -245,17 +245,34 @@ export function normalizeAdaptationState(input: unknown): {
 export function normalizeRecalibrationState(input: unknown): {
   isAvailable: boolean;
   isPartial: boolean;
+  phase: RecalibrationState["phase"] | null;
   state: RecalibrationState["state"] | null;
   score: number | null;
+  confidence: number | null;
+  evidenceWindow: number | null;
   note: string | null;
   triggers: string[];
+  triggerSummary: string | null;
+  recommendedScope: RecalibrationState["recommendedScope"];
+  freezeRecommended: boolean | null;
+  probationCyclesRemaining: number | null;
+  lastEvaluatedAt: string | null;
 } {
   const source = asRecord(input);
+  const phase = asString(source.phase) as RecalibrationState["phase"] | null;
   const state = asString(source.state) as RecalibrationState["state"] | null;
   const score = asNumber(source.score);
+  const confidence = asNumber(source.confidence);
+  const evidenceWindow = asNumber(source.evidenceWindow);
   const note = asString(source.note);
   const triggers = asStringArray(source.triggers);
-  const isAvailable = !!source && (state !== null || score !== null || note !== null || triggers.length > 0);
-  const isPartial = isAvailable && (state === null || score === null || note === null);
-  return { isAvailable, isPartial, state, score, note, triggers };
+  const triggerSummary = asString(source.triggerSummary);
+  const recommendedScope = asStringArray(source.recommendedScope) as RecalibrationState["recommendedScope"];
+  const freezeRecommended = asBoolean(source.freezeRecommended);
+  const probationCyclesRemaining = asNumber(source.probationCyclesRemaining);
+  const lastEvaluatedAt = asString(source.lastEvaluatedAt);
+  const isAvailable = !!source && (phase !== null || state !== null || score !== null || note !== null || triggers.length > 0);
+  const isPartial = isAvailable && (phase === null || state === null || score === null || note === null);
+  return { isAvailable, isPartial, phase, state, score, confidence, evidenceWindow, note, triggers, triggerSummary, recommendedScope, freezeRecommended, probationCyclesRemaining, lastEvaluatedAt };
 }
+
