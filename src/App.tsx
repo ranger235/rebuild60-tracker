@@ -21,7 +21,7 @@ import { computeBrainSnapshot, type BrainSnapshot, type BrainFocus, type FocusCo
 import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/preferenceLearning";
 import { deriveBehaviorFingerprint, buildPredictionScaffold, type BehaviorFingerprint, type PredictionScaffold } from "./lib/behaviorFingerprint";
 import { buildPredictionReview, summarizePredictionReviews, type PredictionAccuracySummary, type PredictionReviewEntry } from "./lib/predictionReview";
-import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts } from "./lib/loopMemory";
+import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts, rebuildLoopMemoryFromPreferenceHistory } from "./lib/loopMemory";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -348,6 +348,79 @@ type RecommendationComparison = {
   fidelityNote: string;
   summary: string;
 };
+
+
+
+function buildSyntheticPreferenceHistoryFromSessions(params: {
+  sessions: LocalWorkoutSession[];
+  sessionExercisesMap: Map<string, LocalWorkoutExercise[]>;
+  setsByExerciseId: Map<string, LocalWorkoutSet[]>;
+}): PreferenceHistoryEntry[] {
+  const { sessions, sessionExercisesMap, setsByExerciseId } = params;
+  const ordered = sessions
+    .slice()
+    .sort((a, b) => b.day_date.localeCompare(a.day_date))
+    .slice(0, 24);
+
+  const history: PreferenceHistoryEntry[] = [];
+
+  for (let index = 0; index < ordered.length; index += 1) {
+    const session = ordered[index];
+    const exercises = sessionExercisesMap.get(session.id) ?? [];
+    if (!exercises.length) continue;
+
+    const counts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
+    let prescribedSets = 0;
+    let completedSets = 0;
+    const exerciseFidelity: NonNullable<PreferenceHistoryEntry["exerciseFidelity"]> = [];
+
+    for (const ex of exercises) {
+      const key = exerciseKey(ex.name);
+      counts[focusFromExerciseKey(key)] += 1;
+      const workSets = (setsByExerciseId.get(ex.id) ?? []).filter((setRow) => !setRow.is_warmup);
+      prescribedSets += workSets.length;
+      completedSets += workSets.length;
+      exerciseFidelity.push({
+        recommendedKey: key,
+        actualKey: key,
+        status: "matched",
+        recommendedSets: workSets.length,
+        actualSets: workSets.length,
+        recommendedLoadLbs: null,
+        actualTopLoadLbs: null,
+        recommendedReps: null,
+        actualTopReps: null,
+      });
+    }
+
+    const actualFocus = dominantFocusFromCounts(counts);
+    const nextOlder = ordered[index + 1] ?? null;
+    const sessionOutcome: PreferenceHistoryEntry["sessionOutcome"] = completedSets > 0
+      ? (completedSets >= Math.max(1, prescribedSets) ? "as_prescribed" : "modified")
+      : "abandoned";
+
+    history.push({
+      sessionId: session.id,
+      timestamp: new Date(`${session.day_date}T12:00:00`).getTime(),
+      recommendedFocus: actualFocus,
+      actualFocus,
+      adherenceScore: completedSets > 0 ? 88 : 0,
+      substitutionKeys: [],
+      extrasKeys: [],
+      missedKeys: [],
+      volumeDelta: 0,
+      loadDeltaAvg: null,
+      sessionOutcome,
+      daysSinceRecommendation: 0,
+      daysSinceLastTrainingSession: nextOlder ? daysBetweenDayStrings(session.day_date, nextOlder.day_date) : null,
+      exerciseFidelity,
+      primaryOutcome: "unknown",
+      fidelityScore: completedSets > 0 ? 88 : 0,
+    });
+  }
+
+  return history;
+}
 
 type CoachSessionExerciseSeed = {
   exerciseId: string;
@@ -3356,6 +3429,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
       let preferenceSignals = null;
       let prefHistory: PreferenceHistoryEntry[] = [];
+      let loopMemory = userId ? await loadLoopMemoryArtifacts(userId) : null;
       try {
         const prefRow = userId
           ? (await localdb.localSettings.get([userId, "recommendation_feedback_v2"]))
@@ -3363,13 +3437,59 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           : null;
         const parsed = prefRow?.value ? JSON.parse(prefRow.value) : [];
         prefHistory = Array.isArray(parsed) ? parsed as PreferenceHistoryEntry[] : [];
+
+        if (!prefHistory.length && completedSessions.length > 0) {
+          prefHistory = buildSyntheticPreferenceHistoryFromSessions({
+            sessions: completedSessions,
+            sessionExercisesMap,
+            setsByExerciseId,
+          });
+          if (userId && prefHistory.length) {
+            const now = Date.now();
+            await localdb.localSettings.put({
+              user_id: userId,
+              key: "recommendation_feedback_v2",
+              value: JSON.stringify(prefHistory),
+              updatedAt: now,
+            });
+            await localdb.localSettings.put({
+              user_id: userId,
+              key: "recommendation_history_v1",
+              value: JSON.stringify(prefHistory.map((entry) => ({
+                sessionId: entry.sessionId,
+                timestamp: entry.timestamp,
+                recommendedFocus: entry.recommendedFocus,
+                actualFocus: entry.actualFocus,
+                adherenceScore: entry.adherenceScore,
+                substitutionKeys: entry.substitutionKeys,
+                extrasKeys: entry.extrasKeys,
+                missedKeys: entry.missedKeys,
+                volumeDelta: entry.volumeDelta,
+                loadDeltaAvg: entry.loadDeltaAvg,
+              }))),
+              updatedAt: now,
+            });
+          }
+        }
+
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
-        if (userId) {
-          const loopMemory = await loadLoopMemoryArtifacts(userId);
-          setPredictionReviewHistory(loopMemory.predictionReviewHistory);
-          setPredictionAccuracySummary(loopMemory.predictionAccuracySummary);
+
+        if (prefHistory.length && (!loopMemory?.predictionReviewHistory?.length || !loopMemory?.predictionAccuracySummary)) {
+          const rebuiltLoopMemory = rebuildLoopMemoryFromPreferenceHistory(prefHistory);
+          if (userId) {
+            await persistLoopMemoryArtifacts(userId, rebuiltLoopMemory);
+          }
+          loopMemory = {
+            behaviorFingerprint: loopMemory?.behaviorFingerprint ?? null,
+            predictionScaffold: loopMemory?.predictionScaffold ?? null,
+            predictionReviewHistory: rebuiltLoopMemory.predictionReviewHistory,
+            predictionAccuracySummary: rebuiltLoopMemory.predictionAccuracySummary,
+          };
         }
+
+        setPredictionReviewHistory(loopMemory?.predictionReviewHistory ?? []);
+        setPredictionAccuracySummary(loopMemory?.predictionAccuracySummary ?? null);
       } catch {
         preferenceSignals = null;
       }
@@ -3398,8 +3518,6 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const sleepReadiness = sleepAvg7 != null ? Math.max(35, Math.min(100, Math.round(35 + sleepAvg7 * 9))) : 60;
       const proteinReadiness = proteinAvg7 != null ? Math.max(35, Math.min(100, Math.round(30 + proteinAvg7 * 0.3))) : 60;
       const momentumTrend = tonPct >= 5 ? "up" : tonPct <= -5 ? "down" : "flat";
-      const loopMemory = userId ? await loadLoopMemoryArtifacts(userId) : null;
-
       const friction = buildFrictionProfile({
         asOf: today,
         readiness: {
@@ -4232,6 +4350,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
