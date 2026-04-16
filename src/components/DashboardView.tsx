@@ -114,6 +114,9 @@ type Props = {
   predictionScaffold: PredictionScaffold | null;
   predictionReviewHistory: PredictionReviewEntry[];
   predictionAccuracySummary: PredictionAccuracySummary | null;
+  adaptationWeights: AdaptationWeights | null;
+  mutationLedger: MutationLedgerEntry[];
+  recalibrationState: RecalibrationState | null;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -613,6 +616,9 @@ export default function DashboardView(props: Props) {
     predictionScaffold,
     predictionReviewHistory,
     predictionAccuracySummary,
+    adaptationWeights,
+    mutationLedger,
+    recalibrationState,
     timerOn,
     setTimerOn,
     secs,
@@ -636,9 +642,10 @@ export default function DashboardView(props: Props) {
   const modelFit = buildModelFit(preferenceHistory);
   const behaviorTraits = behaviorFingerprint ? Object.values(behaviorFingerprint.traits) : [];
   const latestPredictionReview = predictionReviewHistory.length ? predictionReviewHistory[0] : null;
+  const latestMutation = mutationLedger.length ? mutationLedger[0] : null;
   const auditTrail = buildAuditTrail(brainSnapshot, preferenceHistory);
   const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, preferenceHistory, modelFit);
-  const recalibrationSignal = buildRecalibrationSignal(preferenceHistory, modelFit);
+  const recalibrationSignal = recalibrationState ?? buildRecalibrationSignal(preferenceHistory, modelFit);
 
   const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
@@ -1365,6 +1372,28 @@ export default function DashboardView(props: Props) {
                       {latestPredictionReview?.summary || "Once you complete a recommended session, the app will grade how right its prediction was."}
                     </div>
                   </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Adaptation layer</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{adaptationWeights?.active ? `Active • ${adaptationWeights.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      Evidence {adaptationWeights?.evidenceWindow ?? 0} • Novelty {adaptationWeights?.noveltyBudget ?? "normal"}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {adaptationWeights?.summary || "No bounded mutation is active yet."}
+                    </div>
+                  </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Last mutation</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{latestMutation ? "Bounded change recorded" : "No mutation logged yet"}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      {latestMutation ? `Confidence ${latestMutation.confidence}/100 • Evidence ${latestMutation.evidenceWindow}` : "Waiting for enough signal to justify changing secondary weights."}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                      {latestMutation?.summary || "The loop has not yet recorded a bounded mutation event."}
+                    </div>
+                  </div>
                 </div>
 
                 {behaviorTraits.length ? (
@@ -1462,6 +1491,8 @@ export default function DashboardView(props: Props) {
                   <div><strong>Prediction:</strong> {predictionScaffold ? `${fmtPredictionOutcome(predictionScaffold.predictedCompletion)} • focus ${predictionScaffold.predictedFocusMatchProbability}%` : "n/a"}</div>
                   <div><strong>Prediction accuracy:</strong> {predictionAccuracySummary ? `${predictionAccuracySummary.score}/100` : "n/a"}</div>
                   <div><strong>Last prediction review:</strong> {latestPredictionReview ? `${latestPredictionReview.label} • ${latestPredictionReview.score}/100` : "n/a"}</div>
+                  <div><strong>Adaptation:</strong> {adaptationWeights ? `${adaptationWeights.active ? "active" : "idle"} • ${adaptationWeights.confidence}/100` : "n/a"}</div>
+                  <div><strong>Recalibration:</strong> {recalibrationSignal.state}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1731,6 +1762,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
