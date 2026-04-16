@@ -1,6 +1,6 @@
 import {
   candidatesForSlot,
-  pickBestCandidateForSlot,
+  scoreCandidateForSlot,
   type Slot,
 } from "./slotEngine";
 import {
@@ -17,10 +17,14 @@ import {
   type NeedKey,
 } from "./sessionNeedsEngine";
 import { composeAdaptiveSession } from "./sessionComposer";
-import { applyMovementOverlapPenalty } from "./movementOverlap";
 import { applyNeedWeightProfile, deriveNeedWeightProfile } from "./needWeights";
 import type { FrictionProfile } from "./frictionEngine";
 import { buildNextSessionPriorityProfile, type NextSessionPriorityProfile } from "./nextSessionPriority";
+import {
+  applyMovementOverlapPenalty,
+  broadenCandidatesForCoveredSlot,
+  getMovementFamilyForExerciseKey,
+} from "./movementOverlap";
 
 export type BrainFocus = "Push" | "Pull" | "Lower" | "Mixed";
 
@@ -814,6 +818,7 @@ function buildExercisesFromSlots(
   priorityProfile?: NextSessionPriorityProfile | null
 ): RecommendedExercise[] {
   const used = new Set<string>();
+  const selectedKeys: string[] = [];
   const noveltyCap = frictionProfile?.recommendations.noveltyCap ?? "normal";
   const volumeCap = frictionProfile?.recommendations.volumeCap ?? "normal";
   const anchorDemand = frictionProfile?.recommendations.anchorDemand ?? "normal";
@@ -831,8 +836,9 @@ function buildExercisesFromSlots(
 
   return trimmedSlots.map((slot) => {
     const program = SLOT_PROGRAMS[slot];
-    const candidates = candidatesForSlot(slot);
-    const rankedBase = pickBestCandidateForSlot(slot, history, mode, preferenceSignals);
+    const candidates = broadenCandidatesForCoveredSlot(slot, candidatesForSlot(slot), selectedKeys);
+    const rankedBase = candidates
+      .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferenceSignals));
     const ranked = rankedBase
       .map((candidate) => {
         let score = candidate.score;
@@ -885,10 +891,10 @@ function buildExercisesFromSlots(
           tags.push("Friction: trim fluff");
         }
 
-        const overlap = applyMovementOverlapPenalty(candidate.key, used, slot);
-        if (overlap.delta !== 0) {
-          score += overlap.delta;
-          if (overlap.reason) tags.push(overlap.reason);
+        const overlapPenalty = applyMovementOverlapPenalty(slot, candidate.key, selectedKeys);
+        if (overlapPenalty !== 0) {
+          score += overlapPenalty;
+          tags.push("Overlap guard");
         }
 
         return { ...candidate, score, tags: [...new Set(tags)] };
@@ -905,6 +911,7 @@ function buildExercisesFromSlots(
 
     const key = chosen?.key ?? candidates[0];
     used.add(key);
+    selectedKeys.push(key);
 
     const activeHist = history.find((h) => h.key === key) ?? null;
     const activeMemory = analyzeProgressionMemory(activeHist);
@@ -985,8 +992,20 @@ function buildExercisesFromSlots(
       note = `${note} ${cleaned}.`;
     }
 
+    const chosenFamily = getMovementFamilyForExerciseKey(key);
+    const displaySlot =
+      slot === "SecondaryRow" && chosenFamily !== "horizontal_pull"
+        ? "Upper back / rear delt"
+        : slot === "SecondaryPress" && chosenFamily === "triceps"
+        ? "Press support / triceps"
+        : slot === "SecondaryPress" && chosenFamily === "vertical_push"
+        ? "Shoulders / press support"
+        : slot === "SecondaryQuad" && chosenFamily !== "squat"
+        ? "Lower support"
+        : program.label;
+
     return {
-      slot: program.label,
+      slot: displaySlot,
       name,
       sets,
       reps: program.reps,
@@ -1303,6 +1322,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
+
 
 
 
