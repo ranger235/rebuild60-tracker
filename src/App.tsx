@@ -24,6 +24,7 @@ import { buildPredictionReview, summarizePredictionReviews, type PredictionAccur
 import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts, rebuildLoopMemoryFromPreferenceHistory } from "./lib/loopMemory";
 import { applyAdaptationToPreferenceSignals, deriveAdaptationLayer, type AdaptationWeights, type MutationLedgerEntry, type RecalibrationState } from "./lib/adaptationWeights";
 import { evaluateRecalibrationState } from "./lib/recalibrationPolicy";
+import { applyPredictionRecalibrationToScaffold, executePredictionRecalibration, shouldExecutePredictionRecalibration, stepRecalibrationActionProbation, type RecalibrationAction } from "./lib/recalibrationActions";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -1090,6 +1091,7 @@ useEffect(() => {
   const [adaptationWeights, setAdaptationWeights] = useState<AdaptationWeights | null>(null);
   const [mutationLedger, setMutationLedger] = useState<MutationLedgerEntry[]>([]);
   const [recalibrationState, setRecalibrationState] = useState<RecalibrationState | null>(null);
+  const [recalibrationAction, setRecalibrationAction] = useState<RecalibrationAction | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
@@ -3440,16 +3442,19 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       let persistedAdaptationWeights: AdaptationWeights | null = null;
       let persistedMutationLedger: MutationLedgerEntry[] = [];
       let persistedRecalibrationState: RecalibrationState | null = null;
+      let persistedRecalibrationAction: RecalibrationAction | null = null;
       try {
         if (userId) {
-          const [adaptRow, ledgerRow, recalRow] = await Promise.all([
+          const [adaptRow, ledgerRow, recalRow, actionRow] = await Promise.all([
             localdb.localSettings.get([userId, "adaptation_weights_v1"]),
             localdb.localSettings.get([userId, "mutation_ledger_v1"]),
             localdb.localSettings.get([userId, "recalibration_state_v1"]),
+            localdb.localSettings.get([userId, "recalibration_action_v1"]),
           ]);
           persistedAdaptationWeights = adaptRow?.value ? JSON.parse(adaptRow.value) as AdaptationWeights : null;
           persistedMutationLedger = ledgerRow?.value ? JSON.parse(ledgerRow.value) as MutationLedgerEntry[] : [];
           persistedRecalibrationState = recalRow?.value ? JSON.parse(recalRow.value) as RecalibrationState : null;
+          persistedRecalibrationAction = actionRow?.value ? JSON.parse(actionRow.value) as RecalibrationAction : null;
           if (!Array.isArray(persistedMutationLedger)) persistedMutationLedger = [];
         }
         const prefRow = userId
@@ -3573,6 +3578,31 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       }
 
       const canDeriveLoopState = prefHistory.length > 0;
+      const latestClosedReviewSessionId = predictionReviewSnapshot[0]?.sessionId ?? null;
+      let recalibrationActionSnapshot = stepRecalibrationActionProbation({
+        action: persistedRecalibrationAction,
+        latestClosedReviewSessionId,
+      });
+      const hasActiveRecalibrationAction = !!(recalibrationActionSnapshot && recalibrationActionSnapshot.status === "active");
+      const previousRecalibrationStateForPolicy: RecalibrationState | null = (() => {
+        if (!persistedRecalibrationState) return null;
+        if (recalibrationActionSnapshot?.status === "active") {
+          return {
+            ...persistedRecalibrationState,
+            phase: "probation",
+            state: "Probation",
+            probationCyclesRemaining: recalibrationActionSnapshot.probationCyclesRemaining,
+          };
+        }
+        if (persistedRecalibrationState.phase === "probation") {
+          return {
+            ...persistedRecalibrationState,
+            probationCyclesRemaining: 0,
+          };
+        }
+        return persistedRecalibrationState;
+      })();
+
       const behaviorFingerprintSnapshot = canDeriveLoopState
         ? deriveBehaviorFingerprint(prefHistory, friction)
         : (loopMemory?.behaviorFingerprint ?? deriveBehaviorFingerprint([], friction));
@@ -3589,11 +3619,14 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         predictionAccuracySummary: predictionAccuracySnapshot,
         predictionReviewHistory: predictionReviewSnapshot,
       });
-      const adaptationSnapshot = adaptationLayer.weights.active
+      const adaptationFrozen = !!(recalibrationActionSnapshot && recalibrationActionSnapshot.status === "active" && recalibrationActionSnapshot.freezeAdaptation);
+      let adaptationSnapshot = adaptationLayer.weights.active
         ? adaptationLayer.weights
         : (persistedAdaptationWeights ?? adaptationLayer.weights);
       let mutationLedgerSnapshot = persistedMutationLedger.slice();
-      if (adaptationLayer.ledgerEntry) {
+      if (adaptationFrozen) {
+        adaptationSnapshot = persistedAdaptationWeights ?? adaptationSnapshot;
+      } else if (adaptationLayer.ledgerEntry) {
         const latestKey = mutationLedgerSnapshot[0]?.generatedAt ?? "";
         if (latestKey !== adaptationLayer.ledgerEntry.generatedAt && mutationLedgerSnapshot[0]?.summary !== adaptationLayer.ledgerEntry.summary) {
           mutationLedgerSnapshot = [adaptationLayer.ledgerEntry, ...mutationLedgerSnapshot].slice(0, 12);
@@ -3601,26 +3634,15 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           mutationLedgerSnapshot = [adaptationLayer.ledgerEntry];
         }
       }
-      const recalibrationSnapshot = evaluateRecalibrationState({
+      let recalibrationSnapshot = evaluateRecalibrationState({
         behaviorFingerprint: behaviorFingerprintSnapshot,
         predictionAccuracySummary: predictionAccuracySnapshot,
         predictionReviewHistory: predictionReviewSnapshot,
         preferenceHistory: prefHistory,
         adaptationWeights: adaptationSnapshot,
         mutationLedger: mutationLedgerSnapshot,
-        previousState: persistedRecalibrationState,
+        previousState: previousRecalibrationStateForPolicy,
       });
-      setAdaptationWeights(adaptationSnapshot);
-      setMutationLedger(mutationLedgerSnapshot);
-      setRecalibrationState(recalibrationSnapshot);
-      if (userId) {
-        const now = Date.now();
-        await Promise.all([
-          localdb.localSettings.put({ user_id: userId, key: "adaptation_weights_v1", value: JSON.stringify(adaptationSnapshot), updatedAt: now }),
-          localdb.localSettings.put({ user_id: userId, key: "mutation_ledger_v1", value: JSON.stringify(mutationLedgerSnapshot), updatedAt: now }),
-          localdb.localSettings.put({ user_id: userId, key: "recalibration_state_v1", value: JSON.stringify(recalibrationSnapshot), updatedAt: now }),
-        ]);
-      }
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
       const brain = computeBrainSnapshot({
@@ -3662,7 +3684,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           updatedAt: Date.now(),
         });
       }
-      const predictionSnapshot = canDeriveLoopState
+      let predictionSnapshot = canDeriveLoopState
         ? buildPredictionScaffold({
             history: prefHistory,
             fingerprint: behaviorFingerprintSnapshot,
@@ -3675,15 +3697,42 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
             brainSnapshot: brain,
             frictionProfile: friction,
           }));
-      setPredictionScaffold(predictionSnapshot);
       if (userId && canDeriveLoopState && predictionSnapshot) {
         await persistLoopMemoryArtifacts(userId, {
           predictionScaffold: predictionSnapshot,
         });
       }
-      if (userId && !canDeriveLoopState && loopMemory) {
-        setPredictionReviewHistory(loopMemory.predictionReviewHistory);
-        setPredictionAccuracySummary(loopMemory.predictionAccuracySummary);
+      if (hasActiveRecalibrationAction) {
+        predictionSnapshot = applyPredictionRecalibrationToScaffold(predictionSnapshot, recalibrationActionSnapshot);
+      } else if (shouldExecutePredictionRecalibration({
+        recalibrationState: recalibrationSnapshot,
+        predictionScaffold: predictionSnapshot,
+      })) {
+        const executed = executePredictionRecalibration({
+          recalibrationState: recalibrationSnapshot,
+          predictionScaffold: predictionSnapshot,
+          latestClosedReviewSessionId,
+        });
+        if (executed) {
+          recalibrationActionSnapshot = executed.action;
+          predictionSnapshot = executed.predictionScaffold;
+          recalibrationSnapshot = executed.recalibrationState;
+        }
+      }
+
+      setPredictionScaffold(predictionSnapshot);
+      setAdaptationWeights(adaptationSnapshot);
+      setMutationLedger(mutationLedgerSnapshot);
+      setRecalibrationState(recalibrationSnapshot);
+      setRecalibrationAction(recalibrationActionSnapshot);
+      if (userId) {
+        const now = Date.now();
+        await Promise.all([
+          localdb.localSettings.put({ user_id: userId, key: "adaptation_weights_v1", value: JSON.stringify(adaptationSnapshot), updatedAt: now }),
+          localdb.localSettings.put({ user_id: userId, key: "mutation_ledger_v1", value: JSON.stringify(mutationLedgerSnapshot), updatedAt: now }),
+          localdb.localSettings.put({ user_id: userId, key: "recalibration_state_v1", value: JSON.stringify(recalibrationSnapshot), updatedAt: now }),
+          localdb.localSettings.put({ user_id: userId, key: "recalibration_action_v1", value: JSON.stringify(recalibrationActionSnapshot), updatedAt: now }),
+        ]);
       }
 
       const fingerprint = buildRecommendationFingerprint(brain);
@@ -4416,6 +4465,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
