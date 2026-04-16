@@ -3,21 +3,17 @@ import type { RecalibrationState } from "./adaptationWeights";
 
 export type RecalibrationActionScope = "prediction";
 export type RecalibrationActionType = "prediction_confidence_damp" | "prediction_expectation_reset";
-export type RecalibrationActionStatus = "active" | "completed" | "superseded";
 
 export type RecalibrationAction = {
   id: string;
   scope: RecalibrationActionScope;
   type: RecalibrationActionType;
-  phaseEnteredFrom: RecalibrationState["phase"];
-  reason: string;
-  triggerSummary: string;
-  recommendedScope: string[];
+  status: "active" | "completed";
   createdAt: string;
-  probationCycles: number;
+  reason: string;
   probationCyclesRemaining: number;
   freezeAdaptation: boolean;
-  lastProcessedReviewSessionId: string | null;
+  lastObservedReviewSessionId: string | null;
   before: {
     predictionConfidence: number | null;
     expectedCompletionLabel: string | null;
@@ -28,153 +24,131 @@ export type RecalibrationAction = {
     expectedCompletionLabel: string | null;
     expectedFocusProbability: number | null;
   };
-  status: RecalibrationActionStatus;
-};
-
-export type ExecutePredictionRecalibrationInput = {
-  recalibrationState: RecalibrationState | null;
-  predictionScaffold: PredictionScaffold | null;
-  activeAction: RecalibrationAction | null;
 };
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
+function makeId(): string {
+  return `recal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function shouldExecutePredictionRecalibration(input: ExecutePredictionRecalibrationInput): boolean {
-  const { recalibrationState, predictionScaffold, activeAction } = input;
-  if (!recalibrationState || !predictionScaffold) return false;
-  if (activeAction && activeAction.status === "active") return false;
-  if (recalibrationState.phase !== "suggested") return false;
-  if (recalibrationState.evidenceWindow < 4) return false;
-  if (!recalibrationState.recommendedScope.includes("prediction")) return false;
+function phaseLabel(phase: RecalibrationState["phase"]): RecalibrationState["state"] {
+  switch (phase) {
+    case "watch": return "Watch closely";
+    case "suggested": return "Suggested";
+    case "recalibrating": return "Recalibrating";
+    case "probation": return "Probation";
+    default: return "Not needed";
+  }
+}
+
+export function shouldExecutePredictionRecalibration(params: {
+  recalibrationState: RecalibrationState | null;
+  predictionScaffold: PredictionScaffold | null;
+}): boolean {
+  const state = params.recalibrationState;
+  if (!state || !params.predictionScaffold) return false;
+  if (state.phase !== "suggested") return false;
+  if (state.evidenceWindow < 4) return false;
+  if (!state.recommendedScope.includes("prediction")) return false;
   return true;
 }
 
-export function executePredictionRecalibration(input: {
+export function applyPredictionRecalibrationToScaffold(
+  predictionScaffold: PredictionScaffold,
+  action: RecalibrationAction | null,
+): PredictionScaffold {
+  if (!action || action.status !== "active") return predictionScaffold;
+  if (action.scope !== "prediction") return predictionScaffold;
+  return {
+    ...predictionScaffold,
+    confidence: action.after.predictionConfidence ?? predictionScaffold.confidence,
+    predictedCompletion: (action.after.expectedCompletionLabel as PredictionScaffold["predictedCompletion"] | null) ?? predictionScaffold.predictedCompletion,
+    predictedFocusMatchProbability: action.after.expectedFocusProbability ?? predictionScaffold.predictedFocusMatchProbability,
+    reasons: [
+      `Prediction recalibration is active while the model rebuilds trust during probation.`,
+      ...predictionScaffold.reasons.filter((reason) => !/Prediction recalibration is active/i.test(reason)),
+    ].slice(0, 4),
+  };
+}
+
+export function executePredictionRecalibration(params: {
   recalibrationState: RecalibrationState;
   predictionScaffold: PredictionScaffold;
-}): { action: RecalibrationAction; nextPredictionScaffold: PredictionScaffold } {
-  const { recalibrationState, predictionScaffold } = input;
-  const currentConfidence = predictionScaffold.confidence ?? 35;
-  const currentFocus = predictionScaffold.predictedFocusMatchProbability ?? 60;
-  const nextConfidence = clamp(currentConfidence - 12, 20, 85);
-  const nextFocus = clamp(currentFocus - 12, 20, 90);
-  const currentCompletion = predictionScaffold.predictedCompletion;
-  const nextCompletion: PredictionScaffold["predictedCompletion"] =
-    currentCompletion === "as_prescribed" ? "modified" : currentCompletion;
+  latestClosedReviewSessionId: string | null;
+}): { action: RecalibrationAction; predictionScaffold: PredictionScaffold; recalibrationState: RecalibrationState } | null {
+  if (!shouldExecutePredictionRecalibration(params)) return null;
 
-  const nextPredictionScaffold: PredictionScaffold = {
-    ...predictionScaffold,
-    generatedAt: nowIso(),
-    confidence: nextConfidence,
-    predictedCompletion: nextCompletion,
-    predictedFocusMatchProbability: nextFocus,
-    reasons: [
-      `Prediction recalibration damped confidence from ${currentConfidence} to ${nextConfidence} after conservative drift triggers aligned.`,
-      `Expected focus-match probability was trimmed from ${currentFocus}% to ${nextFocus}% so the app stops talking like everything is locked in.`,
-      ...predictionScaffold.reasons,
-    ].slice(0, 6),
+  const before = {
+    predictionConfidence: params.predictionScaffold.confidence,
+    expectedCompletionLabel: params.predictionScaffold.predictedCompletion,
+    expectedFocusProbability: params.predictionScaffold.predictedFocusMatchProbability,
   };
 
-  const createdAt = nowIso();
+  const afterConfidence = clamp((params.predictionScaffold.confidence ?? 35) - 12, 20, 92);
+  const afterFocus = clamp((params.predictionScaffold.predictedFocusMatchProbability ?? 65) - 12, 25, 95);
+  const afterCompletion = params.predictionScaffold.predictedCompletion === "as_prescribed"
+    ? "modified"
+    : params.predictionScaffold.predictedCompletion;
+
   const action: RecalibrationAction = {
-    id: `prediction-${createdAt}`,
+    id: makeId(),
     scope: "prediction",
-    type: currentCompletion === nextCompletion ? "prediction_confidence_damp" : "prediction_expectation_reset",
-    phaseEnteredFrom: recalibrationState.phase,
-    reason: recalibrationState.note,
-    triggerSummary: recalibrationState.triggerSummary,
-    recommendedScope: [...recalibrationState.recommendedScope],
-    createdAt,
-    probationCycles: 2,
+    type: params.predictionScaffold.predictedCompletion === afterCompletion
+      ? "prediction_confidence_damp"
+      : "prediction_expectation_reset",
+    status: "active",
+    createdAt: new Date().toISOString(),
+    reason: params.recalibrationState.triggerSummary || params.recalibrationState.note,
     probationCyclesRemaining: 2,
     freezeAdaptation: true,
-    lastProcessedReviewSessionId: null,
-    before: {
-      predictionConfidence: currentConfidence,
-      expectedCompletionLabel: currentCompletion,
-      expectedFocusProbability: currentFocus,
-    },
+    lastObservedReviewSessionId: params.latestClosedReviewSessionId,
+    before,
     after: {
-      predictionConfidence: nextConfidence,
-      expectedCompletionLabel: nextCompletion,
-      expectedFocusProbability: nextFocus,
+      predictionConfidence: afterConfidence,
+      expectedCompletionLabel: afterCompletion,
+      expectedFocusProbability: afterFocus,
     },
-    status: "active",
   };
 
-  return { action, nextPredictionScaffold };
-}
+  const predictionScaffold = applyPredictionRecalibrationToScaffold(params.predictionScaffold, action);
 
-export function applyProbationToRecalibrationState(params: {
-  state: RecalibrationState;
-  action: RecalibrationAction;
-}): RecalibrationState {
-  return {
-    ...params.state,
+  const recalibrationState: RecalibrationState = {
+    ...params.recalibrationState,
     phase: "probation",
-    state: "Probation",
+    state: phaseLabel("probation"),
+    note: "Prediction recalibration executed conservatively; the loop is now in probation while it checks whether the calmer prediction stance fits reality better.",
+    triggerSummary: `Prediction recalibration executed: confidence damped${before.expectedCompletionLabel !== afterCompletion ? " and expectation reset" : ""}.`,
     freezeRecommended: true,
-    probationCyclesRemaining: params.action.probationCyclesRemaining,
-    note: `Prediction recalibration executed. Adaptation is frozen for ${params.action.probationCyclesRemaining} closed cycle${params.action.probationCyclesRemaining === 1 ? "" : "s"} while the model rebuilds trust conservatively.`,
-    triggerSummary: params.action.triggerSummary,
-    lastEvaluatedAt: nowIso(),
+    probationCyclesRemaining: action.probationCyclesRemaining,
+    lastEvaluatedAt: new Date().toISOString(),
+  };
+
+  return { action, predictionScaffold, recalibrationState };
+}
+
+export function stepRecalibrationActionProbation(params: {
+  action: RecalibrationAction | null;
+  latestClosedReviewSessionId: string | null;
+}): RecalibrationAction | null {
+  const action = params.action;
+  if (!action) return null;
+  if (action.status !== "active") return action;
+  if (action.probationCyclesRemaining <= 0) {
+    return { ...action, status: "completed", freezeAdaptation: false, probationCyclesRemaining: 0 };
+  }
+  if (!params.latestClosedReviewSessionId) return action;
+  if (params.latestClosedReviewSessionId === action.lastObservedReviewSessionId) return action;
+
+  const remaining = Math.max(0, action.probationCyclesRemaining - 1);
+  return {
+    ...action,
+    probationCyclesRemaining: remaining,
+    lastObservedReviewSessionId: params.latestClosedReviewSessionId,
+    status: remaining === 0 ? "completed" : "active",
+    freezeAdaptation: remaining > 0,
   };
 }
 
-export function stepProbationState(params: {
-  action: RecalibrationAction | null;
-  recalibrationState: RecalibrationState | null;
-  latestReviewSessionId: string | null;
-}): { action: RecalibrationAction | null; recalibrationState: RecalibrationState | null; changed: boolean } {
-  const { action, recalibrationState, latestReviewSessionId } = params;
-  if (!action || action.status !== "active" || !action.freezeAdaptation) {
-    return { action, recalibrationState, changed: false };
-  }
-  if (!latestReviewSessionId) {
-    return { action, recalibrationState, changed: false };
-  }
-  if (action.lastProcessedReviewSessionId === latestReviewSessionId) {
-    return { action, recalibrationState, changed: false };
-  }
-  const nextRemaining = Math.max(0, action.probationCyclesRemaining - 1);
-  const nextAction: RecalibrationAction = {
-    ...action,
-    probationCyclesRemaining: nextRemaining,
-    lastProcessedReviewSessionId: latestReviewSessionId,
-    status: nextRemaining === 0 ? "completed" : action.status,
-  };
-  if (!recalibrationState) {
-    return { action: nextAction, recalibrationState, changed: true };
-  }
-  if (nextRemaining > 0) {
-    return {
-      action: nextAction,
-      recalibrationState: {
-        ...recalibrationState,
-        phase: "probation",
-        state: "Probation",
-        freezeRecommended: true,
-        probationCyclesRemaining: nextRemaining,
-        note: `Prediction recalibration is still in probation. Adaptation remains frozen for ${nextRemaining} more closed cycle${nextRemaining === 1 ? "" : "s"}.`,
-        lastEvaluatedAt: nowIso(),
-      },
-      changed: true,
-    };
-  }
-  return {
-    action: nextAction,
-    recalibrationState: {
-      ...recalibrationState,
-      probationCyclesRemaining: 0,
-      freezeRecommended: false,
-      lastEvaluatedAt: nowIso(),
-    },
-    changed: true,
-  };
-}
