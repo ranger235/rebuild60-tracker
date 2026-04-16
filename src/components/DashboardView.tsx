@@ -8,6 +8,16 @@ import type { PreferenceHistoryEntry } from "../lib/preferenceLearning";
 import type { FrictionProfile } from "../lib/frictionEngine";
 import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../lib/behaviorFingerprint";
 import type { PredictionAccuracySummary, PredictionReviewEntry } from "../lib/predictionReview";
+import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "../lib/adaptationWeights";
+import {
+  normalizeAdaptationState,
+  normalizeBehaviorFingerprint,
+  normalizeMutationLedger,
+  normalizePredictionAccuracy,
+  normalizePredictionReviewHistory,
+  normalizePredictionScaffold,
+  normalizeRecalibrationState,
+} from "../lib/uiStateGuards";
 
 export type Point = { xLabel: string; y: number };
 
@@ -634,18 +644,35 @@ export default function DashboardView(props: Props) {
     setSplitDraft(splitConfig ?? pplPreset());
   }, [splitConfig]);
 
+  const safePreferenceHistory = Array.isArray(preferenceHistory) ? preferenceHistory : [];
+  const safePredictionReviewHistory = normalizePredictionReviewHistory(predictionReviewHistory);
+  const safeBehaviorFingerprint = normalizeBehaviorFingerprint(behaviorFingerprint);
+  const safePredictionScaffold = normalizePredictionScaffold(predictionScaffold);
+  const safePredictionAccuracy = normalizePredictionAccuracy(predictionAccuracySummary);
+  const safeAdaptation = normalizeAdaptationState(adaptationWeights);
+  const safeMutationLedger = normalizeMutationLedger(mutationLedger);
+  const safeRecalibration = normalizeRecalibrationState(recalibrationState);
+
   const tonnage28 = Math.round(sumPoints(tonnageSeries));
   const sets28 = Math.round(sumPoints(setsSeries));
   const trainingDays28 = activeDays(setsSeries);
   const avgTonnagePerTrainingDay = trainingDays28 > 0 ? Math.round(tonnage28 / trainingDays28) : 0;
   const avgSetsPerTrainingDay = trainingDays28 > 0 ? Math.round((sets28 / trainingDays28) * 10) / 10 : 0;
-  const modelFit = buildModelFit(preferenceHistory);
-  const behaviorTraits = behaviorFingerprint ? Object.values(behaviorFingerprint.traits) : [];
-  const latestPredictionReview = predictionReviewHistory.length ? predictionReviewHistory[0] : null;
-  const latestMutation = mutationLedger.length ? mutationLedger[0] : null;
-  const auditTrail = buildAuditTrail(brainSnapshot, preferenceHistory);
-  const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, preferenceHistory, modelFit);
-  const recalibrationSignal = recalibrationState ?? buildRecalibrationSignal(preferenceHistory, modelFit);
+  const modelFit = buildModelFit(safePreferenceHistory);
+  const behaviorTraits = safeBehaviorFingerprint.traits;
+  const latestPredictionReview = safePredictionReviewHistory.latest;
+  const latestMutation = safeMutationLedger.latest;
+  const auditTrail = buildAuditTrail(brainSnapshot, safePreferenceHistory);
+  const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, safePreferenceHistory, modelFit);
+  const fallbackRecalibration = buildRecalibrationSignal(safePreferenceHistory, modelFit);
+  const recalibrationSignal = safeRecalibration.isAvailable
+    ? {
+        state: safeRecalibration.state ?? "Watch closely",
+        score: safeRecalibration.score ?? null,
+        note: safeRecalibration.note ?? "Recalibration state is only partially available right now.",
+        triggers: safeRecalibration.triggers,
+      }
+    : fallbackRecalibration;
 
   const keyLiftCards = [
     { label: "Bench Press", points: benchSeries },
@@ -723,8 +750,8 @@ export default function DashboardView(props: Props) {
   };
 
   const readinessInput = useMemo(
-    () => mapSeriesToReadinessInput(setsSeries, weightSeries, preferenceHistory),
-    [setsSeries, weightSeries, preferenceHistory]
+    () => mapSeriesToReadinessInput(setsSeries, weightSeries, safePreferenceHistory),
+    [setsSeries, weightSeries, safePreferenceHistory]
   );
 
   const readiness = useMemo(
@@ -1295,7 +1322,7 @@ export default function DashboardView(props: Props) {
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Confidence evidence</div>
                     <div style={{ marginTop: 8, lineHeight: 1.45, fontSize: 13 }}>
-                      {preferenceConfidenceNote(preferenceHistory)}
+                      {preferenceConfidenceNote(safePreferenceHistory)}
                     </div>
                   </div>
                 </div>
@@ -1304,17 +1331,17 @@ export default function DashboardView(props: Props) {
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Last recommendation vs actual</div>
                     <div style={{ marginTop: 6, fontWeight: 800 }}>
-                      {buildOutcomeHeadline(latestRecommendationOutcome(preferenceHistory))}
+                      {buildOutcomeHeadline(latestRecommendationOutcome(safePreferenceHistory))}
                     </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45, opacity: 0.85 }}>
-                      {buildOutcomeDetail(latestRecommendationOutcome(preferenceHistory))}
+                      {buildOutcomeDetail(latestRecommendationOutcome(safePreferenceHistory))}
                     </div>
                   </div>
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>What changed from last time</div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {buildLearningNote(latestRecommendationOutcome(preferenceHistory), brainSnapshot)}
+                      {buildLearningNote(latestRecommendationOutcome(safePreferenceHistory), brainSnapshot)}
                     </div>
                   </div>
                 </div>
@@ -1322,41 +1349,41 @@ export default function DashboardView(props: Props) {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginTop: 10 }}>
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Behavior fingerprint</div>
-                    <div style={{ marginTop: 6, fontWeight: 800 }}>Confidence: {behaviorFingerprint ? `${behaviorFingerprint.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>Confidence: {safeBehaviorFingerprint.isAvailable && safeBehaviorFingerprint.confidence != null ? `${safeBehaviorFingerprint.confidence}/100` : "Awaiting usable data"}</div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {behaviorFingerprint?.headline || "The self-model is still waiting for enough completed recommendation cycles to say anything useful."}
+                      {safeBehaviorFingerprint.headline || (safeBehaviorFingerprint.isPartial ? "The self-model is only partially available right now." : "The self-model is still waiting for enough completed recommendation cycles to say anything useful.")}
                     </div>
                   </div>
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction scaffold</div>
                     <div style={{ marginTop: 6, fontWeight: 800 }}>
-                      {predictionScaffold ? fmtPredictionOutcome(predictionScaffold.predictedCompletion) : "Unavailable"}
+                      {safePredictionScaffold.predictedCompletion ? fmtPredictionOutcome(safePredictionScaffold.predictedCompletion) : "Unavailable"}
                     </div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                      Focus match {predictionScaffold ? `${predictionScaffold.predictedFocusMatchProbability}%` : "—"} • Delay {fmtPredictionBucket(predictionScaffold?.predictedDelayBucket)}
+                      Focus match {safePredictionScaffold.predictedFocusMatchProbability != null ? `${safePredictionScaffold.predictedFocusMatchProbability}%` : "—"} • Delay {fmtPredictionBucket(safePredictionScaffold.predictedDelayBucket)}
                     </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {predictionScaffold?.reasons?.[0] || "Prediction scaffolding will start talking once the self-model has enough evidence."}
+                      {safePredictionScaffold.reasons[0] || (safePredictionScaffold.isPartial ? "Prediction scaffolding is only partially available right now." : "Prediction scaffolding will start talking once the self-model has enough evidence.")}
                     </div>
                   </div>
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction confidence</div>
-                    <div style={{ marginTop: 6, fontWeight: 800 }}>{predictionScaffold ? `${predictionScaffold.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{safePredictionScaffold.confidence != null ? `${safePredictionScaffold.confidence}/100` : "Awaiting usable data"}</div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {predictionScaffold?.reasons?.[1] || "No prediction confidence note yet."}
+                      {safePredictionScaffold.reasons[1] || (safePredictionScaffold.isPartial ? "Prediction confidence is only partially available right now." : "No prediction confidence note yet.")}
                     </div>
                   </div>
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction accuracy</div>
-                    <div style={{ marginTop: 6, fontWeight: 800 }}>{predictionAccuracySummary ? `${predictionAccuracySummary.label} • ${predictionAccuracySummary.score}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{safePredictionAccuracy.isAvailable && safePredictionAccuracy.label && safePredictionAccuracy.score != null ? `${safePredictionAccuracy.label} • ${safePredictionAccuracy.score}/100` : "Awaiting usable data"}</div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                      Confidence {predictionAccuracySummary ? `${predictionAccuracySummary.confidence}/100` : "—"} • Evidence {predictionAccuracySummary?.evidenceWindow ?? 0}
+                      Confidence {safePredictionAccuracy.confidence != null ? `${safePredictionAccuracy.confidence}/100` : "—"} • Evidence {safePredictionAccuracy.evidenceWindow ?? "—"}
                     </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {predictionAccuracySummary?.headline || "Prediction accuracy will show up once the app closes the loop on at least one predicted session."}
+                      {safePredictionAccuracy.headline || (safePredictionAccuracy.isPartial ? "Prediction accuracy is only partially available right now." : "Prediction accuracy will show up once the app closes the loop on at least one predicted session.")}
                     </div>
                   </div>
 
@@ -1375,12 +1402,12 @@ export default function DashboardView(props: Props) {
 
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Adaptation layer</div>
-                    <div style={{ marginTop: 6, fontWeight: 800 }}>{adaptationWeights?.active ? `Active • ${adaptationWeights.confidence}/100` : "Calibrating"}</div>
+                    <div style={{ marginTop: 6, fontWeight: 800 }}>{safeAdaptation.isAvailable ? `${safeAdaptation.active ? "Active" : "Idle"} • ${safeAdaptation.confidence ?? "—"}/100` : "Adaptation state unavailable"}</div>
                     <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                      Evidence {adaptationWeights?.evidenceWindow ?? 0} • Novelty {adaptationWeights?.noveltyBudget ?? "normal"}
+                      Evidence {safeAdaptation.evidenceWindow ?? "—"} • Novelty {safeAdaptation.noveltyBudget ?? "unknown"}
                     </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
-                      {adaptationWeights?.summary || "No bounded mutation is active yet."}
+                      {safeAdaptation.summary || (safeAdaptation.isPartial ? "Adaptation state is only partially available right now." : "No bounded mutation is active yet.")}
                     </div>
                   </div>
 
@@ -1431,9 +1458,9 @@ export default function DashboardView(props: Props) {
                   <div style={cardStyle}>
                     <div style={{ fontSize: 12, opacity: 0.75 }}>Prediction metrics</div>
                     <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
-                      <li style={{ marginTop: 4 }}>Completion {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.completionAccuracy}/100` : "—"}</li>
-                      <li style={{ marginTop: 4 }}>Focus {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.focusCalibration}/100` : "—"}</li>
-                      <li style={{ marginTop: 4 }}>Delay {predictionAccuracySummary ? `${predictionAccuracySummary.metrics.delayAccuracy}/100` : "—"}</li>
+                      <li style={{ marginTop: 4 }}>Completion {safePredictionAccuracy.metrics.completionAccuracy != null ? `${safePredictionAccuracy.metrics.completionAccuracy}/100` : "—"}</li>
+                      <li style={{ marginTop: 4 }}>Focus {safePredictionAccuracy.metrics.focusCalibration != null ? `${safePredictionAccuracy.metrics.focusCalibration}/100` : "—"}</li>
+                      <li style={{ marginTop: 4 }}>Delay {safePredictionAccuracy.metrics.delayAccuracy != null ? `${safePredictionAccuracy.metrics.delayAccuracy}/100` : "—"}</li>
                     </ul>
                   </div>
 
@@ -1487,11 +1514,11 @@ export default function DashboardView(props: Props) {
                   <div><strong>Next:</strong> {brainSnapshot?.recommendedSession?.plannedDayName || brainSnapshot?.recommendedSession?.focus || "unknown"}</div>
                   <div><strong>Recommendation:</strong> {brainSnapshot?.recommendedSession?.title || "unknown"}</div>
                   <div><strong>Model Fit:</strong> {typeof modelFit !== "undefined" ? modelFit.label : "n/a"}</div>
-                  <div><strong>Behavior fingerprint:</strong> {behaviorFingerprint ? `${behaviorFingerprint.confidence}/100` : "n/a"}</div>
-                  <div><strong>Prediction:</strong> {predictionScaffold ? `${fmtPredictionOutcome(predictionScaffold.predictedCompletion)} • focus ${predictionScaffold.predictedFocusMatchProbability}%` : "n/a"}</div>
-                  <div><strong>Prediction accuracy:</strong> {predictionAccuracySummary ? `${predictionAccuracySummary.score}/100` : "n/a"}</div>
+                  <div><strong>Behavior fingerprint:</strong> {safeBehaviorFingerprint.confidence != null ? `${safeBehaviorFingerprint.confidence}/100` : "n/a"}</div>
+                  <div><strong>Prediction:</strong> {safePredictionScaffold.predictedCompletion ? `${fmtPredictionOutcome(safePredictionScaffold.predictedCompletion)} • focus ${safePredictionScaffold.predictedFocusMatchProbability ?? "—"}%` : "n/a"}</div>
+                  <div><strong>Prediction accuracy:</strong> {safePredictionAccuracy.score != null ? `${safePredictionAccuracy.score}/100` : "n/a"}</div>
                   <div><strong>Last prediction review:</strong> {latestPredictionReview ? `${latestPredictionReview.label} • ${latestPredictionReview.score}/100` : "n/a"}</div>
-                  <div><strong>Adaptation:</strong> {adaptationWeights ? `${adaptationWeights.active ? "active" : "idle"} • ${adaptationWeights.confidence}/100` : "n/a"}</div>
+                  <div><strong>Adaptation:</strong> {safeAdaptation.isAvailable ? `${safeAdaptation.active ? "active" : "idle"} • ${safeAdaptation.confidence ?? "—"}/100` : "n/a"}</div>
                   <div><strong>Recalibration:</strong> {recalibrationSignal.state}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
@@ -1501,6 +1528,9 @@ export default function DashboardView(props: Props) {
             ) : null}
 
                     <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSignal.state}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      Score {recalibrationSignal.score ?? "—"} • Triggers {Array.isArray(recalibrationSignal.triggers) ? recalibrationSignal.triggers.length : 0}
+                    </div>
                     <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                       {recalibrationSignal.note}
                     </div>
@@ -1762,6 +1792,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
