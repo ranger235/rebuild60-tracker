@@ -9,6 +9,7 @@ import type { FrictionProfile } from "../lib/frictionEngine";
 import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../lib/behaviorFingerprint";
 import type { PredictionAccuracySummary, PredictionReviewEntry } from "../lib/predictionReview";
 import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "../lib/adaptationWeights";
+import type { RecalibrationAction } from "../lib/recalibrationActions";
 import {
   normalizeAdaptationState,
   normalizeBehaviorFingerprint,
@@ -127,6 +128,7 @@ type Props = {
   adaptationWeights: AdaptationWeights | null;
   mutationLedger: MutationLedgerEntry[];
   recalibrationState: RecalibrationState | null;
+  recalibrationAction: RecalibrationAction | null;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -1579,6 +1581,7 @@ export default function DashboardView(props: Props) {
                   <div><strong>Recalibration scope:</strong> {recalibrationSignal.recommendedScope.length ? recalibrationSignal.recommendedScope.join(", ") : "none"}</div>
                   <div><strong>Freeze recommended:</strong> {recalibrationSignal.freezeRecommended ? "yes" : "no"}</div>
                   <div><strong>Probation:</strong> {recalibrationSignal.probationCyclesRemaining ? `${recalibrationSignal.probationCyclesRemaining} cycle(s)` : "none"}</div>
+                  <div><strong>Current recalibration action:</strong> {recalibrationAction ? `${recalibrationAction.scope} • ${recalibrationAction.type} • ${recalibrationAction.status}` : "none"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1601,6 +1604,32 @@ export default function DashboardView(props: Props) {
                       {recalibrationSignal.probationCyclesRemaining ? ` • Probation ${recalibrationSignal.probationCyclesRemaining}` : ""}
                     </div>
                   </div>
+
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>Current recalibration action</div>
+                    {recalibrationAction ? (
+                      <>
+                        <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationAction.scope} • {recalibrationAction.type}</div>
+                        <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                          Status {recalibrationAction.status} • Freeze {recalibrationAction.freezeAdaptation ? "on" : "off"} • Probation {recalibrationAction.probationCyclesRemaining}
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                          {recalibrationAction.reason}
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                          Confidence {recalibrationAction.before.predictionConfidence ?? "—"} → {recalibrationAction.after.predictionConfidence ?? "—"} • Focus {recalibrationAction.before.expectedFocusProbability ?? "—"}% → {recalibrationAction.after.expectedFocusProbability ?? "—"}%
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+                          Completion {recalibrationAction.before.expectedCompletionLabel ?? "—"} → {recalibrationAction.after.expectedCompletionLabel ?? "—"}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                        No recalibration action is active right now. When conservative drift becomes strong enough, this card will show the exact bounded intervention and probation state.
+                      </div>
+                    )}
+                  </div>
+
                 </div>
               </div>
             ) : null}
@@ -1858,6 +1887,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
