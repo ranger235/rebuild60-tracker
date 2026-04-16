@@ -1,4 +1,4 @@
-import { localdb } from "./localdb";
+import { localdb } from "../localdb";
 import type { BehaviorFingerprint, PredictionScaffold } from "./behaviorFingerprint";
 import { summarizePredictionReviews, type PredictionAccuracySummary, type PredictionReviewEntry } from "./predictionReview";
 import type { PreferenceHistoryEntry } from "./preferenceLearning";
@@ -184,4 +184,5 @@ export async function persistLoopMemoryArtifacts(
     updatedAt: now,
   })));
 }
+
 
