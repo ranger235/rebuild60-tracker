@@ -30,11 +30,22 @@ export type MutationLedgerEntry = {
   reasons: string[];
 };
 
+export type RecalibrationPhase = "stable" | "watch" | "suggested" | "recalibrating" | "probation";
+export type RecalibrationScope = "prediction" | "fingerprint" | "adaptation" | "timing" | "exercise_identity" | "split_confidence";
+
 export type RecalibrationState = {
-  state: "Not needed" | "Watch closely" | "Suggested" | "Probation";
+  phase: RecalibrationPhase;
+  state: "Not needed" | "Watch closely" | "Suggested" | "Recalibrating" | "Probation";
   score: number;
+  confidence: number;
+  evidenceWindow: number;
   note: string;
   triggers: string[];
+  triggerSummary: string;
+  recommendedScope: RecalibrationScope[];
+  freezeRecommended: boolean;
+  probationCyclesRemaining: number;
+  lastEvaluatedAt: string;
 };
 
 const MAIN_NEEDS: NeedKey[] = ["horizontalPress", "verticalPress", "row", "verticalPull", "quadDominant", "hinge"];
@@ -100,6 +111,41 @@ function summarizeChanges(appliedChanges: string[]): string {
   return `${appliedChanges[0]} + ${appliedChanges.length - 1} more bounded adjustment${appliedChanges.length - 1 === 1 ? "" : "s"}.`;
 }
 
+function legacyRecalibrationState(params: {
+  state: RecalibrationState["state"];
+  score: number;
+  confidence: number;
+  evidenceWindow: number;
+  note: string;
+  triggers: string[];
+}): RecalibrationState {
+  const phaseMap: Record<RecalibrationState["state"], RecalibrationPhase> = {
+    "Not needed": "stable",
+    "Watch closely": "watch",
+    Suggested: "suggested",
+    Recalibrating: "recalibrating",
+    Probation: "probation",
+  };
+  const scope: RecalibrationScope[] = [];
+  if (params.triggers.some((t) => /prediction|focus|completion|delay/i.test(t))) scope.push("prediction");
+  if (params.triggers.some((t) => /substitution|exercise/i.test(t))) scope.push("exercise_identity");
+  if (params.triggers.some((t) => /split|lower/i.test(t))) scope.push("split_confidence");
+  return {
+    phase: phaseMap[params.state],
+    state: params.state,
+    score: params.score,
+    confidence: params.confidence,
+    evidenceWindow: params.evidenceWindow,
+    note: params.note,
+    triggers: params.triggers,
+    triggerSummary: params.triggers.length ? params.triggers[0] : params.note,
+    recommendedScope: scope,
+    freezeRecommended: params.state === "Suggested",
+    probationCyclesRemaining: params.state === "Probation" ? 2 : 0,
+    lastEvaluatedAt: new Date().toISOString(),
+  };
+}
+
 export function deriveAdaptationLayer(params: {
   history: PreferenceHistoryEntry[];
   fingerprint: BehaviorFingerprint | null;
@@ -119,12 +165,14 @@ export function deriveAdaptationLayer(params: {
     return {
       weights: emptyWeights(),
       ledgerEntry: null,
-      recalibrationState: {
+      recalibrationState: legacyRecalibrationState({
         state: "Not needed",
         score: 55,
+        confidence: 35,
+        evidenceWindow: 0,
         note: "The loop needs a little more completed-session evidence before bounded adaptation should mean anything.",
         triggers: ["Insufficient closed-loop evidence."],
-      },
+      }),
     };
   }
 
@@ -242,33 +290,41 @@ export function deriveAdaptationLayer(params: {
 
   let recalibrationState: RecalibrationState;
   if (evidenceWindow < 2) {
-    recalibrationState = {
-      state: "Not needed",
-      score: recalibrationScore,
-      note: "The loop has signal again, but it still needs more than one closed cycle before formal recalibration means much.",
-      triggers: triggers.length ? triggers : ["Evidence is still thin."],
-    };
+    recalibrationState = legacyRecalibrationState({
+        state: "Not needed",
+        score: recalibrationScore,
+        confidence,
+        evidenceWindow,
+        note: "The loop has signal again, but it still needs more than one closed cycle before formal recalibration means much.",
+        triggers: triggers.length ? triggers : ["Evidence is still thin."],
+      });
   } else if (recalibrationScore < 60 || (accuracyScore < 65 && split < 60)) {
-    recalibrationState = {
-      state: "Suggested",
-      score: recalibrationScore,
-      note: "Recent closed-loop evidence is shaky enough that bounded recalibration should be on the table.",
-      triggers: triggers,
-    };
+    recalibrationState = legacyRecalibrationState({
+        state: "Suggested",
+        score: recalibrationScore,
+        confidence,
+        evidenceWindow,
+        note: "Recent closed-loop evidence is shaky enough that bounded recalibration should be on the table.",
+        triggers,
+      });
   } else if (recalibrationScore < 75 || triggers.length >= 2) {
-    recalibrationState = {
-      state: "Watch closely",
-      score: recalibrationScore,
-      note: "The loop still fits, but the model has enough friction showing that it should keep a weather eye on drift.",
-      triggers: triggers,
-    };
+    recalibrationState = legacyRecalibrationState({
+        state: "Watch closely",
+        score: recalibrationScore,
+        confidence,
+        evidenceWindow,
+        note: "The loop still fits, but the model has enough friction showing that it should keep a weather eye on drift.",
+        triggers,
+      });
   } else {
-    recalibrationState = {
-      state: "Not needed",
-      score: recalibrationScore,
-      note: "The current self-model is fitting recent behavior well enough that recalibration can wait.",
-      triggers: triggers.length ? triggers : ["No major bounded-mutation triggers are flashing right now."],
-    };
+    recalibrationState = legacyRecalibrationState({
+        state: "Not needed",
+        score: recalibrationScore,
+        confidence,
+        evidenceWindow,
+        note: "The current self-model is fitting recent behavior well enough that recalibration can wait.",
+        triggers: triggers.length ? triggers : ["No major bounded-mutation triggers are flashing right now."],
+      });
   }
 
   const weights: AdaptationWeights = {
@@ -350,3 +406,4 @@ export function applyAdaptationToPreferenceSignals(
     reasons,
   };
 }
+
