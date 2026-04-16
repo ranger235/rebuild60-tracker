@@ -23,6 +23,7 @@ import { deriveBehaviorFingerprint, buildPredictionScaffold, type BehaviorFinger
 import { buildPredictionReview, summarizePredictionReviews, type PredictionAccuracySummary, type PredictionReviewEntry } from "./lib/predictionReview";
 import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts, rebuildLoopMemoryFromPreferenceHistory } from "./lib/loopMemory";
 import { applyAdaptationToPreferenceSignals, deriveAdaptationLayer, type AdaptationWeights, type MutationLedgerEntry, type RecalibrationState } from "./lib/adaptationWeights";
+import { evaluateRecalibrationState } from "./lib/recalibrationPolicy";
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
@@ -3591,7 +3592,6 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const adaptationSnapshot = adaptationLayer.weights.active
         ? adaptationLayer.weights
         : (persistedAdaptationWeights ?? adaptationLayer.weights);
-      const recalibrationSnapshot = adaptationLayer.recalibrationState ?? persistedRecalibrationState;
       let mutationLedgerSnapshot = persistedMutationLedger.slice();
       if (adaptationLayer.ledgerEntry) {
         const latestKey = mutationLedgerSnapshot[0]?.generatedAt ?? "";
@@ -3601,6 +3601,15 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           mutationLedgerSnapshot = [adaptationLayer.ledgerEntry];
         }
       }
+      const recalibrationSnapshot = evaluateRecalibrationState({
+        behaviorFingerprint: behaviorFingerprintSnapshot,
+        predictionAccuracySummary: predictionAccuracySnapshot,
+        predictionReviewHistory: predictionReviewSnapshot,
+        preferenceHistory: prefHistory,
+        adaptationWeights: adaptationSnapshot,
+        mutationLedger: mutationLedgerSnapshot,
+        previousState: persistedRecalibrationState,
+      });
       setAdaptationWeights(adaptationSnapshot);
       setMutationLedger(mutationLedgerSnapshot);
       setRecalibrationState(recalibrationSnapshot);
@@ -4407,6 +4416,8 @@ async function syncNow() {
     </div>
   );
 }
+
+
 
 
 
