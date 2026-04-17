@@ -10,6 +10,7 @@ import type { BehaviorFingerprint, BehaviorTrait, PredictionScaffold } from "../
 import type { PredictionAccuracySummary, PredictionReviewEntry } from "../lib/predictionReview";
 import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "../lib/adaptationWeights";
 import type { RecalibrationAction } from "../lib/recalibrationActions";
+import type { SandboxScenarioName } from "../lib/recalibrationScenarioPresets";
 import {
   normalizeAdaptationState,
   normalizeBehaviorFingerprint,
@@ -129,8 +130,11 @@ type Props = {
   mutationLedger: MutationLedgerEntry[];
   recalibrationState: RecalibrationState | null;
   recalibrationAction: RecalibrationAction | null;
-  recalibrationSandboxEnabled?: boolean;
-  onToggleRecalibrationSandbox?: (next: boolean) => void;
+  recalibrationSandboxEnabled: boolean;
+  recalibrationSandboxScenario: string | null;
+  onToggleRecalibrationSandbox: (next: boolean) => void | Promise<void>;
+  onApplyRecalibrationSandboxScenario: (name: SandboxScenarioName) => void | Promise<void>;
+  onResetRecalibrationSandbox: () => void | Promise<void>;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -700,8 +704,6 @@ export default function DashboardView(props: Props) {
     adaptationWeights,
     mutationLedger,
     recalibrationState,
-    recalibrationSandboxEnabled = false,
-    onToggleRecalibrationSandbox,
     timerOn,
     setTimerOn,
     secs,
@@ -737,6 +739,9 @@ export default function DashboardView(props: Props) {
   const latestMutation = safeMutationLedger.latest;
   const latestRecalibrationAction = props.recalibrationAction || null;
   const activeRecalibrationAction = latestRecalibrationAction?.status === "active" ? latestRecalibrationAction : null;
+  const sandboxScenarioLabel = props.recalibrationSandboxScenario
+    ? props.recalibrationSandboxScenario.replace(/_/g, " ")
+    : null;
   const auditTrail = buildAuditTrail(brainSnapshot, safePreferenceHistory);
   const selfCorrectionNarrative = buildSelfCorrectionNarrative(brainSnapshot, safePreferenceHistory, modelFit);
   const fallbackRecalibration = buildRecalibrationSignal(safePreferenceHistory, modelFit);
@@ -1609,8 +1614,9 @@ export default function DashboardView(props: Props) {
                   <div><strong>Action:</strong> {latestRecalibrationAction ? `${latestRecalibrationAction.status} • ${fmtRecalibrationActionType(latestRecalibrationAction.type)}` : "none"}</div>
                   <div><strong>Action freeze:</strong> {latestRecalibrationAction?.freezeAdaptation ? "on" : "off"}</div>
                   <div><strong>Action probation:</strong> {latestRecalibrationAction?.probationCyclesRemaining ? `${latestRecalibrationAction.probationCyclesRemaining} cycle(s)` : "none"}</div>
-                  <div><strong>Sandbox:</strong> {recalibrationSandboxEnabled ? "on" : "off"}</div>
-                  <div><strong>Sandbox writes:</strong> {recalibrationSandboxEnabled ? "isolated" : "production"}</div>
+                  <div><strong>Sandbox:</strong> {props.recalibrationSandboxEnabled ? "on" : "off"}</div>
+                  <div><strong>Sandbox writes:</strong> {props.recalibrationSandboxEnabled ? "isolated" : "production"}</div>
+                  <div><strong>Sandbox scenario:</strong> {sandboxScenarioLabel ?? "none"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1651,31 +1657,33 @@ export default function DashboardView(props: Props) {
                       <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                         {describeRecalibrationAction(latestRecalibrationAction)}
                       </div>
-                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
-                        <div style={{ fontSize: 12, opacity: 0.75 }}>Sandbox validation lane</div>
-                        <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSandboxEnabled ? "Recalibration sandbox active" : "Recalibration sandbox off"}</div>
-                        <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                          {recalibrationSandboxEnabled
-                            ? "Recalibration reads and writes are isolated from production state while sandbox mode is on."
-                            : "Production recalibration state is live. Turn sandbox on before running validation scenarios."}
-                        </div>
-                        <div style={{ marginTop: 8 }}>
-                          <button
-                            type="button"
-                            onClick={() => onToggleRecalibrationSandbox?.(!recalibrationSandboxEnabled)}
-                            style={{
-                              border: "1px solid #d0d0d0",
-                              borderRadius: 8,
-                              padding: "8px 10px",
-                              background: recalibrationSandboxEnabled ? "#fff4e8" : "#f7f7f7",
-                              cursor: onToggleRecalibrationSandbox ? "pointer" : "default",
-                              fontWeight: 700,
-                            }}
-                            disabled={!onToggleRecalibrationSandbox}
-                          >
-                            {recalibrationSandboxEnabled ? "Turn sandbox off" : "Turn sandbox on"}
-                          </button>
-                        </div>
+                    </div>
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>Sandbox validation lane</div>
+                      <div style={{ marginTop: 6, fontWeight: 800 }}>
+                        {props.recalibrationSandboxEnabled ? "Recalibration sandbox active" : "Recalibration sandbox off"}
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 13, lineHeight: 1.45 }}>
+                        {props.recalibrationSandboxEnabled
+                          ? "Recalibration reads and writes are isolated from production state while sandbox mode is on."
+                          : "Production recalibration state is live. Turn sandbox on before running validation scenarios."}
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+                        Scenario: {sandboxScenarioLabel ?? "baseline"}
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                        <button onClick={() => props.onToggleRecalibrationSandbox(!props.recalibrationSandboxEnabled)}>
+                          {props.recalibrationSandboxEnabled ? "Turn sandbox off" : "Turn sandbox on"}
+                        </button>
+                        {props.recalibrationSandboxEnabled ? (
+                          <>
+                            <button onClick={() => props.onApplyRecalibrationSandboxScenario("prediction_drift")}>Prediction drift</button>
+                            <button onClick={() => props.onApplyRecalibrationSandboxScenario("exercise_identity_drift")}>Exercise identity drift</button>
+                            <button onClick={() => props.onApplyRecalibrationSandboxScenario("adaptation_failure")}>Adaptation failure</button>
+                            <button onClick={() => props.onApplyRecalibrationSandboxScenario("false_alarm")}>False alarm</button>
+                            <button onClick={() => props.onResetRecalibrationSandbox()}>Reset sandbox</button>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1936,6 +1944,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
