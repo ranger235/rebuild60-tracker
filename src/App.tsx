@@ -22,6 +22,7 @@ import { derivePreferenceSignals, type PreferenceHistoryEntry } from "./lib/pref
 import { deriveBehaviorFingerprint, buildPredictionScaffold, type BehaviorFingerprint, type PredictionScaffold } from "./lib/behaviorFingerprint";
 import { buildPredictionReview, summarizePredictionReviews, type PredictionAccuracySummary, type PredictionReviewEntry } from "./lib/predictionReview";
 import { loadLoopMemoryArtifacts, persistLoopMemoryArtifacts, rebuildLoopMemoryFromPreferenceHistory } from "./lib/loopMemory";
+import { loadSandboxLoopMemoryArtifacts, loadSandboxRecalibrationArtifacts, persistSandboxLoopMemoryArtifacts, persistSandboxRecalibrationArtifacts, seedRecalibrationSandbox } from "./lib/recalibrationSandbox";
 import { applyAdaptationToPreferenceSignals, deriveAdaptationLayer, type AdaptationWeights, type MutationLedgerEntry, type RecalibrationState } from "./lib/adaptationWeights";
 import { evaluateRecalibrationState } from "./lib/recalibrationPolicy";
 import { applyPredictionRecalibrationToScaffold, executePredictionRecalibration, shouldExecutePredictionRecalibration, stepRecalibrationActionProbation, type RecalibrationAction } from "./lib/recalibrationActions";
@@ -40,6 +41,8 @@ function todayISO(): string {
 function uuid(): string {
   return crypto.randomUUID();
 }
+
+const RECALIBRATION_SANDBOX_STORAGE_KEY = "rebuild60_recalibration_sandbox_v1";
 
 function makeDefaultSplitDay(name: string, slots: string[]) {
   return {
@@ -1092,6 +1095,14 @@ useEffect(() => {
   const [mutationLedger, setMutationLedger] = useState<MutationLedgerEntry[]>([]);
   const [recalibrationState, setRecalibrationState] = useState<RecalibrationState | null>(null);
   const [recalibrationAction, setRecalibrationAction] = useState<RecalibrationAction | null>(null);
+  const [isRecalibrationSandboxEnabled, setIsRecalibrationSandboxEnabled] = useState<boolean>(() => {
+    try {
+      if (typeof window === "undefined") return false;
+      return window.localStorage.getItem(RECALIBRATION_SANDBOX_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
 
@@ -1139,9 +1150,18 @@ useEffect(() => {
 }, [userId]);
 
 useEffect(() => {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(RECALIBRATION_SANDBOX_STORAGE_KEY, isRecalibrationSandboxEnabled ? "1" : "0");
+  } catch {
+    // ignore sandbox toggle persistence failures
+  }
+}, [isRecalibrationSandboxEnabled]);
+
+useEffect(() => {
   if (!userId) return;
   void refreshDashboard(splitConfig);
-}, [userId, splitConfig]);
+}, [userId, splitConfig, isRecalibrationSandboxEnabled]);
 
 async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   if (!userId) return;
@@ -3436,7 +3456,14 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
 
       let preferenceSignals = null;
       let prefHistory: PreferenceHistoryEntry[] = [];
-      let loopMemory = userId ? await loadLoopMemoryArtifacts(userId) : null;
+      if (userId && isRecalibrationSandboxEnabled) {
+        await seedRecalibrationSandbox(userId);
+      }
+      let loopMemory = userId
+        ? (isRecalibrationSandboxEnabled
+            ? await loadSandboxLoopMemoryArtifacts(userId)
+            : await loadLoopMemoryArtifacts(userId))
+        : null;
       let predictionAccuracySnapshot: PredictionAccuracySummary | null = loopMemory?.predictionAccuracySummary ?? null;
       let predictionReviewSnapshot: PredictionReviewEntry[] = loopMemory?.predictionReviewHistory ?? [];
       let persistedAdaptationWeights: AdaptationWeights | null = null;
@@ -3445,16 +3472,24 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       let persistedRecalibrationAction: RecalibrationAction | null = null;
       try {
         if (userId) {
-          const [adaptRow, ledgerRow, recalRow, actionRow] = await Promise.all([
-            localdb.localSettings.get([userId, "adaptation_weights_v1"]),
-            localdb.localSettings.get([userId, "mutation_ledger_v1"]),
-            localdb.localSettings.get([userId, "recalibration_state_v1"]),
-            localdb.localSettings.get([userId, "recalibration_action_v1"]),
-          ]);
-          persistedAdaptationWeights = adaptRow?.value ? JSON.parse(adaptRow.value) as AdaptationWeights : null;
-          persistedMutationLedger = ledgerRow?.value ? JSON.parse(ledgerRow.value) as MutationLedgerEntry[] : [];
-          persistedRecalibrationState = recalRow?.value ? JSON.parse(recalRow.value) as RecalibrationState : null;
-          persistedRecalibrationAction = actionRow?.value ? JSON.parse(actionRow.value) as RecalibrationAction : null;
+          if (isRecalibrationSandboxEnabled) {
+            const sandboxArtifacts = await loadSandboxRecalibrationArtifacts(userId);
+            persistedAdaptationWeights = sandboxArtifacts.adaptationWeights;
+            persistedMutationLedger = Array.isArray(sandboxArtifacts.mutationLedger) ? sandboxArtifacts.mutationLedger : [];
+            persistedRecalibrationState = sandboxArtifacts.recalibrationState;
+            persistedRecalibrationAction = sandboxArtifacts.recalibrationAction;
+          } else {
+            const [adaptRow, ledgerRow, recalRow, actionRow] = await Promise.all([
+              localdb.localSettings.get([userId, "adaptation_weights_v1"]),
+              localdb.localSettings.get([userId, "mutation_ledger_v1"]),
+              localdb.localSettings.get([userId, "recalibration_state_v1"]),
+              localdb.localSettings.get([userId, "recalibration_action_v1"]),
+            ]);
+            persistedAdaptationWeights = adaptRow?.value ? JSON.parse(adaptRow.value) as AdaptationWeights : null;
+            persistedMutationLedger = ledgerRow?.value ? JSON.parse(ledgerRow.value) as MutationLedgerEntry[] : [];
+            persistedRecalibrationState = recalRow?.value ? JSON.parse(recalRow.value) as RecalibrationState : null;
+            persistedRecalibrationAction = actionRow?.value ? JSON.parse(actionRow.value) as RecalibrationAction : null;
+          }
           if (!Array.isArray(persistedMutationLedger)) persistedMutationLedger = [];
         }
         const prefRow = userId
@@ -3504,7 +3539,11 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         if (prefHistory.length && (!loopMemory?.predictionReviewHistory?.length || !loopMemory?.predictionAccuracySummary)) {
           const rebuiltLoopMemory = rebuildLoopMemoryFromPreferenceHistory(prefHistory);
           if (userId) {
-            await persistLoopMemoryArtifacts(userId, rebuiltLoopMemory);
+            if (isRecalibrationSandboxEnabled) {
+              await persistSandboxLoopMemoryArtifacts(userId, rebuiltLoopMemory);
+            } else {
+              await persistLoopMemoryArtifacts(userId, rebuiltLoopMemory);
+            }
           }
           loopMemory = {
             behaviorFingerprint: loopMemory?.behaviorFingerprint ?? null,
@@ -3608,9 +3647,15 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         : (loopMemory?.behaviorFingerprint ?? deriveBehaviorFingerprint([], friction));
       setBehaviorFingerprint(behaviorFingerprintSnapshot);
       if (userId && canDeriveLoopState) {
-        await persistLoopMemoryArtifacts(userId, {
-          behaviorFingerprint: behaviorFingerprintSnapshot,
-        });
+        if (isRecalibrationSandboxEnabled) {
+          await persistSandboxLoopMemoryArtifacts(userId, {
+            behaviorFingerprint: behaviorFingerprintSnapshot,
+          });
+        } else {
+          await persistLoopMemoryArtifacts(userId, {
+            behaviorFingerprint: behaviorFingerprintSnapshot,
+          });
+        }
       }
 
       const adaptationLayer = deriveAdaptationLayer({
@@ -3698,9 +3743,15 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
             frictionProfile: friction,
           }));
       if (userId && canDeriveLoopState && predictionSnapshot) {
-        await persistLoopMemoryArtifacts(userId, {
-          predictionScaffold: predictionSnapshot,
-        });
+        if (isRecalibrationSandboxEnabled) {
+          await persistSandboxLoopMemoryArtifacts(userId, {
+            predictionScaffold: predictionSnapshot,
+          });
+        } else {
+          await persistLoopMemoryArtifacts(userId, {
+            predictionScaffold: predictionSnapshot,
+          });
+        }
       }
       if (hasActiveRecalibrationAction) {
         predictionSnapshot = applyPredictionRecalibrationToScaffold(predictionSnapshot, recalibrationActionSnapshot);
@@ -3726,13 +3777,22 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       setRecalibrationState(recalibrationSnapshot);
       setRecalibrationAction(recalibrationActionSnapshot);
       if (userId) {
-        const now = Date.now();
-        await Promise.all([
-          localdb.localSettings.put({ user_id: userId, key: "adaptation_weights_v1", value: JSON.stringify(adaptationSnapshot), updatedAt: now }),
-          localdb.localSettings.put({ user_id: userId, key: "mutation_ledger_v1", value: JSON.stringify(mutationLedgerSnapshot), updatedAt: now }),
-          localdb.localSettings.put({ user_id: userId, key: "recalibration_state_v1", value: JSON.stringify(recalibrationSnapshot), updatedAt: now }),
-          localdb.localSettings.put({ user_id: userId, key: "recalibration_action_v1", value: JSON.stringify(recalibrationActionSnapshot), updatedAt: now }),
-        ]);
+        if (isRecalibrationSandboxEnabled) {
+          await persistSandboxRecalibrationArtifacts(userId, {
+            adaptationWeights: adaptationSnapshot,
+            mutationLedger: mutationLedgerSnapshot,
+            recalibrationState: recalibrationSnapshot,
+            recalibrationAction: recalibrationActionSnapshot,
+          });
+        } else {
+          const now = Date.now();
+          await Promise.all([
+            localdb.localSettings.put({ user_id: userId, key: "adaptation_weights_v1", value: JSON.stringify(adaptationSnapshot), updatedAt: now }),
+            localdb.localSettings.put({ user_id: userId, key: "mutation_ledger_v1", value: JSON.stringify(mutationLedgerSnapshot), updatedAt: now }),
+            localdb.localSettings.put({ user_id: userId, key: "recalibration_state_v1", value: JSON.stringify(recalibrationSnapshot), updatedAt: now }),
+            localdb.localSettings.put({ user_id: userId, key: "recalibration_action_v1", value: JSON.stringify(recalibrationActionSnapshot), updatedAt: now }),
+          ]);
+        }
       }
 
       const fingerprint = buildRecommendationFingerprint(brain);
@@ -4349,6 +4409,8 @@ async function syncNow() {
           mutationLedger={mutationLedger}
           recalibrationState={recalibrationState}
           recalibrationAction={recalibrationAction}
+          recalibrationSandboxEnabled={isRecalibrationSandboxEnabled}
+          onToggleRecalibrationSandbox={setIsRecalibrationSandboxEnabled}
           timelineWeeks={timelineWeeks}
           brainSnapshot={brainSnapshot}
           frictionProfile={frictionProfile}
@@ -4466,6 +4528,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
