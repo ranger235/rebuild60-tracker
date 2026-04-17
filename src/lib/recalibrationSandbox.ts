@@ -1,49 +1,42 @@
 import { localdb } from "../localdb";
-import type { LoopMemoryArtifacts } from "./loopMemory";
-import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "./adaptationWeights";
-import type { RecalibrationAction } from "./recalibrationActions";
 import type { BehaviorFingerprint, PredictionScaffold } from "./behaviorFingerprint";
 import type { PredictionAccuracySummary, PredictionReviewEntry } from "./predictionReview";
+import type { PreferenceHistoryEntry } from "./preferenceLearning";
+import type { AdaptationWeights, MutationLedgerEntry, RecalibrationState } from "./adaptationWeights";
+import type { RecalibrationAction } from "./recalibrationActions";
 
-type MaybeRowValue = string | null;
-
-type SandboxRecalibrationArtifacts = {
+export type RecalibrationSandboxSnapshot = {
+  behaviorFingerprint: BehaviorFingerprint | null;
+  predictionScaffold: PredictionScaffold | null;
+  predictionReviewHistory: PredictionReviewEntry[];
+  predictionAccuracySummary: PredictionAccuracySummary | null;
+  preferenceHistory: PreferenceHistoryEntry[];
   adaptationWeights: AdaptationWeights | null;
   mutationLedger: MutationLedgerEntry[];
   recalibrationState: RecalibrationState | null;
   recalibrationAction: RecalibrationAction | null;
+  scenarioName: string | null;
 };
 
-const SANDBOX_KEY_MAP: Record<string, string> = {
-  behavior_fingerprint_v1: "behavior_fingerprint_test_v1",
-  prediction_scaffold_v1: "prediction_scaffold_test_v1",
-  prediction_cycle_reviews_v1: "prediction_cycle_reviews_test_v1",
-  prediction_review_summary_v1: "prediction_review_summary_test_v1",
-  adaptation_weights_v1: "adaptation_weights_test_v1",
-  mutation_ledger_v1: "mutation_ledger_test_v1",
-  recalibration_state_v1: "recalibration_state_test_v1",
-  recalibration_action_v1: "recalibration_action_test_v1",
+export const SANDBOX_KEYS = {
+  behaviorFingerprint: "behavior_fingerprint_test_v1",
+  predictionScaffold: "prediction_scaffold_test_v1",
+  predictionReviewHistory: "prediction_cycle_reviews_test_v1",
+  predictionAccuracySummary: "prediction_review_summary_test_v1",
+  preferenceHistory: "recommendation_feedback_test_v1",
+  adaptationWeights: "adaptation_weights_test_v1",
+  mutationLedger: "mutation_ledger_test_v1",
+  recalibrationState: "recalibration_state_test_v1",
+  recalibrationAction: "recalibration_action_test_v1",
+  meta: "recalibration_sandbox_meta_v1",
+} as const;
+
+type SandboxMeta = {
+  seededAt: string;
+  scenarioName: string | null;
 };
 
-function nowTs(): number {
-  return Date.now();
-}
-
-async function getSettingValue(userId: string, key: string): Promise<MaybeRowValue> {
-  const row = await localdb.localSettings.get([userId, key]);
-  return row?.value ?? null;
-}
-
-async function putSettingValue(userId: string, key: string, value: string | null): Promise<void> {
-  await localdb.localSettings.put({
-    user_id: userId,
-    key,
-    value: value ?? "null",
-    updatedAt: nowTs(),
-  });
-}
-
-function safeParse<T>(raw: string | null): T | null {
+function safeParse<T>(raw: string | null | undefined): T | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as T;
@@ -52,82 +45,92 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-export function getSandboxKey(realKey: string): string {
-  return SANDBOX_KEY_MAP[realKey] ?? `${realKey.replace(/_v1$/, "")}_test_v1`;
+async function getValue(userId: string, key: string): Promise<string | null> {
+  const row = await localdb.localSettings.get([userId, key]);
+  return row?.value ?? null;
 }
 
-export async function seedRecalibrationSandbox(userId: string): Promise<void> {
-  const keys = Object.keys(SANDBOX_KEY_MAP);
-  const copies = await Promise.all(keys.map(async (realKey) => {
-    const sandboxKey = getSandboxKey(realKey);
-    const [realValue, sandboxValue] = await Promise.all([
-      getSettingValue(userId, realKey),
-      getSettingValue(userId, sandboxKey),
-    ]);
-    if (sandboxValue != null || realValue == null) return null;
-    return { sandboxKey, realValue };
-  }));
-
-  const writes = copies.filter((row): row is { sandboxKey: string; realValue: string } => !!row);
-  if (!writes.length) return;
-  await Promise.all(writes.map((row) => putSettingValue(userId, row.sandboxKey, row.realValue)));
+async function putValue(userId: string, key: string, value: unknown): Promise<void> {
+  await localdb.localSettings.put({
+    user_id: userId,
+    key,
+    value: JSON.stringify(value),
+    updatedAt: Date.now(),
+  });
 }
 
-export async function loadSandboxLoopMemoryArtifacts(userId: string): Promise<LoopMemoryArtifacts> {
-  const [behaviorRaw, predictionRaw, reviewHistoryRaw, reviewSummaryRaw] = await Promise.all([
-    getSettingValue(userId, getSandboxKey("behavior_fingerprint_v1")),
-    getSettingValue(userId, getSandboxKey("prediction_scaffold_v1")),
-    getSettingValue(userId, getSandboxKey("prediction_cycle_reviews_v1")),
-    getSettingValue(userId, getSandboxKey("prediction_review_summary_v1")),
+export async function loadRecalibrationSandboxSnapshot(userId: string): Promise<RecalibrationSandboxSnapshot | null> {
+  const [behaviorRaw, predictionRaw, reviewRaw, summaryRaw, prefRaw, adaptationRaw, ledgerRaw, recalRaw, actionRaw, metaRaw] = await Promise.all([
+    getValue(userId, SANDBOX_KEYS.behaviorFingerprint),
+    getValue(userId, SANDBOX_KEYS.predictionScaffold),
+    getValue(userId, SANDBOX_KEYS.predictionReviewHistory),
+    getValue(userId, SANDBOX_KEYS.predictionAccuracySummary),
+    getValue(userId, SANDBOX_KEYS.preferenceHistory),
+    getValue(userId, SANDBOX_KEYS.adaptationWeights),
+    getValue(userId, SANDBOX_KEYS.mutationLedger),
+    getValue(userId, SANDBOX_KEYS.recalibrationState),
+    getValue(userId, SANDBOX_KEYS.recalibrationAction),
+    getValue(userId, SANDBOX_KEYS.meta),
   ]);
+
+  const hasAny = [behaviorRaw, predictionRaw, reviewRaw, summaryRaw, prefRaw, adaptationRaw, ledgerRaw, recalRaw, actionRaw, metaRaw].some(Boolean);
+  if (!hasAny) return null;
+
+  const meta = safeParse<SandboxMeta>(metaRaw);
+  const reviewHistory = safeParse<unknown>(reviewRaw);
+  const preferenceHistory = safeParse<unknown>(prefRaw);
+  const mutationLedger = safeParse<unknown>(ledgerRaw);
 
   return {
     behaviorFingerprint: safeParse<BehaviorFingerprint>(behaviorRaw),
     predictionScaffold: safeParse<PredictionScaffold>(predictionRaw),
-    predictionReviewHistory: safeParse<PredictionReviewEntry[]>(reviewHistoryRaw) ?? [],
-    predictionAccuracySummary: safeParse<PredictionAccuracySummary>(reviewSummaryRaw),
-  };
-}
-
-export async function persistSandboxLoopMemoryArtifacts(userId: string, updates: Partial<LoopMemoryArtifacts>): Promise<void> {
-  const writes: Array<{ key: string; value: string }> = [];
-  if (updates.behaviorFingerprint) {
-    writes.push({ key: getSandboxKey("behavior_fingerprint_v1"), value: JSON.stringify(updates.behaviorFingerprint) });
-  }
-  if (updates.predictionScaffold) {
-    writes.push({ key: getSandboxKey("prediction_scaffold_v1"), value: JSON.stringify(updates.predictionScaffold) });
-  }
-  if (updates.predictionReviewHistory) {
-    writes.push({ key: getSandboxKey("prediction_cycle_reviews_v1"), value: JSON.stringify(updates.predictionReviewHistory) });
-  }
-  if (updates.predictionAccuracySummary) {
-    writes.push({ key: getSandboxKey("prediction_review_summary_v1"), value: JSON.stringify(updates.predictionAccuracySummary) });
-  }
-  if (!writes.length) return;
-  await Promise.all(writes.map((row) => putSettingValue(userId, row.key, row.value)));
-}
-
-export async function loadSandboxRecalibrationArtifacts(userId: string): Promise<SandboxRecalibrationArtifacts> {
-  const [adaptRaw, ledgerRaw, recalRaw, actionRaw] = await Promise.all([
-    getSettingValue(userId, getSandboxKey("adaptation_weights_v1")),
-    getSettingValue(userId, getSandboxKey("mutation_ledger_v1")),
-    getSettingValue(userId, getSandboxKey("recalibration_state_v1")),
-    getSettingValue(userId, getSandboxKey("recalibration_action_v1")),
-  ]);
-
-  return {
-    adaptationWeights: safeParse<AdaptationWeights>(adaptRaw),
-    mutationLedger: safeParse<MutationLedgerEntry[]>(ledgerRaw) ?? [],
+    predictionReviewHistory: Array.isArray(reviewHistory) ? (reviewHistory as PredictionReviewEntry[]) : [],
+    predictionAccuracySummary: safeParse<PredictionAccuracySummary>(summaryRaw),
+    preferenceHistory: Array.isArray(preferenceHistory) ? (preferenceHistory as PreferenceHistoryEntry[]) : [],
+    adaptationWeights: safeParse<AdaptationWeights>(adaptationRaw),
+    mutationLedger: Array.isArray(mutationLedger) ? (mutationLedger as MutationLedgerEntry[]) : [],
     recalibrationState: safeParse<RecalibrationState>(recalRaw),
     recalibrationAction: safeParse<RecalibrationAction>(actionRaw),
+    scenarioName: meta?.scenarioName ?? null,
   };
 }
 
-export async function persistSandboxRecalibrationArtifacts(userId: string, updates: SandboxRecalibrationArtifacts): Promise<void> {
+export async function persistRecalibrationSandboxSnapshot(userId: string, updates: Partial<RecalibrationSandboxSnapshot>): Promise<void> {
+  const tasks: Promise<void>[] = [];
+  const mapping: Array<[keyof RecalibrationSandboxSnapshot, string]> = [
+    ["behaviorFingerprint", SANDBOX_KEYS.behaviorFingerprint],
+    ["predictionScaffold", SANDBOX_KEYS.predictionScaffold],
+    ["predictionReviewHistory", SANDBOX_KEYS.predictionReviewHistory],
+    ["predictionAccuracySummary", SANDBOX_KEYS.predictionAccuracySummary],
+    ["preferenceHistory", SANDBOX_KEYS.preferenceHistory],
+    ["adaptationWeights", SANDBOX_KEYS.adaptationWeights],
+    ["mutationLedger", SANDBOX_KEYS.mutationLedger],
+    ["recalibrationState", SANDBOX_KEYS.recalibrationState],
+    ["recalibrationAction", SANDBOX_KEYS.recalibrationAction],
+  ];
+  for (const [field, key] of mapping) {
+    if (Object.prototype.hasOwnProperty.call(updates, field)) {
+      tasks.push(putValue(userId, key, updates[field]));
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "scenarioName")) {
+    const currentMeta = safeParse<SandboxMeta>(await getValue(userId, SANDBOX_KEYS.meta)) ?? { seededAt: new Date().toISOString(), scenarioName: null };
+    tasks.push(putValue(userId, SANDBOX_KEYS.meta, { ...currentMeta, scenarioName: updates.scenarioName ?? null } satisfies SandboxMeta));
+  }
+  if (tasks.length) await Promise.all(tasks);
+}
+
+export async function seedRecalibrationSandboxSnapshot(userId: string, snapshot: RecalibrationSandboxSnapshot): Promise<void> {
   await Promise.all([
-    putSettingValue(userId, getSandboxKey("adaptation_weights_v1"), JSON.stringify(updates.adaptationWeights)),
-    putSettingValue(userId, getSandboxKey("mutation_ledger_v1"), JSON.stringify(updates.mutationLedger ?? [])),
-    putSettingValue(userId, getSandboxKey("recalibration_state_v1"), JSON.stringify(updates.recalibrationState)),
-    putSettingValue(userId, getSandboxKey("recalibration_action_v1"), JSON.stringify(updates.recalibrationAction)),
+    putValue(userId, SANDBOX_KEYS.behaviorFingerprint, snapshot.behaviorFingerprint),
+    putValue(userId, SANDBOX_KEYS.predictionScaffold, snapshot.predictionScaffold),
+    putValue(userId, SANDBOX_KEYS.predictionReviewHistory, snapshot.predictionReviewHistory),
+    putValue(userId, SANDBOX_KEYS.predictionAccuracySummary, snapshot.predictionAccuracySummary),
+    putValue(userId, SANDBOX_KEYS.preferenceHistory, snapshot.preferenceHistory),
+    putValue(userId, SANDBOX_KEYS.adaptationWeights, snapshot.adaptationWeights),
+    putValue(userId, SANDBOX_KEYS.mutationLedger, snapshot.mutationLedger),
+    putValue(userId, SANDBOX_KEYS.recalibrationState, snapshot.recalibrationState),
+    putValue(userId, SANDBOX_KEYS.recalibrationAction, snapshot.recalibrationAction),
+    putValue(userId, SANDBOX_KEYS.meta, { seededAt: new Date().toISOString(), scenarioName: snapshot.scenarioName ?? null } satisfies SandboxMeta),
   ]);
 }
