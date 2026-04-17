@@ -129,6 +129,8 @@ type Props = {
   mutationLedger: MutationLedgerEntry[];
   recalibrationState: RecalibrationState | null;
   recalibrationAction: RecalibrationAction | null;
+  recalibrationSandboxEnabled?: boolean;
+  onToggleRecalibrationSandbox?: (next: boolean) => void;
 
   timerOn: boolean;
   setTimerOn: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -698,6 +700,8 @@ export default function DashboardView(props: Props) {
     adaptationWeights,
     mutationLedger,
     recalibrationState,
+    recalibrationSandboxEnabled = false,
+    onToggleRecalibrationSandbox,
     timerOn,
     setTimerOn,
     secs,
@@ -1605,6 +1609,8 @@ export default function DashboardView(props: Props) {
                   <div><strong>Action:</strong> {latestRecalibrationAction ? `${latestRecalibrationAction.status} • ${fmtRecalibrationActionType(latestRecalibrationAction.type)}` : "none"}</div>
                   <div><strong>Action freeze:</strong> {latestRecalibrationAction?.freezeAdaptation ? "on" : "off"}</div>
                   <div><strong>Action probation:</strong> {latestRecalibrationAction?.probationCyclesRemaining ? `${latestRecalibrationAction.probationCyclesRemaining} cycle(s)` : "none"}</div>
+                  <div><strong>Sandbox:</strong> {recalibrationSandboxEnabled ? "on" : "off"}</div>
+                  <div><strong>Sandbox writes:</strong> {recalibrationSandboxEnabled ? "isolated" : "production"}</div>
                   <div><strong>Sync:</strong> {syncStatus}{lastSyncedAt ? ` • last ${lastSyncedAt}` : ""}</div>
                   <div><strong>Constraints:</strong> {(brainSnapshot?.nextSessionPriority?.constraintsApplied || []).length}</div>
                   <div><strong>Alerts:</strong> {(brainSnapshot?.recommendedSession?.alerts || []).length}</div>
@@ -1644,6 +1650,32 @@ export default function DashboardView(props: Props) {
                       </div>
                       <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                         {describeRecalibrationAction(latestRecalibrationAction)}
+                      </div>
+                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                        <div style={{ fontSize: 12, opacity: 0.75 }}>Sandbox validation lane</div>
+                        <div style={{ marginTop: 6, fontWeight: 800 }}>{recalibrationSandboxEnabled ? "Recalibration sandbox active" : "Recalibration sandbox off"}</div>
+                        <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                          {recalibrationSandboxEnabled
+                            ? "Recalibration reads and writes are isolated from production state while sandbox mode is on."
+                            : "Production recalibration state is live. Turn sandbox on before running validation scenarios."}
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => onToggleRecalibrationSandbox?.(!recalibrationSandboxEnabled)}
+                            style={{
+                              border: "1px solid #d0d0d0",
+                              borderRadius: 8,
+                              padding: "8px 10px",
+                              background: recalibrationSandboxEnabled ? "#fff4e8" : "#f7f7f7",
+                              cursor: onToggleRecalibrationSandbox ? "pointer" : "default",
+                              fontWeight: 700,
+                            }}
+                            disabled={!onToggleRecalibrationSandbox}
+                          >
+                            {recalibrationSandboxEnabled ? "Turn sandbox off" : "Turn sandbox on"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1904,6 +1936,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
