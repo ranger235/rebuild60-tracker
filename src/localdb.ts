@@ -83,6 +83,8 @@ export type LocalWorkoutExercise = ExerciseTags & {
   session_id: string;
   name: string;
   sort_order: number;
+  exercise_library_id?: string | null;
+  exercise_family_id?: string | null;
 };
 
 export type LoadType = "weight" | "band" | "bodyweight";
@@ -119,6 +121,8 @@ export type LocalWorkoutTemplateExercise = ExerciseTags & {
   template_id: string;
   name: string;
   sort_order: number;
+  exercise_library_id?: string | null;
+  exercise_family_id?: string | null;
 };
 
 
@@ -241,6 +245,9 @@ export class RebuildDB extends Dexie {
 }
 
 export const localdb = new RebuildDB();
+
+
+
 
 
 
