@@ -176,6 +176,65 @@ function lowerCostInReducedVolume(slot: Slot, key: string): boolean {
 }
 
 
+
+function repeatPenaltyForCandidate(
+  slot: Slot,
+  candidateKey: string,
+  hist: CandidateHistory | null,
+  mode: "Progression" | "Base" | "Reduced volume",
+  meta: ReturnType<typeof getExerciseByKey>
+): { penalty: number; tags: string[] } {
+  if (!hist) return { penalty: 0, tags: [] };
+
+  const tags: string[] = [];
+  let penalty = 0;
+  const daysAgo = hist.lastPerformedDaysAgo ?? null;
+  const recentSets = hist.recentSets ?? 0;
+  const priority = meta?.priority ?? 0.6;
+  const cluster = meta?.cluster ?? "";
+
+  if (typeof daysAgo === "number") {
+    if (daysAgo <= 2) {
+      penalty += slotIsAnchor(slot) ? 14 : 10;
+      tags.push("Recent repeat drag");
+    } else if (daysAgo <= 4) {
+      penalty += slotIsAnchor(slot) ? 9 : 6;
+      tags.push("Recent repeat drag");
+    } else if (daysAgo <= 6) {
+      penalty += slotIsAnchor(slot) ? 5 : 3;
+      tags.push("Repeat caution");
+    }
+  }
+
+  if (recentSets >= 8) {
+    penalty += slotIsAnchor(slot) ? 4 : 2;
+    tags.push("Overfamiliarity check");
+  }
+
+  if (slot === "PrimaryRow") {
+    if (candidateKey === "chest_supported_row") {
+      penalty += mode === "Reduced volume" ? 6 : 12;
+      tags.push("Setup friction bias");
+    }
+    if (cluster === "row_anchor" && typeof daysAgo === "number" && daysAgo <= 5 && priority < 1) {
+      penalty += 4;
+      tags.push("Anchor rotation nudge");
+    }
+  }
+
+  if (slot === "VerticalPull" && candidateKey === "lat_pulldown" && typeof daysAgo === "number" && daysAgo <= 4) {
+    penalty += mode === "Reduced volume" ? 2 : 6;
+    tags.push("Vertical pull rotation nudge");
+  }
+
+  if ((slot === "RearDelts" || slot === "Pump" || slot === "Biceps" || slot === "Triceps") && typeof daysAgo === "number" && daysAgo <= 4) {
+    penalty += 3;
+    tags.push("Accessory repeat drag");
+  }
+
+  return { penalty, tags };
+}
+
 function slotNoveltyPressure(slot: Slot): number {
   if (slot === "Pump" || slot === "RearDelts" || slot === "Biceps" || slot === "Triceps" || slot === "Calves") return 0.65;
   if (slot === "SecondaryRow" || slot === "SecondaryPress" || slot === "SecondaryQuad" || slot === "Hamstrings") return 0.45;
@@ -224,8 +283,6 @@ export function scoreCandidateForSlot(
     if (daysAgo >= 8) {
       score += 10;
       tags.push("Fresh");
-    } else if (daysAgo <= 3) {
-      score -= 6;
     }
   }
 
@@ -240,7 +297,7 @@ export function scoreCandidateForSlot(
   }
 
   if (mode === "Reduced volume" && lowerCostInReducedVolume(slot, candidateKey)) {
-    score += 10;
+    score += candidateKey === "chest_supported_row" ? 4 : 8;
     tags.push("Recovery-friendly");
   }
 
@@ -284,8 +341,14 @@ export function scoreCandidateForSlot(
     }
   }
 
+  const repeatPenalty = repeatPenaltyForCandidate(slot, candidateKey, hist, mode, meta);
+  if (repeatPenalty.penalty > 0) {
+    score -= repeatPenalty.penalty;
+    tags.push(...repeatPenalty.tags);
+  }
+
   if (tags.includes("Familiar") && !tags.includes("Fresh")) {
-    score += 6;
+    score += 4;
   }
   if (tags.includes("Fresh")) {
     score += 4;
@@ -310,4 +373,5 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
 
