@@ -18,14 +18,23 @@ async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?
 
 async function mustDeleteAffectRows(
   promise: Promise<{ data: any[] | null; error: any } | { data?: any[] | null; error?: any }>,
-  context: string
+  context: string,
+  options?: { allowMissing?: boolean; verify?: () => Promise<void> }
 ) {
   const result: any = await promise;
   if (result?.error) throw result.error;
   const rows = Array.isArray(result?.data) ? result.data : [];
   if (rows.length === 0) {
-    console.error("DELETE NO-OP", `${context} affected 0 rows`);
-    throw new Error(`${context} affected 0 rows`);
+    const message = `${context} affected 0 rows`;
+    if (options?.allowMissing) {
+      console.warn("DELETE NO-OP (treated as success)", message);
+      if (options.verify) {
+        await options.verify();
+      }
+      return rows;
+    }
+    console.error("DELETE NO-OP", message);
+    throw new Error(message);
   }
   return rows;
 }
@@ -162,7 +171,11 @@ async function processOp(op: PendingOp["op"], payload: any) {
       await must(supabase.from("workout_sets").delete().eq("exercise_id", exercise_id));
       await mustDeleteAffectRows(
         supabase.from("workout_exercises").delete().eq("id", exercise_id).select("id"),
-        `delete_exercise for ${exercise_id}`
+        `delete_exercise for ${exercise_id}`,
+        {
+          allowMissing: true,
+          verify: () => verifyRowMissingSoft("workout_exercises", "id", exercise_id)
+        }
       );
       return;
     }
@@ -292,6 +305,8 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
+
 
 
 
