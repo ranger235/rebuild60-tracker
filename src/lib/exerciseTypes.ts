@@ -6,17 +6,27 @@ export type MovementPattern =
   | "vertical_push"
   | "horizontal_pull"
   | "vertical_pull"
-  | "squat"
-  | "hinge"
-  | "knee_flexion"
-  | "knee_extension"
-  | "split_squat"
+  | "rear_delt"
   | "elbow_flexion"
   | "elbow_extension"
-  | "rear_delt"
-  | "lateral_delt"
-  | "chest_isolation"
-  | "calves";
+  | "squat"
+  | "hinge"
+  | "lunge"
+  | "knee_flexion"
+  | "calves"
+  | "other";
+
+export type EquipmentTag =
+  | "barbell"
+  | "dumbbell"
+  | "bench"
+  | "rack"
+  | "cable"
+  | "machine"
+  | "bodyweight"
+  | "band"
+  | "ssb"
+  | "other";
 
 export type MuscleTag =
   | "chest"
@@ -24,24 +34,14 @@ export type MuscleTag =
   | "side_delts"
   | "rear_delts"
   | "triceps"
-  | "upper_back"
   | "lats"
+  | "upper_back"
   | "biceps"
   | "quads"
-  | "glutes"
   | "hamstrings"
-  | "calves";
-
-export type EquipmentTag =
-  | "barbell"
-  | "dumbbell"
-  | "bench"
-  | "rack"
-  | "machine"
-  | "cable"
-  | "bodyweight"
-  | "band"
-  | "ssb";
+  | "glutes"
+  | "calves"
+  | "other";
 
 export type RoleTag =
   | "anchor"
@@ -60,9 +60,9 @@ export type ExerciseDefinition = {
   secondaryMuscles: MuscleTag[];
   equipment: EquipmentTag[];
   roleTags: RoleTag[];
-  family?: string;
-  fatigue?: "low" | "medium" | "high";
-  compound?: boolean;
+  family: string;
+  fatigue: "low" | "medium" | "high";
+  compound: boolean;
   unilateral?: boolean;
   active?: boolean;
 };

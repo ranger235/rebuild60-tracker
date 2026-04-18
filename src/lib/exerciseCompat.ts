@@ -1,28 +1,26 @@
 import { getExerciseByKey, resolveExerciseAlias } from "./exerciseRegistry";
 
-function normalizeInput(input: string): string {
+function normalize(input: string): string {
   return String(input || "")
-    .toLowerCase()
     .trim()
-    .replace(/[_\-]/g, " ")
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+    .toLowerCase()
+    .replace(/[()]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
-function compactInput(input: string): string {
-  return normalizeInput(input).replace(/\s+/g, "");
+export function normalizeExerciseInput(input: string): string {
+  return normalize(input);
 }
 
 export function resolveExerciseKey(input: string): string {
-  const compact = compactInput(input);
-  const aliasHit = resolveExerciseAlias(compact);
+  const normalized = normalize(input);
+  if (!normalized) return normalized;
+  const aliasHit = resolveExerciseAlias(normalized);
   if (aliasHit) return aliasHit;
-
-  const normalized = normalizeInput(input).replace(/\s+/g, "_");
   const direct = getExerciseByKey(normalized);
   if (direct) return direct.key;
-
   return normalized;
 }
 

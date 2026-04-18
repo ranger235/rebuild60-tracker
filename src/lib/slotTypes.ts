@@ -15,7 +15,7 @@ export type Slot =
   | "Hamstrings"
   | "Calves";
 
-export const ALL_SLOTS: readonly Slot[] = [
+export const ALL_SLOTS: Slot[] = [
   "PrimaryPress",
   "SecondaryPress",
   "Shoulders",
@@ -31,4 +31,4 @@ export const ALL_SLOTS: readonly Slot[] = [
   "SecondaryQuad",
   "Hamstrings",
   "Calves",
-] as const;
+];

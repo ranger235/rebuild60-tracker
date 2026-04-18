@@ -1,806 +1,689 @@
-import type { ExerciseDefinition, ExerciseKey, MovementPattern, MuscleTag, RoleTag } from "./exerciseTypes";
+import type {
+  ExerciseDefinition,
+  ExerciseKey,
+  MovementPattern,
+  MuscleTag,
+  RoleTag,
+} from "./exerciseTypes";
 import type { Slot } from "./slotTypes";
 
-type SlotQuery = {
-  anyMovement?: readonly MovementPattern[];
-  anyPrimaryMuscle?: readonly MuscleTag[];
-  anyRole?: readonly RoleTag[];
-  compound?: boolean;
-  preferredOrder: readonly ExerciseKey[];
+function normalizeAlias(input: string): string {
+  return String(input || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[()]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+type ExerciseSeedInput = {
+  key: ExerciseKey;
+  canonicalName: string;
+  aliases?: string[];
+  movementPatterns: MovementPattern[];
+  primaryMuscles: MuscleTag[];
+  secondaryMuscles?: MuscleTag[];
+  equipment: ExerciseDefinition["equipment"];
+  roleTags: RoleTag[];
+  family: string;
+  fatigue: ExerciseDefinition["fatigue"];
+  compound: boolean;
+  unilateral?: boolean;
 };
 
+function seedExercise(input: ExerciseSeedInput): ExerciseDefinition {
+  const aliases = new Set<string>([
+    input.key,
+    input.canonicalName,
+    ...(input.aliases ?? []),
+  ].map(normalizeAlias).filter(Boolean));
+
+  return {
+    id: input.key,
+    key: input.key,
+    canonicalName: input.canonicalName,
+    aliases: [...aliases],
+    movementPatterns: [...input.movementPatterns],
+    primaryMuscles: [...input.primaryMuscles],
+    secondaryMuscles: [...(input.secondaryMuscles ?? [])],
+    equipment: [...input.equipment],
+    roleTags: [...input.roleTags],
+    family: input.family,
+    fatigue: input.fatigue,
+    compound: input.compound,
+    unilateral: input.unilateral,
+    active: true,
+  };
+}
+
 const EXERCISES: ExerciseDefinition[] = [
-  {
-    id: "bench_press",
+  seedExercise({
     key: "bench_press",
     canonicalName: "Bench Press",
-    aliases: ["bp", "bench", "bench press", "benchpress", "barbell bench", "barbell bench press", "flat bench", "flat bench press", "bb bench"],
+    aliases: ["bench", "barbell bench press"],
     movementPatterns: ["horizontal_push"],
     primaryMuscles: ["chest"],
     secondaryMuscles: ["front_delts", "triceps"],
     equipment: ["barbell", "bench", "rack"],
     roleTags: ["anchor", "primary"],
-    family: "bench_press",
+    family: "horizontal_press",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "incline_bench_press",
+  }),
+  seedExercise({
     key: "incline_bench_press",
     canonicalName: "Incline Bench Press",
-    aliases: ["incline bench", "incline bench press", "inclinebench", "inclinebenchpress", "incline barbell bench"],
-    movementPatterns: ["horizontal_push"],
-    primaryMuscles: ["chest"],
-    secondaryMuscles: ["front_delts", "triceps"],
+    aliases: ["incline bench", "incline barbell bench press"],
+    movementPatterns: ["horizontal_push", "vertical_push"],
+    primaryMuscles: ["chest", "front_delts"],
+    secondaryMuscles: ["triceps"],
     equipment: ["barbell", "bench", "rack"],
     roleTags: ["primary", "secondary"],
-    family: "bench_press",
+    family: "horizontal_press",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "dumbbell_bench_press",
+  }),
+  seedExercise({
     key: "dumbbell_bench_press",
     canonicalName: "DB Bench Press",
-    aliases: ["db bench", "db bench press", "dumbbell bench", "dumbbell bench press", "dbbp"],
+    aliases: ["db bench press", "dumbbell bench", "flat dumbbell press"],
     movementPatterns: ["horizontal_push"],
     primaryMuscles: ["chest"],
     secondaryMuscles: ["front_delts", "triceps"],
     equipment: ["dumbbell", "bench"],
     roleTags: ["primary", "secondary"],
-    family: "bench_press",
+    family: "horizontal_press",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "chest_press",
+  }),
+  seedExercise({
     key: "chest_press",
     canonicalName: "Chest Press",
-    aliases: ["chest press", "machine chest press"],
+    aliases: ["machine chest press"],
     movementPatterns: ["horizontal_push"],
     primaryMuscles: ["chest"],
     secondaryMuscles: ["front_delts", "triceps"],
     equipment: ["machine"],
     roleTags: ["primary", "secondary"],
-    family: "chest_press",
+    family: "horizontal_press",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "overhead_press",
+  }),
+  seedExercise({
     key: "overhead_press",
     canonicalName: "Overhead Press",
-    aliases: ["ohp", "overhead press", "military press"],
+    aliases: ["ohp", "standing overhead press"],
     movementPatterns: ["vertical_push"],
-    primaryMuscles: ["front_delts"],
-    secondaryMuscles: ["triceps", "chest"],
+    primaryMuscles: ["front_delts", "triceps"],
+    secondaryMuscles: ["chest"],
     equipment: ["barbell", "rack"],
     roleTags: ["primary", "secondary"],
-    family: "overhead_press",
+    family: "vertical_press",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "shoulder_press",
+  }),
+  seedExercise({
     key: "shoulder_press",
     canonicalName: "Shoulder Press",
-    aliases: ["shoulder press", "db shoulder press", "dumbbell shoulder press"],
+    aliases: ["machine shoulder press", "db shoulder press"],
     movementPatterns: ["vertical_push"],
     primaryMuscles: ["front_delts"],
     secondaryMuscles: ["triceps"],
-    equipment: ["dumbbell", "machine"],
+    equipment: ["machine", "dumbbell"],
     roleTags: ["secondary", "accessory"],
-    family: "overhead_press",
+    family: "vertical_press",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "lateral_raise",
+  }),
+  seedExercise({
     key: "lateral_raise",
     canonicalName: "Lateral Raise",
-    aliases: ["lateral raise", "db lateral raise", "side raise"],
-    movementPatterns: ["lateral_delt"],
+    aliases: ["db lateral raise", "side lateral raise"],
+    movementPatterns: ["vertical_push"],
     primaryMuscles: ["side_delts"],
     secondaryMuscles: [],
     equipment: ["dumbbell", "cable", "band"],
     roleTags: ["accessory", "pump"],
-    family: "lateral_raise",
+    family: "side_delt_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "rear_delt_fly",
+  }),
+  seedExercise({
     key: "rear_delt_fly",
     canonicalName: "Rear Delt Fly",
-    aliases: ["rear delt fly", "rear delt raise", "rear fly"],
+    aliases: ["rear delt raise", "reverse fly"],
     movementPatterns: ["rear_delt"],
     primaryMuscles: ["rear_delts"],
     secondaryMuscles: ["upper_back"],
-    equipment: ["dumbbell", "machine", "cable", "band"],
+    equipment: ["dumbbell", "machine", "cable"],
     roleTags: ["accessory", "pump"],
-    family: "rear_delt_fly",
+    family: "rear_delt_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "dip",
+  }),
+  seedExercise({
     key: "dip",
     canonicalName: "Dip",
-    aliases: ["dip", "dips"],
-    movementPatterns: ["horizontal_push", "elbow_extension"],
-    primaryMuscles: ["triceps", "chest"],
+    aliases: ["weighted dip", "bodyweight dip"],
+    movementPatterns: ["vertical_push"],
+    primaryMuscles: ["chest", "triceps"],
     secondaryMuscles: ["front_delts"],
-    equipment: ["bodyweight"],
-    roleTags: ["primary", "accessory"],
-    family: "dip",
+    equipment: ["bodyweight", "other"],
+    roleTags: ["secondary", "accessory"],
+    family: "dip_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "triceps_pressdown",
+  }),
+  seedExercise({
     key: "triceps_pressdown",
     canonicalName: "Triceps Pressdown",
-    aliases: ["triceps pressdown", "pressdown", "pushdown", "triceps pushdown"],
+    aliases: ["pressdown", "cable pressdown"],
     movementPatterns: ["elbow_extension"],
     primaryMuscles: ["triceps"],
-    secondaryMuscles: [],
     equipment: ["cable", "band"],
     roleTags: ["accessory", "pump"],
-    family: "triceps_extension",
+    family: "triceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "overhead_triceps_extension",
+  }),
+  seedExercise({
     key: "overhead_triceps_extension",
     canonicalName: "Overhead Triceps Extension",
-    aliases: ["overhead triceps extension", "overhead tricep extension", "triceps extension"],
+    aliases: ["overhead extension", "triceps extension"],
     movementPatterns: ["elbow_extension"],
     primaryMuscles: ["triceps"],
-    secondaryMuscles: [],
     equipment: ["dumbbell", "cable", "band"],
     roleTags: ["accessory"],
-    family: "triceps_extension",
+    family: "triceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "skullcrusher",
+  }),
+  seedExercise({
     key: "skullcrusher",
     canonicalName: "Skullcrusher",
-    aliases: ["skullcrusher", "skullcrushers", "lying triceps extension"],
+    aliases: ["lying triceps extension", "skull crusher"],
     movementPatterns: ["elbow_extension"],
     primaryMuscles: ["triceps"],
-    secondaryMuscles: [],
     equipment: ["barbell", "dumbbell", "bench"],
     roleTags: ["accessory"],
-    family: "triceps_extension",
-    fatigue: "low",
+    family: "triceps_isolation",
+    fatigue: "medium",
     compound: false,
-    active: true,
-  },
-  {
-    id: "push_up",
+  }),
+  seedExercise({
     key: "push_up",
     canonicalName: "Push-Up",
-    aliases: ["push up", "pushup", "push-up"],
+    aliases: ["pushup", "push ups", "pushups"],
     movementPatterns: ["horizontal_push"],
     primaryMuscles: ["chest"],
-    secondaryMuscles: ["triceps", "front_delts"],
+    secondaryMuscles: ["front_delts", "triceps"],
     equipment: ["bodyweight"],
-    roleTags: ["accessory", "pump"],
-    family: "push_up",
+    roleTags: ["pump", "accessory"],
+    family: "horizontal_press",
     fatigue: "low",
     compound: true,
-    active: true,
-  },
-  {
-    id: "pec_deck",
+  }),
+  seedExercise({
     key: "pec_deck",
     canonicalName: "Pec Deck",
-    aliases: ["pec deck", "pecdeck", "chest fly machine"],
-    movementPatterns: ["chest_isolation"],
+    aliases: ["pec fly", "machine fly"],
+    movementPatterns: ["horizontal_push"],
     primaryMuscles: ["chest"],
-    secondaryMuscles: [],
     equipment: ["machine"],
-    roleTags: ["pump"],
-    family: "chest_fly",
+    roleTags: ["pump", "accessory"],
+    family: "chest_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "barbell_row",
+  }),
+  seedExercise({
     key: "barbell_row",
     canonicalName: "Barbell Row",
-    aliases: ["barbell row", "bent over row", "bb row"],
+    aliases: ["bent over row", "bb row"],
     movementPatterns: ["horizontal_pull"],
     primaryMuscles: ["upper_back", "lats"],
-    secondaryMuscles: ["rear_delts", "biceps"],
+    secondaryMuscles: ["biceps"],
     equipment: ["barbell"],
     roleTags: ["anchor", "primary"],
-    family: "row",
+    family: "row_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "chest_supported_row",
+  }),
+  seedExercise({
     key: "chest_supported_row",
     canonicalName: "Chest Supported Row",
-    aliases: ["chest supported row", "chest supported rows"],
+    aliases: ["supported row", "chest-supported row"],
     movementPatterns: ["horizontal_pull"],
     primaryMuscles: ["upper_back", "lats"],
-    secondaryMuscles: ["rear_delts", "biceps"],
+    secondaryMuscles: ["biceps"],
     equipment: ["bench", "dumbbell", "machine"],
-    roleTags: ["primary", "secondary"],
-    family: "row",
+    roleTags: ["anchor", "primary", "secondary"],
+    family: "row_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "seated_cable_row",
+  }),
+  seedExercise({
     key: "seated_cable_row",
     canonicalName: "Seated Cable Row",
-    aliases: ["seated cable row", "cable row"],
+    aliases: ["cable row", "seated row"],
     movementPatterns: ["horizontal_pull"],
     primaryMuscles: ["upper_back", "lats"],
-    secondaryMuscles: ["biceps", "rear_delts"],
+    secondaryMuscles: ["biceps"],
     equipment: ["cable"],
-    roleTags: ["primary", "secondary"],
-    family: "row",
+    roleTags: ["anchor", "primary", "secondary"],
+    family: "row_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "t_bar_row",
+  }),
+  seedExercise({
     key: "t_bar_row",
     canonicalName: "T-Bar Row",
-    aliases: ["t bar row", "t-bar row", "tbar row"],
+    aliases: ["tbar row"],
     movementPatterns: ["horizontal_pull"],
     primaryMuscles: ["upper_back", "lats"],
-    secondaryMuscles: ["biceps", "rear_delts"],
-    equipment: ["machine", "barbell"],
-    roleTags: ["primary"],
-    family: "row",
+    secondaryMuscles: ["biceps"],
+    equipment: ["barbell", "machine", "other"],
+    roleTags: ["anchor", "primary"],
+    family: "row_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "pull_up",
+  }),
+  seedExercise({
     key: "pull_up",
     canonicalName: "Pull-Up",
-    aliases: ["pull up", "pullup", "pull-up"],
+    aliases: ["pullup", "pull up"],
     movementPatterns: ["vertical_pull"],
-    primaryMuscles: ["lats"],
-    secondaryMuscles: ["biceps", "upper_back"],
-    equipment: ["bodyweight"],
+    primaryMuscles: ["lats", "upper_back"],
+    secondaryMuscles: ["biceps"],
+    equipment: ["bodyweight", "other"],
     roleTags: ["anchor", "primary"],
-    family: "vertical_pull",
+    family: "vertical_pull_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "chin_up",
+  }),
+  seedExercise({
     key: "chin_up",
     canonicalName: "Chin-Up",
-    aliases: ["chin up", "chinup", "chin-up"],
+    aliases: ["chinup", "chin up"],
     movementPatterns: ["vertical_pull"],
     primaryMuscles: ["lats", "biceps"],
     secondaryMuscles: ["upper_back"],
-    equipment: ["bodyweight"],
+    equipment: ["bodyweight", "other"],
     roleTags: ["anchor", "primary"],
-    family: "vertical_pull",
+    family: "vertical_pull_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "lat_pulldown",
+  }),
+  seedExercise({
     key: "lat_pulldown",
     canonicalName: "Lat Pulldown",
-    aliases: ["lat pulldown", "latpulldown"],
+    aliases: ["pulldown", "lat pull down", "lat pull"],
     movementPatterns: ["vertical_pull"],
     primaryMuscles: ["lats"],
-    secondaryMuscles: ["biceps", "upper_back"],
-    equipment: ["cable", "machine"],
-    roleTags: ["primary", "secondary"],
-    family: "vertical_pull",
+    secondaryMuscles: ["upper_back", "biceps"],
+    equipment: ["cable", "machine", "band"],
+    roleTags: ["anchor", "primary", "secondary"],
+    family: "vertical_pull_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "assisted_pull_up",
+  }),
+  seedExercise({
     key: "assisted_pull_up",
     canonicalName: "Assisted Pull-Up",
-    aliases: ["assisted pull up", "assisted pull-up", "band assisted pull up"],
+    aliases: ["band assisted pull up", "assisted pullup"],
     movementPatterns: ["vertical_pull"],
-    primaryMuscles: ["lats"],
-    secondaryMuscles: ["biceps", "upper_back"],
-    equipment: ["bodyweight", "band", "machine"],
-    roleTags: ["secondary"],
-    family: "vertical_pull",
+    primaryMuscles: ["lats", "upper_back"],
+    secondaryMuscles: ["biceps"],
+    equipment: ["machine", "band", "bodyweight"],
+    roleTags: ["primary", "secondary"],
+    family: "vertical_pull_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "one_arm_dumbbell_row",
+  }),
+  seedExercise({
     key: "one_arm_dumbbell_row",
-    canonicalName: "One-Arm Dumbbell Row",
-    aliases: ["one arm dumbbell row", "one-arm dumbbell row", "db row", "single arm dumbbell row"],
+    canonicalName: "One-Arm DB Row",
+    aliases: ["one arm row", "single arm dumbbell row"],
     movementPatterns: ["horizontal_pull"],
     primaryMuscles: ["lats", "upper_back"],
-    secondaryMuscles: ["biceps", "rear_delts"],
+    secondaryMuscles: ["biceps"],
     equipment: ["dumbbell", "bench"],
-    roleTags: ["secondary"],
-    family: "row",
+    roleTags: ["secondary", "accessory"],
+    family: "row_pattern",
     fatigue: "medium",
     compound: true,
     unilateral: true,
-    active: true,
-  },
-  {
-    id: "face_pull",
+  }),
+  seedExercise({
     key: "face_pull",
     canonicalName: "Face Pull",
-    aliases: ["face pull", "facepull"],
-    movementPatterns: ["rear_delt", "horizontal_pull"],
+    aliases: ["rope face pull"],
+    movementPatterns: ["rear_delt"],
     primaryMuscles: ["rear_delts", "upper_back"],
-    secondaryMuscles: [],
     equipment: ["cable", "band"],
     roleTags: ["accessory", "pump"],
-    family: "rear_delt",
+    family: "rear_delt_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "reverse_pec_deck",
+  }),
+  seedExercise({
     key: "reverse_pec_deck",
     canonicalName: "Reverse Pec Deck",
-    aliases: ["reverse pec deck", "reverse pecdeck"],
+    aliases: ["reverse fly machine"],
     movementPatterns: ["rear_delt"],
     primaryMuscles: ["rear_delts"],
     secondaryMuscles: ["upper_back"],
     equipment: ["machine"],
     roleTags: ["accessory", "pump"],
-    family: "rear_delt",
+    family: "rear_delt_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "band_pull_apart",
+  }),
+  seedExercise({
     key: "band_pull_apart",
     canonicalName: "Band Pull-Apart",
-    aliases: ["band pull apart", "band pull-apart"],
+    aliases: ["band pull apart", "pull apart"],
     movementPatterns: ["rear_delt"],
     primaryMuscles: ["rear_delts", "upper_back"],
-    secondaryMuscles: [],
     equipment: ["band"],
     roleTags: ["accessory", "pump"],
-    family: "rear_delt",
+    family: "rear_delt_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "hammer_curl",
+  }),
+  seedExercise({
     key: "hammer_curl",
     canonicalName: "Hammer Curl",
-    aliases: ["hammer curl", "hammercurl"],
+    aliases: ["db hammer curl"],
     movementPatterns: ["elbow_flexion"],
     primaryMuscles: ["biceps"],
-    secondaryMuscles: [],
+    secondaryMuscles: ["upper_back"],
     equipment: ["dumbbell", "cable", "band"],
-    roleTags: ["accessory"],
-    family: "curl",
+    roleTags: ["accessory", "pump"],
+    family: "biceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "curl",
+  }),
+  seedExercise({
     key: "curl",
     canonicalName: "Curl",
-    aliases: ["curl", "curls", "bicep curl"],
+    aliases: ["barbell curl", "biceps curl"],
     movementPatterns: ["elbow_flexion"],
     primaryMuscles: ["biceps"],
-    secondaryMuscles: [],
     equipment: ["barbell", "dumbbell", "cable", "band"],
-    roleTags: ["accessory"],
-    family: "curl",
+    roleTags: ["accessory", "pump"],
+    family: "biceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "incline_dumbbell_curl",
+  }),
+  seedExercise({
     key: "incline_dumbbell_curl",
-    canonicalName: "Incline Dumbbell Curl",
-    aliases: ["incline dumbbell curl", "incline db curl"],
+    canonicalName: "Incline DB Curl",
+    aliases: ["incline curl", "incline dumbbell biceps curl"],
     movementPatterns: ["elbow_flexion"],
     primaryMuscles: ["biceps"],
-    secondaryMuscles: [],
     equipment: ["dumbbell", "bench"],
     roleTags: ["accessory"],
-    family: "curl",
+    family: "biceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "preacher_curl",
+  }),
+  seedExercise({
     key: "preacher_curl",
     canonicalName: "Preacher Curl",
-    aliases: ["preacher curl", "preachercurl"],
+    aliases: ["preacher curl machine"],
     movementPatterns: ["elbow_flexion"],
     primaryMuscles: ["biceps"],
-    secondaryMuscles: [],
     equipment: ["barbell", "dumbbell", "machine"],
     roleTags: ["accessory"],
-    family: "curl",
+    family: "biceps_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "ssb_squat",
+  }),
+  seedExercise({
     key: "ssb_squat",
     canonicalName: "SSB Squat",
-    aliases: ["ssb squat", "safety squat bar squat"],
+    aliases: ["safety squat bar squat", "safety squat"],
     movementPatterns: ["squat"],
     primaryMuscles: ["quads", "glutes"],
     secondaryMuscles: ["hamstrings"],
     equipment: ["ssb", "rack"],
     roleTags: ["anchor", "primary"],
-    family: "squat",
+    family: "squat_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "squat",
+  }),
+  seedExercise({
     key: "squat",
     canonicalName: "Squat",
-    aliases: ["squat", "back squat"],
+    aliases: ["barbell squat", "back squat"],
     movementPatterns: ["squat"],
     primaryMuscles: ["quads", "glutes"],
     secondaryMuscles: ["hamstrings"],
     equipment: ["barbell", "rack"],
     roleTags: ["anchor", "primary"],
-    family: "squat",
+    family: "squat_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "romanian_deadlift",
+  }),
+  seedExercise({
     key: "romanian_deadlift",
     canonicalName: "Romanian Deadlift",
-    aliases: ["romanian deadlift", "rdl"],
+    aliases: ["rdl"],
     movementPatterns: ["hinge"],
     primaryMuscles: ["hamstrings", "glutes"],
     secondaryMuscles: ["upper_back"],
     equipment: ["barbell", "dumbbell"],
-    roleTags: ["anchor", "primary", "secondary"],
-    family: "hinge",
+    roleTags: ["anchor", "primary"],
+    family: "hinge_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "deadlift",
+  }),
+  seedExercise({
     key: "deadlift",
     canonicalName: "Deadlift",
-    aliases: ["deadlift", "conventional deadlift"],
+    aliases: ["conventional deadlift"],
     movementPatterns: ["hinge"],
-    primaryMuscles: ["hamstrings", "glutes"],
-    secondaryMuscles: ["upper_back"],
+    primaryMuscles: ["hamstrings", "glutes", "upper_back"],
     equipment: ["barbell"],
     roleTags: ["anchor", "primary"],
-    family: "hinge",
+    family: "hinge_pattern",
     fatigue: "high",
     compound: true,
-    active: true,
-  },
-  {
-    id: "good_morning",
+  }),
+  seedExercise({
     key: "good_morning",
     canonicalName: "Good Morning",
-    aliases: ["good morning", "goodmorning"],
+    aliases: ["barbell good morning"],
     movementPatterns: ["hinge"],
     primaryMuscles: ["hamstrings", "glutes"],
     secondaryMuscles: ["upper_back"],
-    equipment: ["barbell"],
-    roleTags: ["secondary"],
-    family: "hinge",
+    equipment: ["barbell", "rack"],
+    roleTags: ["secondary", "accessory"],
+    family: "hinge_pattern",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "hamstring_curl",
+  }),
+  seedExercise({
     key: "hamstring_curl",
     canonicalName: "Hamstring Curl",
-    aliases: ["hamstring curl", "leg curl"],
-    movementPatterns: ["knee_flexion"],
+    aliases: ["leg curl", "lying leg curl"],
+    movementPatterns: ["knee_flexion", "hinge"],
     primaryMuscles: ["hamstrings"],
-    secondaryMuscles: [],
     equipment: ["machine", "band"],
     roleTags: ["secondary", "accessory"],
-    family: "hamstring_curl",
+    family: "hamstring_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "leg_extension",
+  }),
+  seedExercise({
     key: "leg_extension",
     canonicalName: "Leg Extension",
-    aliases: ["leg extension", "legextension"],
-    movementPatterns: ["knee_extension"],
+    aliases: ["quad extension"],
+    movementPatterns: ["squat"],
     primaryMuscles: ["quads"],
-    secondaryMuscles: [],
-    equipment: ["machine"],
+    equipment: ["machine", "band", "other"],
     roleTags: ["secondary", "accessory"],
-    family: "leg_extension",
+    family: "quad_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "split_squat",
+  }),
+  seedExercise({
     key: "split_squat",
     canonicalName: "Split Squat",
-    aliases: ["split squat", "splitsquat", "bulgarian split squat"],
-    movementPatterns: ["split_squat"],
+    aliases: ["bulgarian split squat", "split squat rear foot elevated"],
+    movementPatterns: ["lunge"],
     primaryMuscles: ["quads", "glutes"],
     secondaryMuscles: ["hamstrings"],
-    equipment: ["bodyweight", "dumbbell", "barbell"],
-    roleTags: ["secondary"],
-    family: "split_squat",
+    equipment: ["dumbbell", "barbell", "bodyweight"],
+    roleTags: ["secondary", "accessory"],
+    family: "lunge_pattern",
     fatigue: "medium",
     compound: true,
     unilateral: true,
-    active: true,
-  },
-  {
-    id: "glute_ham_raise",
+  }),
+  seedExercise({
     key: "glute_ham_raise",
     canonicalName: "Glute-Ham Raise",
-    aliases: ["glute ham raise", "ghr"],
+    aliases: ["ghr", "glute ham raise"],
     movementPatterns: ["knee_flexion", "hinge"],
     primaryMuscles: ["hamstrings", "glutes"],
-    secondaryMuscles: [],
-    equipment: ["machine", "bodyweight"],
-    roleTags: ["accessory"],
-    family: "hamstring_curl",
+    equipment: ["machine", "other"],
+    roleTags: ["secondary", "accessory"],
+    family: "hamstring_isolation",
     fatigue: "medium",
     compound: true,
-    active: true,
-  },
-  {
-    id: "seated_leg_curl",
+  }),
+  seedExercise({
     key: "seated_leg_curl",
     canonicalName: "Seated Leg Curl",
-    aliases: ["seated leg curl", "seatedlegcurl"],
-    movementPatterns: ["knee_flexion"],
+    aliases: ["seated hamstring curl"],
+    movementPatterns: ["knee_flexion", "hinge"],
     primaryMuscles: ["hamstrings"],
-    secondaryMuscles: [],
     equipment: ["machine"],
-    roleTags: ["accessory"],
-    family: "hamstring_curl",
+    roleTags: ["secondary", "accessory"],
+    family: "hamstring_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "calf_raise",
+  }),
+  seedExercise({
     key: "calf_raise",
-    canonicalName: "Calf Raise",
-    aliases: ["calf raise", "standing calf raise"],
+    canonicalName: "Standing Calf Raise",
+    aliases: ["standing calf raise"],
     movementPatterns: ["calves"],
     primaryMuscles: ["calves"],
-    secondaryMuscles: [],
-    equipment: ["bodyweight", "machine", "barbell", "dumbbell"],
+    equipment: ["machine", "bodyweight", "barbell", "dumbbell"],
     roleTags: ["accessory", "pump"],
-    family: "calf_raise",
+    family: "calf_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "seated_calf_raise",
+  }),
+  seedExercise({
     key: "seated_calf_raise",
     canonicalName: "Seated Calf Raise",
-    aliases: ["seated calf raise", "seatedcalfraise"],
+    aliases: [],
     movementPatterns: ["calves"],
     primaryMuscles: ["calves"],
-    secondaryMuscles: [],
-    equipment: ["machine", "dumbbell"],
+    equipment: ["machine", "other"],
     roleTags: ["accessory", "pump"],
-    family: "calf_raise",
+    family: "calf_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
-  {
-    id: "leg_press_calf_raise",
+  }),
+  seedExercise({
     key: "leg_press_calf_raise",
     canonicalName: "Leg Press Calf Raise",
-    aliases: ["leg press calf raise", "legpresscalfraise"],
+    aliases: ["calf press"],
     movementPatterns: ["calves"],
     primaryMuscles: ["calves"],
-    secondaryMuscles: [],
     equipment: ["machine"],
-    roleTags: ["pump"],
-    family: "calf_raise",
+    roleTags: ["accessory", "pump"],
+    family: "calf_isolation",
     fatigue: "low",
     compound: false,
-    active: true,
-  },
+  }),
 ];
 
-const EXERCISE_BY_KEY = new Map<ExerciseKey, ExerciseDefinition>();
-const EXERCISE_BY_ID = new Map<string, ExerciseDefinition>();
+const EXERCISE_BY_KEY = new Map<ExerciseKey, ExerciseDefinition>(EXERCISES.map((exercise) => [exercise.key, exercise]));
+const EXERCISE_BY_ID = new Map<string, ExerciseDefinition>(EXERCISES.map((exercise) => [exercise.id, exercise]));
 const ALIAS_TO_KEY = new Map<string, ExerciseKey>();
 
-function normalizeExerciseLookup(input: string): string {
-  return String(input || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[_\-]/g, " ")
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function compactExerciseLookup(input: string): string {
-  return normalizeExerciseLookup(input).replace(/\s+/g, "");
-}
-
 for (const exercise of EXERCISES) {
-  EXERCISE_BY_KEY.set(exercise.key, exercise);
-  EXERCISE_BY_ID.set(exercise.id, exercise);
-  ALIAS_TO_KEY.set(compactExerciseLookup(exercise.key), exercise.key);
-  ALIAS_TO_KEY.set(compactExerciseLookup(exercise.canonicalName), exercise.key);
   for (const alias of exercise.aliases) {
-    ALIAS_TO_KEY.set(compactExerciseLookup(alias), exercise.key);
+    if (!ALIAS_TO_KEY.has(alias)) {
+      ALIAS_TO_KEY.set(alias, exercise.key);
+    }
   }
 }
 
-const SLOT_QUERY_ADAPTER: Record<Slot, SlotQuery> = {
-  PrimaryPress: {
-    anyMovement: ["horizontal_push"],
-    anyRole: ["anchor", "primary"],
-    compound: true,
-    preferredOrder: ["bench_press", "incline_bench_press", "dumbbell_bench_press", "chest_press"],
-  },
-  SecondaryPress: {
-    anyMovement: ["horizontal_push", "vertical_push"],
-    anyRole: ["primary", "secondary"],
-    compound: true,
-    preferredOrder: ["incline_bench_press", "overhead_press", "dumbbell_bench_press", "shoulder_press"],
-  },
-  Shoulders: {
-    anyMovement: ["vertical_push", "lateral_delt", "rear_delt"],
-    anyPrimaryMuscle: ["front_delts", "side_delts", "rear_delts"],
-    anyRole: ["secondary", "accessory", "pump"],
-    preferredOrder: ["overhead_press", "shoulder_press", "lateral_raise", "rear_delt_fly"],
-  },
-  Triceps: {
-    anyMovement: ["elbow_extension", "horizontal_push"],
-    anyPrimaryMuscle: ["triceps"],
-    anyRole: ["primary", "accessory", "pump"],
-    preferredOrder: ["dip", "triceps_pressdown", "overhead_triceps_extension", "skullcrusher"],
-  },
-  Pump: {
-    anyMovement: ["lateral_delt", "elbow_extension", "horizontal_push", "chest_isolation"],
-    anyRole: ["accessory", "pump"],
-    preferredOrder: ["lateral_raise", "triceps_pressdown", "push_up", "pec_deck"],
-  },
-  PrimaryRow: {
-    anyMovement: ["horizontal_pull"],
-    anyRole: ["anchor", "primary"],
-    compound: true,
-    preferredOrder: ["barbell_row", "chest_supported_row", "seated_cable_row", "t_bar_row"],
-  },
-  VerticalPull: {
-    anyMovement: ["vertical_pull"],
-    anyRole: ["anchor", "primary", "secondary"],
-    compound: true,
-    preferredOrder: ["pull_up", "chin_up", "lat_pulldown", "assisted_pull_up"],
-  },
-  SecondaryRow: {
-    anyMovement: ["horizontal_pull"],
-    anyRole: ["primary", "secondary"],
-    compound: true,
-    preferredOrder: ["chest_supported_row", "seated_cable_row", "barbell_row", "one_arm_dumbbell_row"],
-  },
-  RearDelts: {
-    anyMovement: ["rear_delt"],
-    anyPrimaryMuscle: ["rear_delts"],
-    anyRole: ["accessory", "pump"],
-    preferredOrder: ["face_pull", "rear_delt_fly", "reverse_pec_deck", "band_pull_apart"],
-  },
-  Biceps: {
-    anyMovement: ["elbow_flexion"],
-    anyPrimaryMuscle: ["biceps"],
-    anyRole: ["accessory"],
-    preferredOrder: ["hammer_curl", "curl", "incline_dumbbell_curl", "preacher_curl"],
-  },
-  PrimarySquat: {
-    anyMovement: ["squat"],
-    anyRole: ["anchor", "primary"],
-    compound: true,
-    preferredOrder: ["ssb_squat", "squat"],
-  },
-  Hinge: {
-    anyMovement: ["hinge", "knee_flexion"],
-    anyPrimaryMuscle: ["hamstrings"],
-    anyRole: ["anchor", "primary", "secondary", "accessory"],
-    preferredOrder: ["romanian_deadlift", "deadlift", "good_morning", "hamstring_curl"],
-  },
-  SecondaryQuad: {
-    anyMovement: ["knee_extension", "split_squat"],
-    anyPrimaryMuscle: ["quads"],
-    anyRole: ["secondary", "accessory"],
-    preferredOrder: ["leg_extension", "split_squat"],
-  },
-  Hamstrings: {
-    anyMovement: ["knee_flexion", "hinge"],
-    anyPrimaryMuscle: ["hamstrings"],
-    anyRole: ["secondary", "accessory"],
-    preferredOrder: ["hamstring_curl", "romanian_deadlift", "glute_ham_raise", "seated_leg_curl"],
-  },
-  Calves: {
-    anyMovement: ["calves"],
-    anyPrimaryMuscle: ["calves"],
-    anyRole: ["accessory", "pump"],
-    preferredOrder: ["calf_raise", "seated_calf_raise", "leg_press_calf_raise"],
-  },
+type SlotRule = {
+  patterns?: MovementPattern[];
+  anyRoles?: RoleTag[];
+  allRoles?: RoleTag[];
+  families?: string[];
+  excludeKeys?: ExerciseKey[];
 };
 
-function uniqueKeys(items: readonly ExerciseDefinition[]): ExerciseKey[] {
-  const seen = new Set<string>();
-  const ordered: ExerciseKey[] = [];
-  for (const item of items) {
-    if (seen.has(item.key)) continue;
-    seen.add(item.key);
-    ordered.push(item.key);
+const SLOT_RULES: Record<Slot, SlotRule> = {
+  PrimaryPress: { patterns: ["horizontal_push"], anyRoles: ["anchor", "primary"] },
+  SecondaryPress: { patterns: ["horizontal_push", "vertical_push"], anyRoles: ["primary", "secondary"] },
+  Shoulders: { patterns: ["vertical_push", "rear_delt"], anyRoles: ["secondary", "accessory", "pump"] },
+  Triceps: { patterns: ["elbow_extension", "vertical_push"], families: ["triceps_isolation", "dip_pattern"] },
+  Pump: { patterns: ["horizontal_push", "vertical_push", "elbow_extension"], anyRoles: ["pump", "accessory"] },
+  PrimaryRow: { patterns: ["horizontal_pull"], anyRoles: ["anchor", "primary"] },
+  VerticalPull: { patterns: ["vertical_pull"], anyRoles: ["anchor", "primary", "secondary"] },
+  SecondaryRow: { patterns: ["horizontal_pull"], anyRoles: ["secondary", "accessory", "primary"] },
+  RearDelts: { patterns: ["rear_delt"], anyRoles: ["accessory", "pump"] },
+  Biceps: { patterns: ["elbow_flexion"], anyRoles: ["accessory", "pump"] },
+  PrimarySquat: { patterns: ["squat"], anyRoles: ["anchor", "primary"], excludeKeys: ["leg_extension", "leg_press_calf_raise"] },
+  Hinge: { patterns: ["hinge", "knee_flexion"], anyRoles: ["anchor", "primary", "secondary"] },
+  SecondaryQuad: { patterns: ["squat", "lunge"], anyRoles: ["secondary", "accessory"], excludeKeys: ["ssb_squat", "squat", "leg_press_calf_raise"] },
+  Hamstrings: { patterns: ["hinge", "knee_flexion"], anyRoles: ["secondary", "accessory", "primary"] },
+  Calves: { patterns: ["calves"], anyRoles: ["accessory", "pump"] },
+};
+
+const SLOT_ORDER: Record<Slot, ExerciseKey[]> = {
+  PrimaryPress: ["bench_press", "incline_bench_press", "dumbbell_bench_press", "chest_press"],
+  SecondaryPress: ["incline_bench_press", "overhead_press", "dumbbell_bench_press", "shoulder_press"],
+  Shoulders: ["overhead_press", "shoulder_press", "lateral_raise", "rear_delt_fly"],
+  Triceps: ["dip", "triceps_pressdown", "overhead_triceps_extension", "skullcrusher"],
+  Pump: ["lateral_raise", "triceps_pressdown", "push_up", "pec_deck"],
+  PrimaryRow: ["barbell_row", "chest_supported_row", "seated_cable_row", "t_bar_row"],
+  VerticalPull: ["pull_up", "chin_up", "lat_pulldown", "assisted_pull_up"],
+  SecondaryRow: ["chest_supported_row", "seated_cable_row", "barbell_row", "one_arm_dumbbell_row"],
+  RearDelts: ["face_pull", "rear_delt_fly", "reverse_pec_deck", "band_pull_apart"],
+  Biceps: ["hammer_curl", "curl", "incline_dumbbell_curl", "preacher_curl"],
+  PrimarySquat: ["ssb_squat", "squat"],
+  Hinge: ["romanian_deadlift", "deadlift", "good_morning", "hamstring_curl"],
+  SecondaryQuad: ["leg_extension", "split_squat"],
+  Hamstrings: ["hamstring_curl", "romanian_deadlift", "glute_ham_raise", "seated_leg_curl"],
+  Calves: ["calf_raise", "seated_calf_raise", "leg_press_calf_raise"],
+};
+
+function matchesSlotRule(exercise: ExerciseDefinition, rule: SlotRule): boolean {
+  if (rule.patterns?.length) {
+    const patternMatch = exercise.movementPatterns.some((pattern) => rule.patterns?.includes(pattern));
+    if (!patternMatch) return false;
   }
-  return ordered;
-}
-
-function matchesAny<T extends string>(needle: readonly T[] | undefined, haystack: readonly T[]): boolean {
-  if (!needle || needle.length === 0) return true;
-  return needle.some((value) => haystack.includes(value));
-}
-
-function matchesSlotQuery(exercise: ExerciseDefinition, query: SlotQuery): boolean {
-  if (query.compound !== undefined && Boolean(exercise.compound) !== query.compound) return false;
-  if (!matchesAny(query.anyMovement, exercise.movementPatterns)) return false;
-  if (!matchesAny(query.anyRole, exercise.roleTags)) return false;
-  if (!matchesAny(query.anyPrimaryMuscle, exercise.primaryMuscles)) return false;
+  if (rule.anyRoles?.length) {
+    const roleMatch = exercise.roleTags.some((role) => rule.anyRoles?.includes(role));
+    if (!roleMatch) return false;
+  }
+  if (rule.allRoles?.length) {
+    const allMatch = rule.allRoles.every((role) => exercise.roleTags.includes(role));
+    if (!allMatch) return false;
+  }
+  if (rule.families?.length && !rule.families.includes(exercise.family)) {
+    return false;
+  }
+  if (rule.excludeKeys?.includes(exercise.key)) {
+    return false;
+  }
   return exercise.active !== false;
+}
+
+function orderedUniqueKeys(keys: ExerciseKey[]): ExerciseKey[] {
+  return [...new Set(keys.filter(Boolean))];
 }
 
 export function getAllExercises(): ExerciseDefinition[] {
@@ -815,22 +698,27 @@ export function getExerciseById(id: string): ExerciseDefinition | null {
   return EXERCISE_BY_ID.get(String(id || "").trim()) ?? null;
 }
 
-export function resolveExerciseAlias(input: string): string | null {
-  return ALIAS_TO_KEY.get(compactExerciseLookup(input)) ?? null;
+export function resolveExerciseAlias(input: string): ExerciseKey | null {
+  return ALIAS_TO_KEY.get(normalizeAlias(input)) ?? null;
 }
 
 export function getExercisesForSlot(slot: Slot): ExerciseDefinition[] {
-  const query = SLOT_QUERY_ADAPTER[slot];
-  const preferred = query.preferredOrder
-    .map((key) => getExerciseByKey(key))
-    .filter((item): item is ExerciseDefinition => !!item)
-    .filter((item) => matchesSlotQuery(item, query));
+  const rule = SLOT_RULES[slot];
+  const orderedKeys = SLOT_ORDER[slot];
+  const matched = EXERCISES.filter((exercise) => matchesSlotRule(exercise, rule));
+  const matchedByKey = new Map(matched.map((exercise) => [exercise.key, exercise]));
 
-  const preferredSet = new Set(preferred.map((item) => item.key));
-  const fallback = EXERCISES.filter((item) => !preferredSet.has(item.key) && matchesSlotQuery(item, query));
-  return [...preferred, ...fallback];
+  const ordered = orderedKeys
+    .map((key) => matchedByKey.get(key) ?? null)
+    .filter((exercise): exercise is ExerciseDefinition => !!exercise);
+
+  const fallback = matched
+    .filter((exercise) => !orderedKeys.includes(exercise.key))
+    .sort((a, b) => a.canonicalName.localeCompare(b.canonicalName));
+
+  return [...ordered, ...fallback];
 }
 
-export function getExerciseKeysForSlot(slot: Slot): string[] {
-  return uniqueKeys(getExercisesForSlot(slot));
+export function getExerciseKeysForSlot(slot: Slot): ExerciseKey[] {
+  return orderedUniqueKeys(getExercisesForSlot(slot).map((exercise) => exercise.key));
 }
