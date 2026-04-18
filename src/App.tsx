@@ -1129,6 +1129,8 @@ useEffect(() => {
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
   const [splitConfig, setSplitConfig] = useState<TrainingSplitConfig | null>(null);
+  const splitConfigRef = useRef<TrainingSplitConfig | null>(null);
+  const refreshLocalUiFromDexieRef = useRef<null | (() => Promise<void>)>(null);
   const [equipmentProfileReady, setEquipmentProfileReady] = useState(false);
   const [equipmentProfileNonce, setEquipmentProfileNonce] = useState(0);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
@@ -1245,6 +1247,10 @@ useEffect(() => {
   void refreshDashboard(splitConfig);
 }, [userId, splitConfig, equipmentProfileReady, equipmentProfileNonce]);
 
+useEffect(() => {
+  splitConfigRef.current = splitConfig;
+}, [splitConfig]);
+
 async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   if (!userId) return;
   await localdb.localSettings.put({
@@ -1304,7 +1310,8 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   useEffect(() => {
     if (!userId) return;
     const stop = startAutoSync(setStatus, async () => {
-      await refreshLocalUiFromDexie();
+      const fn = refreshLocalUiFromDexieRef.current;
+      if (fn) await fn();
     }, (result) => {
       if (result.completed && result.failed === 0) {
         setLastSyncedAt(new Date().toLocaleTimeString());
@@ -1317,7 +1324,8 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
     if (!userId) return;
     void (async () => {
       const result = await runSyncPass(setStatus, async () => {
-        await refreshLocalUiFromDexie();
+        const fn = refreshLocalUiFromDexieRef.current;
+        if (fn) await fn();
       });
       if (result.completed && result.failed === 0) {
         setLastSyncedAt(new Date().toLocaleTimeString());
@@ -3803,7 +3811,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
       const brain = computeBrainSnapshot({
-        splitConfig: splitOverride ?? splitConfig,
+        splitConfig: splitOverride ?? splitConfigRef.current,
         recentSessionTitles: completedSessions.map((s) => s.title),
         recentCompletedSplitDays,
         sleepAvg7,
@@ -3993,6 +4001,10 @@ async function refreshLocalUiFromDexie() {
     await refreshDashboard();
   }
 }
+
+useEffect(() => {
+  refreshLocalUiFromDexieRef.current = refreshLocalUiFromDexie;
+});
 
 
 function buildCurrentRecalibrationSnapshot(): RecalibrationSandboxSnapshot {
@@ -4703,6 +4715,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
