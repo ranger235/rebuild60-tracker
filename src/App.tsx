@@ -32,6 +32,9 @@ import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseByKey } from "./lib/exerciseRegistry";
+import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
+import { setActiveEquipmentProfile } from "./lib/slotEngine";
+import type { EquipmentProfile } from "./lib/equipmentTypes";
 
 function todayISO(): string {
   const d = new Date();
@@ -1115,6 +1118,8 @@ useEffect(() => {
   const [brainSnapshot, setBrainSnapshot] = useState<BrainSnapshot | null>(null);
   const [frictionProfile, setFrictionProfile] = useState<FrictionProfile | null>(null);
   const [splitConfig, setSplitConfig] = useState<TrainingSplitConfig | null>(null);
+  const [equipmentProfileReady, setEquipmentProfileReady] = useState(false);
+  const [equipmentProfileNonce, setEquipmentProfileNonce] = useState(0);
   const [recommendationFingerprint, setRecommendationFingerprint] = useState<RecommendationFingerprint | null>(null);
   const [recommendationComparison, setRecommendationComparison] = useState<RecommendationComparison | null>(null);
   const [preferenceHistory, setPreferenceHistory] = useState<PreferenceHistoryEntry[]>([]);
@@ -1130,6 +1135,55 @@ useEffect(() => {
   const [recalibrationSandboxScenario, setRecalibrationSandboxScenario] = useState<string | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
+
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    if (!userId) {
+      setActiveEquipmentProfile(DEFAULT_EQUIPMENT_PROFILE);
+      if (!cancelled) {
+        setEquipmentProfileReady(false);
+        setEquipmentProfileNonce(0);
+      }
+      return;
+    }
+
+    try {
+      const row = await localdb.localSettings.get([userId, "equipment_profile_v1"]);
+      const parsed = row?.value ? normalizeEquipmentProfile(JSON.parse(row.value)) as EquipmentProfile : DEFAULT_EQUIPMENT_PROFILE;
+      if (!row || row.value !== JSON.stringify(parsed)) {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "equipment_profile_v1",
+          value: JSON.stringify(parsed),
+          updatedAt: Date.now(),
+        });
+      }
+      setActiveEquipmentProfile(parsed);
+      if (!cancelled) {
+        setEquipmentProfileReady(true);
+        setEquipmentProfileNonce(Date.now());
+      }
+    } catch {
+      setActiveEquipmentProfile(DEFAULT_EQUIPMENT_PROFILE);
+      try {
+        await localdb.localSettings.put({
+          user_id: userId,
+          key: "equipment_profile_v1",
+          value: JSON.stringify(DEFAULT_EQUIPMENT_PROFILE),
+          updatedAt: Date.now(),
+        });
+      } catch {}
+      if (!cancelled) {
+        setEquipmentProfileReady(true);
+        setEquipmentProfileNonce(Date.now());
+      }
+    }
+  })();
+  return () => {
+    cancelled = true;
+  };
+}, [userId]);
 
 useEffect(() => {
   let cancelled = false;
@@ -1175,9 +1229,9 @@ useEffect(() => {
 }, [userId]);
 
 useEffect(() => {
-  if (!userId) return;
+  if (!userId || !equipmentProfileReady) return;
   void refreshDashboard(splitConfig);
-}, [userId, splitConfig]);
+}, [userId, splitConfig, equipmentProfileReady, equipmentProfileNonce]);
 
 async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
   if (!userId) return;
@@ -4623,6 +4677,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
