@@ -31,7 +31,7 @@ import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, 
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
-import { getExerciseByKey } from "./lib/exerciseRegistry";
+import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
 import { setActiveEquipmentProfile } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
@@ -286,6 +286,15 @@ function storedExerciseKey(exercise: StoredExerciseIdentityLike): string {
   const libraryId = String(exercise?.exercise_library_id || "").trim();
   if (libraryId) return libraryId;
   return exerciseKey(exercise?.name || "");
+}
+
+function displayStoredExerciseName(exercise: StoredExerciseIdentityLike | null | undefined): string {
+  const libraryId = String(exercise?.exercise_library_id || "").trim();
+  if (libraryId) {
+    const registryExercise = getExerciseById(libraryId);
+    if (registryExercise?.canonicalName) return registryExercise.canonicalName;
+  }
+  return displayExerciseName(exercise?.name || "");
 }
 
 function isBenchName(name: string): boolean {
@@ -4641,6 +4650,7 @@ async function syncNow() {
             moveTemplateExercise={moveTemplateExercise}
             startSessionFromTemplate={startSessionFromTemplate}
             displayExerciseName={displayExerciseName}
+            displayStoredExerciseName={displayStoredExerciseName}
             sessions={sessions}
             openSessionId={openSessionId}
             openSession={openSession}
@@ -4677,6 +4687,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
