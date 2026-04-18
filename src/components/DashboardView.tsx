@@ -770,6 +770,7 @@ export default function DashboardView(props: Props) {
   const updateDay = (dayId: string, patch: Partial<SplitDayDefinition>) => {
     setSplitDraft((prev) => ({
       ...prev,
+      preset: "custom",
       days: prev.days.map((day) => day.id === dayId ? { ...day, ...patch } : day),
     }));
   };
@@ -777,10 +778,12 @@ export default function DashboardView(props: Props) {
   const updateDaySlot = (dayId: string, slotIndex: number, value: string) => {
     setSplitDraft((prev) => ({
       ...prev,
+      preset: "custom",
       days: prev.days.map((day) => {
         if (day.id !== dayId) return day;
         const slots = [...day.slots];
         if (value) slots[slotIndex] = value as SplitDayDefinition["slots"][number];
+        else slots[slotIndex] = undefined as unknown as SplitDayDefinition["slots"][number];
         return { ...day, slots: slots.filter(Boolean).slice(0, 6) };
       }),
     }));
@@ -802,13 +805,14 @@ export default function DashboardView(props: Props) {
       const days = [...prev.days];
       const [item] = days.splice(idx, 1);
       days.splice(nextIdx, 0, item);
-      return { ...prev, days };
+      return { ...prev, preset: "custom", days };
     });
   };
 
   const removeDay = (dayId: string) => {
     setSplitDraft((prev) => ({
       ...prev,
+      preset: "custom",
       days: prev.days.length <= 1 ? prev.days : prev.days.filter((day) => day.id !== dayId),
     }));
   };
@@ -1056,7 +1060,7 @@ export default function DashboardView(props: Props) {
           {(["ppl", "bro", "custom"] as const).map((option) => (
             <button
               key={option}
-              onClick={() => setSplitDraft((prev) => ({ ...prev, preset: option }))}
+              onClick={() => applyPreset(option)}
               style={{
                 border: splitDraft.preset === option ? "2px solid #111" : "1px solid #ccc",
                 background: splitDraft.preset === option ? "#111" : "#fff",
@@ -1944,6 +1948,7 @@ export default function DashboardView(props: Props) {
     </>
   );
 }
+
 
 
 
