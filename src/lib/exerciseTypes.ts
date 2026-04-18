@@ -1,3 +1,5 @@
+import type { Slot } from "./slotTypes";
+
 export type ExerciseId = string;
 export type ExerciseKey = string;
 
@@ -65,4 +67,10 @@ export type ExerciseDefinition = {
   compound: boolean;
   unilateral?: boolean;
   active?: boolean;
+  priority: number;
+  noveltyCost: number;
+  setupFriction: number;
+  allowedSlots: Slot[];
+  cluster?: string;
 };
+
