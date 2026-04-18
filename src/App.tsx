@@ -1146,6 +1146,7 @@ useEffect(() => {
   const [recalibrationSandboxScenario, setRecalibrationSandboxScenario] = useState<string | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
+  const dashboardRefreshSeqRef = useRef(0);
 
 useEffect(() => {
   let cancelled = false;
@@ -1253,7 +1254,6 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
     updatedAt: Date.now(),
   });
   setSplitConfig(next);
-  await refreshDashboard(next);
 }
 
   type AiCoach = { text: string; ts: number; model: string };
@@ -3143,6 +3143,8 @@ function daysBetweenISO(a: string, b: string): number {
 
 async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
     if (!userId) return;
+    const refreshSeq = ++dashboardRefreshSeqRef.current;
+    const isStale = () => dashboardRefreshSeqRef.current !== refreshSeq;
     setDashBusy(true);
     try {
       // last 28 days of sessions for this user
@@ -3281,6 +3283,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       else if (setsThis > setsPrev && setsPct >= 10) coachLine = "More work sets this week — solid. Watch joints and sleep.";
       else if (setsThis < setsPrev && setsPct <= -10) coachLine = "Fewer sets this week — could be recovery or could be drift. Choose deliberately.";
 
+      if (isStale()) return;
       setWeeklyCoach({
         thisWeekStart: fmt(startThis),
         thisWeekEnd: fmt(endDay),
@@ -3415,6 +3418,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           dayName: meta?.plannedDayName ?? null,
         };
       });
+      if (isStale()) return;
       setLastCompletedSplitDayName(recentCompletedSplitDays.find((d) => d.dayName)?.dayName ?? null);
 
       const recentFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
@@ -3603,11 +3607,14 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
             persistedMutationLedger = sandboxSnapshot.mutationLedger;
             persistedRecalibrationState = sandboxSnapshot.recalibrationState;
             persistedRecalibrationAction = sandboxSnapshot.recalibrationAction;
+            if (isStale()) return;
             setRecalibrationSandboxScenario(sandboxSnapshot.scenarioName ?? null);
           } else {
+            if (isStale()) return;
             setRecalibrationSandboxScenario(null);
           }
         } else {
+          if (isStale()) return;
           setRecalibrationSandboxScenario(null);
         }
 
@@ -3645,6 +3652,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           }
         }
 
+        if (isStale()) return;
         setPreferenceHistory(prefHistory);
         preferenceSignals = derivePreferenceSignals(prefHistory);
 
@@ -3714,6 +3722,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           momentum: momentumTrend,
         },
       });
+      if (isStale()) return;
       setFrictionProfile(friction);
       if (userId) {
         await localdb.localSettings.put({
@@ -3753,6 +3762,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const behaviorFingerprintSnapshot = canDeriveLoopState
         ? deriveBehaviorFingerprint(prefHistory, friction)
         : (loopMemory?.behaviorFingerprint ?? deriveBehaviorFingerprint([], friction));
+      if (isStale()) return;
       setBehaviorFingerprint(behaviorFingerprintSnapshot);
       if (userId && canDeriveLoopState) {
         await persistLoopMemoryArtifacts(userId, {
@@ -3821,6 +3831,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         frictionProfile: friction
       });
 
+      if (isStale()) return;
       setTimelineWeeks(timeline);
       setBrainSnapshot(brain);
       if (userId) {
@@ -3877,6 +3888,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         }
       }
 
+      if (isStale()) return;
       setPredictionScaffold(predictionSnapshot);
       setAdaptationWeights(adaptationSnapshot);
       setMutationLedger(mutationLedgerSnapshot);
@@ -3907,6 +3919,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         }
       }
 
+      if (isStale()) return;
       const fingerprint = buildRecommendationFingerprint(brain);
       setRecommendationFingerprint(fingerprint);
       if (userId && fingerprint) {
@@ -3917,6 +3930,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           updatedAt: Date.now()
         });
       }
+      if (isStale()) return;
       setTonnageSeries(tonSeries);
       setSetsSeries(setSeries);
       setBenchSeries(bench);
@@ -3937,7 +3951,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         trainingDays28: days.filter((d) => (setsByDay.get(d) ?? 0) > 0).length
       });
     } finally {
-      setDashBusy(false);
+      if (!isStale()) setDashBusy(false);
     }
   }
 
@@ -4689,6 +4703,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
