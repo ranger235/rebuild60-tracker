@@ -294,6 +294,8 @@ function displayStoredExerciseName(exercise: StoredExerciseIdentityLike | null |
     const registryExercise = getExerciseById(libraryId);
     if (registryExercise?.canonicalName) return registryExercise.canonicalName;
   }
+  const canonical = canonicalExerciseName(exercise?.name || "");
+  if (canonical) return canonical;
   return displayExerciseName(exercise?.name || "");
 }
 
@@ -4687,6 +4689,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
