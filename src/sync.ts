@@ -19,48 +19,19 @@ async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?
 async function mustDeleteAffectRows(
   promise: Promise<{ data: any[] | null; error: any } | { data?: any[] | null; error?: any }>,
   context: string,
-  options?: { allowMissing?: boolean; verify?: () => Promise<void> }
+  options?: { allowNoOp?: boolean }
 ) {
   const result: any = await promise;
   if (result?.error) throw result.error;
   const rows = Array.isArray(result?.data) ? result.data : [];
   if (rows.length === 0) {
-    const message = `${context} affected 0 rows`;
-    if (options?.allowMissing) {
-      console.warn("DELETE NO-OP (treated as success)", message);
-      if (options.verify) {
-        await options.verify();
-      }
+    if (options?.allowNoOp) {
       return rows;
     }
-    console.error("DELETE NO-OP", message);
-    throw new Error(message);
+    console.error("DELETE NO-OP", `${context} affected 0 rows`);
+    throw new Error(`${context} affected 0 rows`);
   }
   return rows;
-}
-
-
-async function verifyRowMissingSoft(table: string, idColumn: string, idValue: string) {
-  try {
-    const { data, error } = await supabase
-      .from(table)
-      .select(idColumn)
-      .eq(idColumn, idValue)
-      .maybeSingle();
-
-    // Soft verification only: if we can confirm the row is gone, great.
-    // If verification itself is blocked, delayed, or otherwise ambiguous, do not
-    // poison the queue after a successful delete call.
-    if (error) {
-      console.warn(`[sync] soft delete verification skipped for ${table}.${idColumn}=${idValue}:`, error);
-      return;
-    }
-    if (data) {
-      console.warn(`[sync] delete verification still sees ${table}.${idColumn}=${idValue}; allowing retry loop to be avoided after successful delete call.`);
-    }
-  } catch (err) {
-    console.warn(`[sync] soft delete verification failed for ${table}.${idColumn}=${idValue}:`, err);
-  }
 }
 
 export async function enqueue(op: PendingOp["op"], payload: any) {
@@ -172,10 +143,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       await mustDeleteAffectRows(
         supabase.from("workout_exercises").delete().eq("id", exercise_id).select("id"),
         `delete_exercise for ${exercise_id}`,
-        {
-          allowMissing: true,
-          verify: () => verifyRowMissingSoft("workout_exercises", "id", exercise_id)
-        }
+        { allowNoOp: true }
       );
       return;
     }
@@ -305,6 +273,8 @@ export function startAutoSync(
     window.clearInterval(h);
   };
 }
+
+
 
 
 
