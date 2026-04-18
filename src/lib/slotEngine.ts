@@ -1,7 +1,19 @@
-import { getExerciseKeysForSlot } from "./exerciseRegistry";
-import type { Slot } from "./slotTypes";
-export type { Slot } from "./slotTypes";
-
+export type Slot =
+  | "PrimaryPress"
+  | "SecondaryPress"
+  | "Shoulders"
+  | "Triceps"
+  | "Pump"
+  | "PrimaryRow"
+  | "VerticalPull"
+  | "SecondaryRow"
+  | "RearDelts"
+  | "Biceps"
+  | "PrimarySquat"
+  | "Hinge"
+  | "SecondaryQuad"
+  | "Hamstrings"
+  | "Calves";
 
 export type SessionBlueprint = {
   focus: "Push" | "Pull" | "Lower";
@@ -57,21 +69,21 @@ export const LOWER_BLUEPRINT: SessionBlueprint = {
 };
 
 export const SLOT_CANDIDATES: Record<Slot, string[]> = {
-  PrimaryPress: getExerciseKeysForSlot("PrimaryPress"),
-  SecondaryPress: getExerciseKeysForSlot("SecondaryPress"),
-  Shoulders: getExerciseKeysForSlot("Shoulders"),
-  Triceps: getExerciseKeysForSlot("Triceps"),
-  Pump: getExerciseKeysForSlot("Pump"),
-  PrimaryRow: getExerciseKeysForSlot("PrimaryRow"),
-  VerticalPull: getExerciseKeysForSlot("VerticalPull"),
-  SecondaryRow: getExerciseKeysForSlot("SecondaryRow"),
-  RearDelts: getExerciseKeysForSlot("RearDelts"),
-  Biceps: getExerciseKeysForSlot("Biceps"),
-  PrimarySquat: getExerciseKeysForSlot("PrimarySquat"),
-  Hinge: getExerciseKeysForSlot("Hinge"),
-  SecondaryQuad: getExerciseKeysForSlot("SecondaryQuad"),
-  Hamstrings: getExerciseKeysForSlot("Hamstrings"),
-  Calves: getExerciseKeysForSlot("Calves"),
+  PrimaryPress: ["bench_press", "incline_bench_press", "dumbbell_bench_press", "chest_press"],
+  SecondaryPress: ["incline_bench_press", "overhead_press", "dumbbell_bench_press", "shoulder_press"],
+  Shoulders: ["overhead_press", "shoulder_press", "lateral_raise", "rear_delt_fly"],
+  Triceps: ["dip", "triceps_pressdown", "overhead_triceps_extension", "skullcrusher"],
+  Pump: ["lateral_raise", "triceps_pressdown", "push_up", "pec_deck"],
+  PrimaryRow: ["barbell_row", "chest_supported_row", "seated_cable_row", "t_bar_row"],
+  VerticalPull: ["pull_up", "chin_up", "lat_pulldown", "assisted_pull_up"],
+  SecondaryRow: ["chest_supported_row", "seated_cable_row", "barbell_row", "one_arm_dumbbell_row"],
+  RearDelts: ["face_pull", "rear_delt_fly", "reverse_pec_deck", "band_pull_apart"],
+  Biceps: ["hammer_curl", "curl", "incline_dumbbell_curl", "preacher_curl"],
+  PrimarySquat: ["ssb_squat", "squat"],
+  Hinge: ["romanian_deadlift", "deadlift", "good_morning", "hamstring_curl"],
+  SecondaryQuad: ["leg_extension", "split_squat"],
+  Hamstrings: ["hamstring_curl", "romanian_deadlift", "glute_ham_raise", "seated_leg_curl"],
+  Calves: ["calf_raise", "seated_calf_raise", "leg_press_calf_raise"],
 };
 
 export function blueprintForFocus(focus: string): SessionBlueprint {
@@ -262,6 +274,8 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
+
 
 
 
