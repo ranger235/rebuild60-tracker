@@ -30,6 +30,8 @@ import { loadRecalibrationSandboxSnapshot, persistRecalibrationSandboxSnapshot, 
 import { classifySessionOutcome, computeSessionFidelity, daysBetweenDayStrings, derivePrimaryOutcome, isoToDayString, type SessionFidelityBreakdown } from "./lib/recommendationFeedback";
 import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
+import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
+import { getExerciseByKey } from "./lib/exerciseRegistry";
 
 function todayISO(): string {
   const d = new Date();
@@ -253,6 +255,36 @@ function canonicalizeExerciseInput(raw: string): string {
   return CANONICAL_DISPLAY[k] ?? trimmed;
 }
 
+type StoredExerciseIdentityLike = {
+  name: string;
+  exercise_library_id?: string | null;
+};
+
+type ResolvedExerciseIdentity = {
+  canonicalName: string;
+  stableKey: string;
+  exerciseLibraryId: string | null;
+  exerciseFamilyId: string | null;
+};
+
+function resolveExerciseIdentity(raw: string): ResolvedExerciseIdentity {
+  const canonicalName = canonicalExerciseName(raw);
+  const stableKey = resolveExerciseKey(raw) || exerciseKey(raw);
+  const registryExercise = getExerciseByKey(stableKey);
+  return {
+    canonicalName,
+    stableKey,
+    exerciseLibraryId: registryExercise?.id ?? (stableKey || null),
+    exerciseFamilyId: registryExercise?.family ?? null,
+  };
+}
+
+function storedExerciseKey(exercise: StoredExerciseIdentityLike): string {
+  const libraryId = String(exercise?.exercise_library_id || "").trim();
+  if (libraryId) return libraryId;
+  return exerciseKey(exercise?.name || "");
+}
+
 function isBenchName(name: string): boolean {
   const k = exerciseKey(name);
   return k === "bench_press" || k === "incline_bench_press" || k === "dumbbell_bench_press";
@@ -380,7 +412,7 @@ function buildSyntheticPreferenceHistoryFromSessions(params: {
     const exerciseFidelity: NonNullable<PreferenceHistoryEntry["exerciseFidelity"]> = [];
 
     for (const ex of exercises) {
-      const key = exerciseKey(ex.name);
+      const key = storedExerciseKey(ex);
       counts[focusFromExerciseKey(key)] += 1;
       const workSets = (setsByExerciseId.get(ex.id) ?? []).filter((setRow) => !setRow.is_warmup);
       prescribedSets += workSets.length;
@@ -582,7 +614,7 @@ function compareRecommendationToSession(params: {
   const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null; topReps: number | null }>();
 
   for (const ex of sessionExercises) {
-    const key = exerciseKey(ex.name);
+    const key = storedExerciseKey(ex);
     const focus = focusFromExerciseKey(key);
     actualCounts[focus] += 1;
     const workSets = sessionSets.filter((s) => s.exercise_id === ex.id && !s.is_warmup);
@@ -1945,13 +1977,16 @@ async function saveQuickLog() {
       for (let i = 0; i < brainSnapshot.recommendedSession.exercises.length; i += 1) {
       const ex = brainSnapshot.recommendedSession.exercises[i];
       const exerciseId = uuid();
-      const canonicalName = canonicalizeExerciseInput(ex.name);
+      const identity = resolveExerciseIdentity(ex.name);
+      const canonicalName = identity.canonicalName;
 
       const localExercise: LocalWorkoutExercise = {
         id: exerciseId,
         session_id: id,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       };
 
       await localdb.localExercises.put(localExercise);
@@ -2032,7 +2067,8 @@ async function saveQuickLog() {
   async function addExercise() {
     if (!openSessionId) return;
 
-    const name = canonicalizeExerciseInput(newExerciseName);
+    const identity = resolveExerciseIdentity(newExerciseName);
+    const name = identity.canonicalName;
     if (!name.trim()) return;
 
     const id = uuid();
@@ -2042,7 +2078,9 @@ async function saveQuickLog() {
       id,
       session_id: openSessionId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     };
 
     await localdb.localExercises.put(local);
@@ -2174,7 +2212,7 @@ async function addSet(exerciseId: string) {
   const ex = exercises.find((e) => e.id === exerciseId);
   if (ex) {
     setLastByExerciseName((prev) => {
-      const k = exerciseKey(ex.name);
+      const k = storedExerciseKey(ex);
       const prevSummary = prev[k];
       const appended: SetLite = {
         load_type: loadType,
@@ -2486,13 +2524,19 @@ async function saveTemplateMeta() {
 
 async function renameTemplateExercise(templateExerciseId: string, rawName: string) {
   if (!openTemplateId) return;
-  const name = canonicalizeExerciseInput(rawName).trim();
+  const identity = resolveExerciseIdentity(rawName);
+  const name = identity.canonicalName.trim();
   if (!name) return;
 
   const current = templateExercises.find((x) => x.id === templateExerciseId);
   if (!current) return;
 
-  const updated: LocalWorkoutTemplateExercise = { ...current, name };
+  const updated: LocalWorkoutTemplateExercise = {
+    ...current,
+    name,
+    exercise_library_id: identity.exerciseLibraryId,
+    exercise_family_id: identity.exerciseFamilyId,
+  };
   await localdb.localTemplateExercises.put(updated);
   setTemplateExercises((prev) => prev.map((x) => (x.id === templateExerciseId ? updated : x)));
   await enqueue("update_template_exercise", updated);
@@ -2591,7 +2635,8 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
 
   async function addExerciseToTemplate() {
     if (!openTemplateId) return;
-    const name = canonicalizeExerciseInput(newTemplateExerciseName);
+    const identity = resolveExerciseIdentity(newTemplateExerciseName);
+    const name = identity.canonicalName;
     if (!name) return;
 
     const id = uuid();
@@ -2601,7 +2646,9 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
       id,
       template_id: openTemplateId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     };
 
     await localdb.localTemplateExercises.put(local);
@@ -2663,13 +2710,22 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
       const te = ex[i];
       const exerciseId = uuid();
 
-      const canonicalName = canonicalizeExerciseInput(te.name);
+      const identity = te.exercise_library_id
+        ? {
+            canonicalName: te.name,
+            exerciseLibraryId: te.exercise_library_id,
+            exerciseFamilyId: te.exercise_family_id ?? null,
+          }
+        : resolveExerciseIdentity(te.name);
+      const canonicalName = identity.canonicalName;
 
       const localExercise: LocalWorkoutExercise = {
         id: exerciseId,
         session_id: sessionId,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       };
 
       await localdb.localExercises.put(localExercise);
@@ -3304,7 +3360,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
         const focusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
         const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
         for (const ex of exercisesForSession) {
-          const key = exerciseKey(ex.name);
+          const key = storedExerciseKey(ex);
           const focus = focusFromExerciseKey(key);
           focusCounts[focus] += 1;
         }
@@ -3315,7 +3371,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       for (const session of completedSessions) {
         const exercisesForSession = (sessionExercisesMap.get(session.id) ?? []).slice().sort((a, b) => a.sort_order - b.sort_order);
         for (const ex of exercisesForSession) {
-          const key = exerciseKey(ex.name);
+          const key = storedExerciseKey(ex);
           if (exerciseHistoryMap.has(key)) continue;
           const focus = focusFromExerciseKey(key);
           const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
@@ -3338,7 +3394,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           const recentTopSetE1RMs: number[] = [];
           const recentAvgSetReps: number[] = [];
           for (const scanSession of recentSessions) {
-            const scanExercises = (sessionExercisesMap.get(scanSession.id) ?? []).filter((scanEx) => exerciseKey(scanEx.name) === key);
+            const scanExercises = (sessionExercisesMap.get(scanSession.id) ?? []).filter((scanEx) => storedExerciseKey(scanEx) === key);
             if (scanExercises.length === 0) continue;
 
             let sessionTopE1: number | null = null;
@@ -3405,7 +3461,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           const exercisesForSession = sessionExercisesMap.get(session.id) ?? [];
           const sessionFocusCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of exercisesForSession) {
-            const key = exerciseKey(ex.name);
+            const key = storedExerciseKey(ex);
             const focus = focusFromExerciseKey(key);
             sessionFocusCounts[focus] += 1;
             const sets = (setsByExerciseId.get(ex.id) ?? []).filter((s) => !s.is_warmup);
@@ -3691,7 +3747,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
           const session = recentFocusWindow[0];
           const counts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
           for (const ex of sessionExercisesMap.get(session.id) ?? []) {
-            counts[focusFromExerciseKey(exerciseKey(ex.name))] += 1;
+            counts[focusFromExerciseKey(storedExerciseKey(ex))] += 1;
           }
           return dominantFocusFromCounts(counts);
         })() : null,
@@ -4065,7 +4121,7 @@ async function syncNow() {
         const primaryKey = exerciseKey(primaryTarget);
         const fidelity = recommendationComparison.exerciseFidelity.find((row) => row.recommendedKey === primaryKey);
         if (fidelity?.actualKey) {
-          const actualExercise = exercises.find((ex) => exerciseKey(ex.name) === fidelity.actualKey) ?? null;
+          const actualExercise = exercises.find((ex) => storedExerciseKey(ex) === fidelity.actualKey) ?? null;
           if (actualExercise) {
             const currentWorkSets = sets.filter((st) => st.exercise_id === actualExercise.id && !st.is_warmup);
             let currentTopLoad: number | null = null;
@@ -4567,6 +4623,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
