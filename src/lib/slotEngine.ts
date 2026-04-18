@@ -1,6 +1,6 @@
 export type { Slot } from "./slotTypes";
 
-import { getExerciseKeysForSlot } from "./exerciseRegistry";
+import { getExerciseByKey, getExerciseKeysForSlot } from "./exerciseRegistry";
 import { DEFAULT_EQUIPMENT_PROFILE } from "./equipmentRegistry";
 import { getEligibleExerciseKeysForProfile, normalizeProfile } from "./exerciseEligibility";
 import type { EquipmentProfile } from "./equipmentTypes";
@@ -175,6 +175,19 @@ function lowerCostInReducedVolume(slot: Slot, key: string): boolean {
   return key === "chest_supported_row" || key === "seated_cable_row" || key === "lat_pulldown" || key === "hamstring_curl";
 }
 
+
+function slotNoveltyPressure(slot: Slot): number {
+  if (slot === "Pump" || slot === "RearDelts" || slot === "Biceps" || slot === "Triceps" || slot === "Calves") return 0.65;
+  if (slot === "SecondaryRow" || slot === "SecondaryPress" || slot === "SecondaryQuad" || slot === "Hamstrings") return 0.45;
+  return 0.25;
+}
+
+function slotFrictionSensitivity(slot: Slot): number {
+  if (slot === "PrimaryRow" || slot === "PrimaryPress" || slot === "PrimarySquat" || slot === "Hinge" || slot === "VerticalPull") return 0.45;
+  if (slot === "SecondaryRow" || slot === "SecondaryPress" || slot === "SecondaryQuad" || slot === "Hamstrings") return 0.3;
+  return 0.2;
+}
+
 export function scoreCandidateForSlot(
   slot: Slot,
   candidateKey: string,
@@ -184,8 +197,21 @@ export function scoreCandidateForSlot(
   blockBias?: BlockBiasLike
 ): ScoredCandidate {
   const hist = history.find((h) => h.key === candidateKey) ?? null;
+  const meta = getExerciseByKey(candidateKey);
   const tags: string[] = [];
   let score = 40;
+
+  if (meta) {
+    score *= meta.priority;
+    if (meta.priority >= 0.9) tags.push("Anchor bias");
+    const noveltyPressure = slotNoveltyPressure(slot);
+    const noveltyDrag = meta.noveltyCost * noveltyPressure * 12;
+    score -= noveltyDrag;
+    if (meta.noveltyCost >= 0.6) tags.push("Novelty governor");
+    const frictionPenalty = meta.setupFriction * slotFrictionSensitivity(slot) * 10;
+    score -= frictionPenalty;
+    if (meta.setupFriction >= 0.55) tags.push("Setup friction");
+  }
 
   if (hist) {
     score += 18;
@@ -267,7 +293,7 @@ export function scoreCandidateForSlot(
 
   return {
     key: candidateKey,
-    score,
+    score: Math.max(1, Math.round(score * 10) / 10),
     tags: [...new Set(tags)],
   };
 }
@@ -284,3 +310,4 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
