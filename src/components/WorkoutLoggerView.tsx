@@ -58,6 +58,7 @@ type Props = {
   moveTemplateExercise: (templateExerciseId: string, direction: -1 | 1) => any;
   startSessionFromTemplate: (templateId: string) => any;
   displayExerciseName: (raw: string) => string;
+  displayStoredExerciseName: (exercise: { name: string; exercise_library_id?: string | null }) => string;
 
   // Sessions
   sessions: any[];
@@ -161,6 +162,7 @@ export default function WorkoutLoggerView(props: Props) {
     moveTemplateExercise,
     startSessionFromTemplate,
     displayExerciseName,
+    displayStoredExerciseName,
     sessions,
     openSessionId,
     openSession,
@@ -343,7 +345,7 @@ export default function WorkoutLoggerView(props: Props) {
                     <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
                       {exercises.map((ex) => {
                         const d = draftByExerciseId[ex.id];
-                        const defaultLabel = displayExerciseName(ex.name);
+                        const defaultLabel = displayStoredExerciseName(ex);
                         const lastSummary = lastByExerciseName[exerciseKey(ex.name)];
                         const preview = lastSummary?.sets?.slice?.(0, 5) ?? [];
                         const exSets = setsForExercise(ex.id) ?? [];
@@ -658,6 +660,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
