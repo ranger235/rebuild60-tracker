@@ -172,7 +172,7 @@ function lowerCostInReducedVolume(slot: Slot, key: string): boolean {
   if (slot === "Shoulders" || slot === "Biceps" || slot === "Triceps" || slot === "RearDelts" || slot === "Pump" || slot === "Calves") {
     return true;
   }
-  return key === "chest_supported_row" || key === "seated_cable_row" || key === "lat_pulldown" || key === "hamstring_curl";
+  return key === "seated_cable_row" || key === "lat_pulldown" || key === "hamstring_curl";
 }
 
 
@@ -180,6 +180,64 @@ function slotNoveltyPressure(slot: Slot): number {
   if (slot === "Pump" || slot === "RearDelts" || slot === "Biceps" || slot === "Triceps" || slot === "Calves") return 0.65;
   if (slot === "SecondaryRow" || slot === "SecondaryPress" || slot === "SecondaryQuad" || slot === "Hamstrings") return 0.45;
   return 0.25;
+}
+
+
+function recentRepeatPenalty(slot: Slot, candidateKey: string, daysAgo: number | null): { penalty: number; tags: string[] } {
+  if (typeof daysAgo !== "number") return { penalty: 0, tags: [] };
+  const tags: string[] = [];
+  const isAnchorSlot = slot === "PrimaryRow" || slot === "VerticalPull" || slot === "PrimaryPress" || slot === "PrimarySquat" || slot === "Hinge";
+  let penalty = 0;
+
+  if (daysAgo <= 3) {
+    penalty += isAnchorSlot ? 18 : 12;
+    tags.push("Repeat drag");
+  } else if (daysAgo <= 7) {
+    penalty += isAnchorSlot ? 10 : 6;
+    tags.push("Repeat drag");
+  } else if (daysAgo <= 14) {
+    penalty += isAnchorSlot ? 4 : 2;
+  }
+
+  if ((slot === "PrimaryRow" || slot === "SecondaryRow") && candidateKey === "chest_supported_row") {
+    penalty += daysAgo <= 30 ? 16 : 8;
+    tags.push("Setup friction bias");
+  }
+
+  if (slot === "VerticalPull" && candidateKey === "lat_pulldown" && daysAgo <= 10) {
+    penalty += 6;
+    tags.push("Pattern repeat drag");
+  }
+
+  if ((slot === "RearDelts" || slot === "Pump") && (candidateKey === "face_pull" || candidateKey === "incline_rear_delt_raise")) {
+    if (daysAgo <= 7) {
+      penalty += 4;
+      tags.push("Accessory repeat drag");
+    }
+  }
+
+  return { penalty, tags };
+}
+
+function candidateRotationBonus(slot: Slot, candidateKey: string, daysAgo: number | null): { bonus: number; tags: string[] } {
+  const tags: string[] = [];
+  let bonus = 0;
+
+  if ((slot === "PrimaryRow" || slot === "SecondaryRow") && daysAgo !== null && daysAgo >= 8) {
+    if (candidateKey === "barbell_row" || candidateKey === "one_arm_dumbbell_row" || candidateKey === "underhand_barbell_row" || candidateKey === "lat_focus_row") {
+      bonus += 4;
+      tags.push("Rotation nudge");
+    }
+  }
+
+  if (slot === "VerticalPull" && daysAgo !== null && daysAgo >= 8) {
+    if (candidateKey === "pull_up" || candidateKey === "chin_up" || candidateKey === "weighted_pull_up" || candidateKey === "weighted_chin_up" || candidateKey === "band_assisted_chin_up") {
+      bonus += 3;
+      tags.push("Rotation nudge");
+    }
+  }
+
+  return { bonus, tags };
 }
 
 function slotFrictionSensitivity(slot: Slot): number {
@@ -227,6 +285,18 @@ export function scoreCandidateForSlot(
     } else if (daysAgo <= 3) {
       score -= 6;
     }
+  }
+
+  const repeatPenalty = recentRepeatPenalty(slot, candidateKey, daysAgo);
+  if (repeatPenalty.penalty > 0) {
+    score -= repeatPenalty.penalty;
+    tags.push(...repeatPenalty.tags);
+  }
+
+  const rotationBonus = candidateRotationBonus(slot, candidateKey, daysAgo);
+  if (rotationBonus.bonus > 0) {
+    score += rotationBonus.bonus;
+    tags.push(...rotationBonus.tags);
   }
 
   const memory = analyzeMemory(hist);
@@ -310,6 +380,7 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
 
 
 
