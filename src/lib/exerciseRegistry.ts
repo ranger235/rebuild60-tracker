@@ -17,6 +17,210 @@ function normalizeAlias(input: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+
+function uniqueSlots(slots: Slot[]): Slot[] {
+  return [...new Set(slots.filter(Boolean))];
+}
+
+function inferAllowedSlots(input: ExerciseSeedInput): Slot[] {
+  if (input.allowedSlots?.length) return uniqueSlots([...input.allowedSlots]);
+
+  const patterns = new Set(input.movementPatterns);
+  const roles = new Set(input.roleTags);
+  const slots: Slot[] = [];
+
+  if (patterns.has("horizontal_push")) {
+    if (roles.has("anchor") || roles.has("primary")) slots.push("PrimaryPress");
+    if (roles.has("primary") || roles.has("secondary")) slots.push("SecondaryPress");
+    if (roles.has("accessory") || roles.has("pump")) slots.push("Pump");
+  }
+  if (patterns.has("vertical_push")) {
+    if (roles.has("primary") || roles.has("secondary")) slots.push("SecondaryPress", "Shoulders");
+    if (roles.has("accessory") || roles.has("pump")) slots.push("Shoulders", "Pump");
+  }
+  if (patterns.has("elbow_extension")) {
+    slots.push("Triceps");
+    if (roles.has("pump") || roles.has("accessory")) slots.push("Pump");
+  }
+  if (patterns.has("horizontal_pull")) {
+    if (roles.has("anchor") || roles.has("primary")) slots.push("PrimaryRow");
+    if (roles.has("primary") || roles.has("secondary") || roles.has("accessory") || roles.has("pump")) slots.push("SecondaryRow");
+  }
+  if (patterns.has("vertical_pull")) {
+    slots.push("VerticalPull");
+  }
+  if (patterns.has("rear_delt") || input.primaryMuscles.includes("rear_delts")) {
+    slots.push("RearDelts");
+  }
+  if (patterns.has("elbow_flexion")) {
+    slots.push("Biceps");
+  }
+  if (patterns.has("squat")) {
+    if (roles.has("anchor") || roles.has("primary")) slots.push("PrimarySquat");
+    if (roles.has("secondary") || roles.has("accessory")) slots.push("SecondaryQuad");
+  }
+  if (patterns.has("lunge")) {
+    slots.push("SecondaryQuad");
+  }
+  if (patterns.has("hinge")) {
+    if (roles.has("anchor") || roles.has("primary")) slots.push("Hinge");
+    if (roles.has("secondary") || roles.has("accessory")) slots.push("Hamstrings");
+  }
+  if (patterns.has("knee_flexion")) {
+    slots.push("Hamstrings");
+  }
+  if (patterns.has("calves")) {
+    slots.push("Calves");
+  }
+  if (slots.length === 0 && (roles.has("pump") || roles.has("accessory"))) {
+    slots.push("Pump");
+  }
+
+  return uniqueSlots(slots);
+}
+
+function inferCluster(input: ExerciseSeedInput): string | undefined {
+  if (input.family.includes("horizontal_press")) return "press_anchor";
+  if (input.family.includes("vertical_press")) return input.primaryMuscles.includes("side_delts") ? "lateral_delt" : "vertical_press";
+  if (input.family.includes("triceps") || input.movementPatterns.includes("elbow_extension")) return "triceps_extension";
+  if (input.family.includes("biceps") || input.movementPatterns.includes("elbow_flexion")) return "biceps_curl";
+  if (input.family.includes("row") || input.movementPatterns.includes("horizontal_pull")) return input.roleTags.includes("anchor") ? "row_anchor" : "row_accessory";
+  if (input.movementPatterns.includes("vertical_pull")) return "vertical_pull";
+  if (input.family.includes("shrug")) return "shrug";
+  if (input.family.includes("serratus")) return "serratus";
+  if (input.family.includes("lower_trap") || input.key.includes("y_raise") || input.key.includes("trap_3")) return "lower_trap";
+  if (input.primaryMuscles.includes("rear_delts") || input.movementPatterns.includes("rear_delt")) return "rear_delt";
+  if (input.movementPatterns.includes("squat") || input.movementPatterns.includes("lunge")) return input.roleTags.includes("anchor") ? "quad_anchor" : "quad_accessory";
+  if (input.movementPatterns.includes("hinge")) return input.roleTags.includes("anchor") ? "hinge_anchor" : "hinge_accessory";
+  if (input.movementPatterns.includes("knee_flexion")) return "hamstrings";
+  if (input.movementPatterns.includes("calves")) return "calves";
+  return undefined;
+}
+
+function inferPriority(input: ExerciseSeedInput): number {
+  if (typeof input.priority === "number") return input.priority;
+  if (input.roleTags.includes("anchor")) return 1;
+  if (input.roleTags.includes("primary")) return input.compound ? 0.88 : 0.75;
+  if (input.roleTags.includes("secondary")) return input.compound ? 0.76 : 0.62;
+  if (input.roleTags.includes("accessory")) return 0.55;
+  return 0.35;
+}
+
+function inferNoveltyCost(input: ExerciseSeedInput): number {
+  if (typeof input.noveltyCost === "number") return input.noveltyCost;
+  if (input.roleTags.includes("anchor")) return 0.1;
+  if (input.roleTags.includes("primary")) return 0.18;
+  if (input.roleTags.includes("secondary")) return 0.28;
+  if (input.roleTags.includes("accessory")) return 0.42;
+  return 0.55;
+}
+
+function inferSetupFriction(input: ExerciseSeedInput): number {
+  if (typeof input.setupFriction === "number") return input.setupFriction;
+  if (input.equipment.includes("bodyweight") || input.equipment.includes("band")) return 0.12;
+  if (input.equipment.includes("machine") || input.equipment.includes("cable")) return 0.25;
+  if (input.equipment.includes("barbell") && input.equipment.includes("bench")) return 0.28;
+  if (input.equipment.includes("barbell")) return 0.22;
+  if (input.equipment.includes("dumbbell")) return 0.18;
+  return 0.2;
+}
+
+const EXERCISE_META_OVERRIDES: Partial<Record<ExerciseKey, Pick<ExerciseDefinition, "priority" | "noveltyCost" | "setupFriction" | "allowedSlots" | "cluster">>> = {
+  chest_supported_row: { priority: 0.74, noveltyCost: 0.3, setupFriction: 0.72, allowedSlots: ["PrimaryRow", "SecondaryRow"], cluster: "row_anchor" },
+  barbell_row: { priority: 1.0, noveltyCost: 0.1, setupFriction: 0.2, allowedSlots: ["PrimaryRow", "SecondaryRow"], cluster: "row_anchor" },
+  underhand_barbell_row: { priority: 0.84, noveltyCost: 0.24, setupFriction: 0.22, allowedSlots: ["PrimaryRow", "SecondaryRow"], cluster: "row_anchor" },
+  one_arm_dumbbell_row: { priority: 0.86, noveltyCost: 0.16, setupFriction: 0.18, allowedSlots: ["SecondaryRow"], cluster: "row_anchor" },
+  incline_dumbbell_row: { priority: 0.8, noveltyCost: 0.22, setupFriction: 0.42, allowedSlots: ["SecondaryRow"], cluster: "row_accessory" },
+  lat_focus_row: { priority: 0.74, noveltyCost: 0.28, setupFriction: 0.18, allowedSlots: ["SecondaryRow"], cluster: "row_accessory" },
+  seal_row: { priority: 0.72, noveltyCost: 0.35, setupFriction: 0.78, allowedSlots: ["SecondaryRow"], cluster: "row_accessory" },
+  seated_cable_row: { priority: 0.82, noveltyCost: 0.18, setupFriction: 0.24, allowedSlots: ["SecondaryRow"], cluster: "row_anchor" },
+  t_bar_row: { priority: 0.78, noveltyCost: 0.24, setupFriction: 0.62, allowedSlots: ["SecondaryRow"], cluster: "row_anchor" },
+  band_row: { priority: 0.58, noveltyCost: 0.32, setupFriction: 0.08, allowedSlots: ["SecondaryRow"], cluster: "row_accessory" },
+  scapular_row: { priority: 0.32, noveltyCost: 0.62, setupFriction: 0.14, allowedSlots: ["SecondaryRow", "Pump"], cluster: "scap_control" },
+  pull_up: { priority: 0.95, noveltyCost: 0.12, setupFriction: 0.12, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  weighted_pull_up: { priority: 0.92, noveltyCost: 0.18, setupFriction: 0.2, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  chin_up: { priority: 0.94, noveltyCost: 0.12, setupFriction: 0.12, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  weighted_chin_up: { priority: 0.9, noveltyCost: 0.18, setupFriction: 0.2, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  lat_pulldown: { priority: 0.9, noveltyCost: 0.12, setupFriction: 0.18, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  assisted_pull_up: { priority: 0.7, noveltyCost: 0.2, setupFriction: 0.16, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  band_assisted_chin_up: { priority: 0.68, noveltyCost: 0.28, setupFriction: 0.16, allowedSlots: ["VerticalPull"], cluster: "vertical_pull" },
+  straight_arm_pulldown: { priority: 0.46, noveltyCost: 0.52, setupFriction: 0.22, allowedSlots: ["VerticalPull", "Pump"], cluster: "lat_isolation" },
+  dumbbell_pullover: { priority: 0.42, noveltyCost: 0.46, setupFriction: 0.2, allowedSlots: ["VerticalPull", "Pump"], cluster: "lat_isolation" },
+  barbell_shrug: { priority: 0.28, noveltyCost: 0.58, setupFriction: 0.18, allowedSlots: ["Pump"], cluster: "shrug" },
+  dumbbell_shrug: { priority: 0.3, noveltyCost: 0.5, setupFriction: 0.12, allowedSlots: ["Pump"], cluster: "shrug" },
+  behind_back_shrug: { priority: 0.22, noveltyCost: 0.72, setupFriction: 0.44, allowedSlots: ["Pump"], cluster: "shrug" },
+  band_shrug: { priority: 0.24, noveltyCost: 0.65, setupFriction: 0.08, allowedSlots: ["Pump"], cluster: "shrug" },
+  face_pull: { priority: 0.5, noveltyCost: 0.34, setupFriction: 0.18, allowedSlots: ["RearDelts", "Pump"] , cluster: "rear_delt"},
+  band_pull_apart: { priority: 0.42, noveltyCost: 0.36, setupFriction: 0.08, allowedSlots: ["RearDelts", "Pump"], cluster: "rear_delt" },
+  rear_delt_fly: { priority: 0.52, noveltyCost: 0.3, setupFriction: 0.14, allowedSlots: ["RearDelts", "Pump"], cluster: "rear_delt" },
+  incline_rear_delt_raise: { priority: 0.42, noveltyCost: 0.46, setupFriction: 0.22, allowedSlots: ["RearDelts", "Pump"], cluster: "rear_delt" },
+  rear_delt_row: { priority: 0.4, noveltyCost: 0.48, setupFriction: 0.18, allowedSlots: ["RearDelts", "Pump"], cluster: "rear_delt" },
+  prone_y_raise: { priority: 0.24, noveltyCost: 0.76, setupFriction: 0.2, allowedSlots: ["RearDelts", "Pump"], cluster: "lower_trap" },
+  trap_3_raise: { priority: 0.22, noveltyCost: 0.8, setupFriction: 0.18, allowedSlots: ["RearDelts", "Pump"], cluster: "lower_trap" },
+  serratus_pushdown: { priority: 0.2, noveltyCost: 0.82, setupFriction: 0.16, allowedSlots: ["Pump"], cluster: "serratus" },
+  scapular_push_up: { priority: 0.18, noveltyCost: 0.72, setupFriction: 0.08, allowedSlots: ["Pump"], cluster: "serratus" },
+  wall_slide: { priority: 0.16, noveltyCost: 0.84, setupFriction: 0.08, allowedSlots: ["Pump"], cluster: "serratus" },
+  scapular_pull_up: { priority: 0.2, noveltyCost: 0.76, setupFriction: 0.1, allowedSlots: ["VerticalPull", "Pump"], cluster: "serratus" },
+  bench_press: { priority: 1.0, noveltyCost: 0.08, setupFriction: 0.18, allowedSlots: ["PrimaryPress", "SecondaryPress"], cluster: "press_anchor" },
+  incline_bench_press: { priority: 0.92, noveltyCost: 0.12, setupFriction: 0.2, allowedSlots: ["PrimaryPress", "SecondaryPress"], cluster: "press_anchor" },
+  dumbbell_bench_press: { priority: 0.86, noveltyCost: 0.14, setupFriction: 0.12, allowedSlots: ["PrimaryPress", "SecondaryPress"], cluster: "press_anchor" },
+  close_grip_bench_press: { priority: 0.78, noveltyCost: 0.24, setupFriction: 0.22, allowedSlots: ["SecondaryPress", "Triceps"], cluster: "press_anchor" },
+  paused_bench_press: { priority: 0.82, noveltyCost: 0.22, setupFriction: 0.18, allowedSlots: ["PrimaryPress", "SecondaryPress"], cluster: "press_anchor" },
+  feet_up_bench_press: { priority: 0.68, noveltyCost: 0.34, setupFriction: 0.18, allowedSlots: ["SecondaryPress"], cluster: "press_anchor" },
+  larsen_press: { priority: 0.66, noveltyCost: 0.38, setupFriction: 0.18, allowedSlots: ["SecondaryPress"], cluster: "press_anchor" },
+  incline_dumbbell_press: { priority: 0.8, noveltyCost: 0.18, setupFriction: 0.12, allowedSlots: ["SecondaryPress"], cluster: "press_anchor" },
+  overhead_press: { priority: 0.92, noveltyCost: 0.14, setupFriction: 0.18, allowedSlots: ["SecondaryPress", "Shoulders"], cluster: "vertical_press" },
+  shoulder_press: { priority: 0.7, noveltyCost: 0.22, setupFriction: 0.16, allowedSlots: ["Shoulders", "SecondaryPress"], cluster: "vertical_press" },
+  seated_dumbbell_press: { priority: 0.76, noveltyCost: 0.2, setupFriction: 0.14, allowedSlots: ["Shoulders", "SecondaryPress"], cluster: "vertical_press" },
+  arnold_press: { priority: 0.62, noveltyCost: 0.34, setupFriction: 0.16, allowedSlots: ["Shoulders"], cluster: "vertical_press" },
+  lateral_raise: { priority: 0.58, noveltyCost: 0.2, setupFriction: 0.1, allowedSlots: ["Shoulders", "Pump"], cluster: "lateral_delt" },
+  leaning_lateral_raise: { priority: 0.56, noveltyCost: 0.36, setupFriction: 0.12, allowedSlots: ["Shoulders", "Pump"], cluster: "lateral_delt" },
+  cable_lateral_raise: { priority: 0.54, noveltyCost: 0.32, setupFriction: 0.2, allowedSlots: ["Shoulders", "Pump"], cluster: "lateral_delt" },
+  front_raise: { priority: 0.24, noveltyCost: 0.68, setupFriction: 0.1, allowedSlots: ["Shoulders", "Pump"], cluster: "front_delt" },
+  dip: { priority: 0.66, noveltyCost: 0.22, setupFriction: 0.16, allowedSlots: ["Triceps", "Pump"], cluster: "triceps_press" },
+  triceps_pressdown: { priority: 0.62, noveltyCost: 0.2, setupFriction: 0.14, allowedSlots: ["Triceps", "Pump"], cluster: "triceps_extension" },
+  overhead_triceps_extension: { priority: 0.56, noveltyCost: 0.28, setupFriction: 0.12, allowedSlots: ["Triceps", "Pump"], cluster: "triceps_extension" },
+  skullcrusher: { priority: 0.54, noveltyCost: 0.26, setupFriction: 0.12, allowedSlots: ["Triceps", "Pump"], cluster: "triceps_extension" },
+  push_up: { priority: 0.44, noveltyCost: 0.18, setupFriction: 0.06, allowedSlots: ["Pump"], cluster: "pushup" },
+  weighted_push_up: { priority: 0.52, noveltyCost: 0.26, setupFriction: 0.12, allowedSlots: ["Pump"], cluster: "pushup" },
+  band_resisted_push_up: { priority: 0.5, noveltyCost: 0.28, setupFriction: 0.12, allowedSlots: ["Pump"], cluster: "pushup" },
+  close_grip_push_up: { priority: 0.46, noveltyCost: 0.26, setupFriction: 0.08, allowedSlots: ["Triceps", "Pump"], cluster: "pushup" },
+  pec_deck: { priority: 0.34, noveltyCost: 0.44, setupFriction: 0.1, allowedSlots: ["Pump"], cluster: "chest_iso" },
+  hammer_curl: { priority: 0.64, noveltyCost: 0.18, setupFriction: 0.08, allowedSlots: ["Biceps"], cluster: "biceps_curl" },
+  curl: { priority: 0.6, noveltyCost: 0.16, setupFriction: 0.08, allowedSlots: ["Biceps"], cluster: "biceps_curl" },
+  incline_dumbbell_curl: { priority: 0.56, noveltyCost: 0.24, setupFriction: 0.14, allowedSlots: ["Biceps"], cluster: "biceps_curl" },
+  preacher_curl: { priority: 0.46, noveltyCost: 0.32, setupFriction: 0.22, allowedSlots: ["Biceps"], cluster: "biceps_curl" },
+  ssb_squat: { priority: 1.0, noveltyCost: 0.08, setupFriction: 0.18, allowedSlots: ["PrimarySquat"], cluster: "quad_anchor" },
+  squat: { priority: 0.96, noveltyCost: 0.08, setupFriction: 0.16, allowedSlots: ["PrimarySquat"], cluster: "quad_anchor" },
+  high_bar_squat: { priority: 0.9, noveltyCost: 0.18, setupFriction: 0.18, allowedSlots: ["PrimarySquat"], cluster: "quad_anchor" },
+  box_squat: { priority: 0.78, noveltyCost: 0.28, setupFriction: 0.28, allowedSlots: ["PrimarySquat", "SecondaryQuad"], cluster: "quad_anchor" },
+  leverage_squat: { priority: 0.82, noveltyCost: 0.18, setupFriction: 0.2, allowedSlots: ["PrimarySquat", "SecondaryQuad"], cluster: "quad_anchor" },
+  goblet_squat: { priority: 0.62, noveltyCost: 0.22, setupFriction: 0.08, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  heel_elevated_squat: { priority: 0.58, noveltyCost: 0.34, setupFriction: 0.1, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  split_squat: { priority: 0.7, noveltyCost: 0.18, setupFriction: 0.12, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  bulgarian_split_squat: { priority: 0.66, noveltyCost: 0.28, setupFriction: 0.16, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  step_up: { priority: 0.54, noveltyCost: 0.36, setupFriction: 0.14, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  leg_extension: { priority: 0.58, noveltyCost: 0.18, setupFriction: 0.12, allowedSlots: ["SecondaryQuad"], cluster: "quad_accessory" },
+  romanian_deadlift: { priority: 1.0, noveltyCost: 0.08, setupFriction: 0.16, allowedSlots: ["Hinge", "Hamstrings"], cluster: "hinge_anchor" },
+  deadlift: { priority: 0.96, noveltyCost: 0.12, setupFriction: 0.22, allowedSlots: ["Hinge"], cluster: "hinge_anchor" },
+  stiff_leg_deadlift: { priority: 0.84, noveltyCost: 0.2, setupFriction: 0.18, allowedSlots: ["Hinge", "Hamstrings"], cluster: "hinge_anchor" },
+  good_morning: { priority: 0.72, noveltyCost: 0.28, setupFriction: 0.22, allowedSlots: ["Hinge", "Hamstrings"], cluster: "hinge_accessory" },
+  hip_thrust: { priority: 0.74, noveltyCost: 0.22, setupFriction: 0.26, allowedSlots: ["Hinge", "Hamstrings"], cluster: "hinge_accessory" },
+  glute_bridge: { priority: 0.52, noveltyCost: 0.3, setupFriction: 0.12, allowedSlots: ["Hamstrings"], cluster: "hinge_accessory" },
+  back_extension: { priority: 0.56, noveltyCost: 0.24, setupFriction: 0.16, allowedSlots: ["Hinge", "Hamstrings"], cluster: "hinge_accessory" },
+  band_pull_through: { priority: 0.46, noveltyCost: 0.34, setupFriction: 0.08, allowedSlots: ["Hamstrings"], cluster: "hinge_accessory" },
+  hamstring_curl: { priority: 0.68, noveltyCost: 0.18, setupFriction: 0.14, allowedSlots: ["Hamstrings"], cluster: "hamstrings" },
+  seated_leg_curl: { priority: 0.62, noveltyCost: 0.22, setupFriction: 0.16, allowedSlots: ["Hamstrings"], cluster: "hamstrings" },
+  lying_leg_curl: { priority: 0.64, noveltyCost: 0.2, setupFriction: 0.14, allowedSlots: ["Hamstrings"], cluster: "hamstrings" },
+  band_leg_curl: { priority: 0.48, noveltyCost: 0.3, setupFriction: 0.08, allowedSlots: ["Hamstrings"], cluster: "hamstrings" },
+  glute_ham_raise: { priority: 0.46, noveltyCost: 0.42, setupFriction: 0.5, allowedSlots: ["Hamstrings"], cluster: "hamstrings" },
+  calf_raise: { priority: 0.68, noveltyCost: 0.12, setupFriction: 0.08, allowedSlots: ["Calves"], cluster: "calves" },
+  single_leg_calf_raise: { priority: 0.58, noveltyCost: 0.22, setupFriction: 0.06, allowedSlots: ["Calves"], cluster: "calves" },
+  seated_calf_raise: { priority: 0.52, noveltyCost: 0.26, setupFriction: 0.14, allowedSlots: ["Calves"], cluster: "calves" },
+  leg_press_calf_raise: { priority: 0.38, noveltyCost: 0.3, setupFriction: 0.2, allowedSlots: ["Calves"], cluster: "calves" },
+};
+
+
 type ExerciseSeedInput = {
   key: ExerciseKey;
   canonicalName: string;
@@ -30,6 +234,11 @@ type ExerciseSeedInput = {
   fatigue: ExerciseDefinition["fatigue"];
   compound: boolean;
   unilateral?: boolean;
+  priority?: number;
+  noveltyCost?: number;
+  setupFriction?: number;
+  allowedSlots?: Slot[];
+  cluster?: string;
 };
 
 function seedExercise(input: ExerciseSeedInput): ExerciseDefinition {
@@ -38,6 +247,9 @@ function seedExercise(input: ExerciseSeedInput): ExerciseDefinition {
     input.canonicalName,
     ...(input.aliases ?? []),
   ].map(normalizeAlias).filter(Boolean));
+
+  const inferredAllowedSlots = inferAllowedSlots(input);
+  const override = EXERCISE_META_OVERRIDES[input.key] ?? {};
 
   return {
     id: input.key,
@@ -54,6 +266,11 @@ function seedExercise(input: ExerciseSeedInput): ExerciseDefinition {
     compound: input.compound,
     unilateral: input.unilateral,
     active: true,
+    priority: override.priority ?? inferPriority(input),
+    noveltyCost: override.noveltyCost ?? inferNoveltyCost(input),
+    setupFriction: override.setupFriction ?? inferSetupFriction(input),
+    allowedSlots: uniqueSlots([...(override.allowedSlots ?? inferredAllowedSlots)]),
+    cluster: override.cluster ?? inferCluster(input),
   };
 }
 
@@ -1369,7 +1586,10 @@ export function resolveExerciseAlias(input: string): ExerciseKey | null {
 export function getExercisesForSlot(slot: Slot): ExerciseDefinition[] {
   const rule = SLOT_RULES[slot];
   const orderedKeys = SLOT_ORDER[slot];
-  const matched = EXERCISES.filter((exercise) => matchesSlotRule(exercise, rule));
+  const matched = EXERCISES.filter((exercise) => {
+    if (!exercise.allowedSlots.includes(slot)) return false;
+    return matchesSlotRule(exercise, rule);
+  });
   const matchedByKey = new Map(matched.map((exercise) => [exercise.key, exercise]));
 
   const ordered = orderedKeys
@@ -1378,7 +1598,12 @@ export function getExercisesForSlot(slot: Slot): ExerciseDefinition[] {
 
   const fallback = matched
     .filter((exercise) => !orderedKeys.includes(exercise.key))
-    .sort((a, b) => a.canonicalName.localeCompare(b.canonicalName));
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      if (a.setupFriction !== b.setupFriction) return a.setupFriction - b.setupFriction;
+      if (a.noveltyCost !== b.noveltyCost) return a.noveltyCost - b.noveltyCost;
+      return a.canonicalName.localeCompare(b.canonicalName);
+    });
 
   return [...ordered, ...fallback];
 }
@@ -1386,3 +1611,4 @@ export function getExercisesForSlot(slot: Slot): ExerciseDefinition[] {
 export function getExerciseKeysForSlot(slot: Slot): ExerciseKey[] {
   return orderedUniqueKeys(getExercisesForSlot(slot).map((exercise) => exercise.key));
 }
+
