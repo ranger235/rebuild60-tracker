@@ -1,7 +1,31 @@
 export type { Slot } from "./slotTypes";
 
 import { getExerciseKeysForSlot } from "./exerciseRegistry";
+import { DEFAULT_EQUIPMENT_PROFILE } from "./equipmentRegistry";
+import { getEligibleExerciseKeysForProfile, normalizeProfile } from "./exerciseEligibility";
+import type { EquipmentProfile } from "./equipmentTypes";
 import type { Slot } from "./slotTypes";
+
+
+let activeEquipmentProfile: EquipmentProfile = DEFAULT_EQUIPMENT_PROFILE;
+let activeEligibleExerciseKeys = getEligibleExerciseKeysForProfile(activeEquipmentProfile);
+
+export function setActiveEquipmentProfile(profile: EquipmentProfile): void {
+  activeEquipmentProfile = normalizeProfile(profile);
+  activeEligibleExerciseKeys = getEligibleExerciseKeysForProfile(activeEquipmentProfile);
+}
+
+export function getActiveEquipmentProfile(): EquipmentProfile {
+  return { version: activeEquipmentProfile.version, available: [...activeEquipmentProfile.available] };
+}
+
+function applyEquipmentFilter(keys: string[]): string[] {
+  return keys.filter((key) => activeEligibleExerciseKeys.has(key));
+}
+
+function baseCandidatesForSlot(slot: Slot): string[] {
+  return applyEquipmentFilter(getExerciseKeysForSlot(slot));
+}
 
 export type SessionBlueprint = {
   focus: "Push" | "Pull" | "Lower";
@@ -57,22 +81,22 @@ export const LOWER_BLUEPRINT: SessionBlueprint = {
 };
 
 export const SLOT_CANDIDATES: Record<Slot, string[]> = {
-  PrimaryPress: getExerciseKeysForSlot("PrimaryPress"),
-  SecondaryPress: getExerciseKeysForSlot("SecondaryPress"),
-  Shoulders: getExerciseKeysForSlot("Shoulders"),
-  Triceps: getExerciseKeysForSlot("Triceps"),
-  Pump: getExerciseKeysForSlot("Pump"),
-  PrimaryRow: getExerciseKeysForSlot("PrimaryRow"),
-  VerticalPull: getExerciseKeysForSlot("VerticalPull"),
-  SecondaryRow: getExerciseKeysForSlot("SecondaryRow"),
-  RearDelts: getExerciseKeysForSlot("RearDelts"),
-  Biceps: getExerciseKeysForSlot("Biceps"),
-  PrimarySquat: getExerciseKeysForSlot("PrimarySquat"),
-  Hinge: getExerciseKeysForSlot("Hinge"),
-  SecondaryQuad: getExerciseKeysForSlot("SecondaryQuad"),
-  Hamstrings: getExerciseKeysForSlot("Hamstrings"),
-  Calves: getExerciseKeysForSlot("Calves"),
-};
+  get PrimaryPress() { return baseCandidatesForSlot("PrimaryPress"); },
+  get SecondaryPress() { return baseCandidatesForSlot("SecondaryPress"); },
+  get Shoulders() { return baseCandidatesForSlot("Shoulders"); },
+  get Triceps() { return baseCandidatesForSlot("Triceps"); },
+  get Pump() { return baseCandidatesForSlot("Pump"); },
+  get PrimaryRow() { return baseCandidatesForSlot("PrimaryRow"); },
+  get VerticalPull() { return baseCandidatesForSlot("VerticalPull"); },
+  get SecondaryRow() { return baseCandidatesForSlot("SecondaryRow"); },
+  get RearDelts() { return baseCandidatesForSlot("RearDelts"); },
+  get Biceps() { return baseCandidatesForSlot("Biceps"); },
+  get PrimarySquat() { return baseCandidatesForSlot("PrimarySquat"); },
+  get Hinge() { return baseCandidatesForSlot("Hinge"); },
+  get SecondaryQuad() { return baseCandidatesForSlot("SecondaryQuad"); },
+  get Hamstrings() { return baseCandidatesForSlot("Hamstrings"); },
+  get Calves() { return baseCandidatesForSlot("Calves"); },
+} as Record<Slot, string[]>;
 
 export function blueprintForFocus(focus: string): SessionBlueprint {
   if (focus === "Push") return PUSH_BLUEPRINT;
