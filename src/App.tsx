@@ -11,6 +11,7 @@ import {
   type LocalWorkoutTemplate,
   type LocalWorkoutTemplateExercise
 } from "./localdb";
+import { emptyPref } from "./lib/exercisePreferenceMemory";
 import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode } from "./utils/backup";
 import DashboardView from "./components/DashboardView";
 import QuickLogView from "./components/QuickLogView";
@@ -33,7 +34,7 @@ import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
-import { setActiveEquipmentProfile } from "./lib/slotEngine";
+import { setActiveEquipmentProfile, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
 
 function todayISO(): string {
@@ -2071,6 +2072,9 @@ async function saveQuickLog() {
         sort_order: i
       });
 
+      await bumpExercisePreference(identity.exerciseLibraryId, "recommended_count");
+      await bumpExercisePreference(identity.exerciseLibraryId, "accepted_count");
+
       const suggestedWeight = firstNumberFromText(ex.load);
       const repsTarget = parseRecommendedRepTarget(ex.reps);
       const loadType = inferRecommendedLoadType(ex.load);
@@ -2124,10 +2128,35 @@ async function saveQuickLog() {
       exercises: coachExercises
     });
     setDraftByExerciseId((prev) => ({ ...prev, ...nextDrafts }));
+    await refreshPreferenceMemoryCache();
     setTab("workout");
     } finally {
       createSessionInFlightRef.current = false;
     }
+  }
+
+
+  async function refreshPreferenceMemoryCache(targetUserId?: string | null) {
+    const uid = targetUserId ?? userIdRef.current;
+    if (!uid) {
+      setActivePreferenceMemory([]);
+      return;
+    }
+    const rows = await localdb.exercisePrefMemory.where("user_id").equals(uid).toArray();
+    setActivePreferenceMemory(rows);
+  }
+
+  async function bumpExercisePreference(
+    exerciseLibraryId: string | null | undefined,
+    field: "recommended_count" | "accepted_count" | "removed_count" | "manually_added_count" | "completed_count" | "swapped_in_count" | "swapped_out_count"
+  ) {
+    const uid = userIdRef.current;
+    if (!uid || !exerciseLibraryId) return;
+    const key: [string, string] = [uid, exerciseLibraryId];
+    const current = (await localdb.exercisePrefMemory.get(key)) ?? emptyPref(uid, exerciseLibraryId);
+    current[field] += 1;
+    current.updated_at = new Date().toISOString();
+    await localdb.exercisePrefMemory.put(current);
   }
 
   function updateDraft(exerciseId: string, patch: Partial<ExerciseDraft>) {
@@ -2176,6 +2205,8 @@ async function saveQuickLog() {
 
     await ensureLastForExerciseName(name);
     applyDefaultAutofill(id, name);
+    await bumpExercisePreference(identity.exerciseLibraryId, "manually_added_count");
+    await refreshPreferenceMemoryCache();
   }
 
   
@@ -2310,6 +2341,10 @@ async function addSet(exerciseId: string) {
   }
 
   if (openSessionId) await openSession(openSessionId);
+  if (existing.length === 0 && ex?.exercise_library_id) {
+    await bumpExercisePreference(ex.exercise_library_id, "completed_count");
+    await refreshPreferenceMemoryCache();
+  }
 }
 
 
@@ -2410,6 +2445,9 @@ This removes it locally immediately and queues a cloud delete.`
       delete next[exerciseId];
       return next;
     });
+    const removedLibraryId = targetExercise.exercise_library_id ?? resolveExerciseIdentity(targetExercise.name).exerciseLibraryId;
+    await bumpExercisePreference(removedLibraryId, "removed_count");
+    await refreshPreferenceMemoryCache();
   } catch (e: any) {
     console.error(e);
     alert(`Remove exercise failed: ${e?.message ?? String(e)}`);
@@ -3810,6 +3848,8 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       });
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
+      await refreshPreferenceMemoryCache(userId);
+
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfigRef.current,
         recentSessionTitles: completedSessions.map((s) => s.title),
@@ -4005,6 +4045,10 @@ async function refreshLocalUiFromDexie() {
 useEffect(() => {
   refreshLocalUiFromDexieRef.current = refreshLocalUiFromDexie;
 });
+
+useEffect(() => {
+  void refreshPreferenceMemoryCache(userId);
+}, [userId]);
 
 
 function buildCurrentRecalibrationSnapshot(): RecalibrationSandboxSnapshot {
@@ -4715,6 +4759,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
