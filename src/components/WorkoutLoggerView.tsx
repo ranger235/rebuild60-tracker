@@ -380,22 +380,62 @@ export default function WorkoutLoggerView(props: Props) {
                                 {ctrl && (ctrl.prefer || ctrl.avoid || ctrl.never || ctrl.injury) ? (
                                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                                     {ctrl.prefer && (
-                                      <span style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid #9ad39c", background: "#e8f8e8", fontSize: 11, fontWeight: 800, color: "#205f22" }}>
+                                      <span
+                                        style={{
+                                          padding: "2px 8px",
+                                          borderRadius: 999,
+                                          border: "1px solid #9ad39c",
+                                          background: "#e8f8e8",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          color: "#205f22",
+                                        }}
+                                      >
                                         Preferred
                                       </span>
                                     )}
                                     {ctrl.avoid && (
-                                      <span style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid #f0c07c", background: "#fff2df", fontSize: 11, fontWeight: 800, color: "#8a5600" }}>
+                                      <span
+                                        style={{
+                                          padding: "2px 8px",
+                                          borderRadius: 999,
+                                          border: "1px solid #f0c07c",
+                                          background: "#fff2df",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          color: "#8a5600",
+                                        }}
+                                      >
                                         Avoid
                                       </span>
                                     )}
                                     {ctrl.never && (
-                                      <span style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid #e1a1a1", background: "#ffe9e9", fontSize: 11, fontWeight: 800, color: "#912323" }}>
+                                      <span
+                                        style={{
+                                          padding: "2px 8px",
+                                          borderRadius: 999,
+                                          border: "1px solid #e1a1a1",
+                                          background: "#ffe9e9",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          color: "#912323",
+                                        }}
+                                      >
                                         Never Show
                                       </span>
                                     )}
                                     {ctrl.injury && (
-                                      <span style={{ padding: "2px 8px", borderRadius: 999, border: "1px solid #ead57a", background: "#fff8d9", fontSize: 11, fontWeight: 800, color: "#7c6500" }}>
+                                      <span
+                                        style={{
+                                          padding: "2px 8px",
+                                          borderRadius: 999,
+                                          border: "1px solid #ead57a",
+                                          background: "#fff8d9",
+                                          fontSize: 11,
+                                          fontWeight: 800,
+                                          color: "#7c6500",
+                                        }}
+                                      >
                                         Injury-Sensitive
                                       </span>
                                     )}
@@ -416,10 +456,38 @@ export default function WorkoutLoggerView(props: Props) {
                                   });
                                   return (
                                     <>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "prefer")} aria-pressed={!!ctrl?.prefer} title="Prefer this exercise" style={pillStyle(!!ctrl?.prefer, "#dff7df", "#205f22", "rgba(53, 137, 55, 0.22)")}>👍 Prefer</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "avoid")} aria-pressed={!!ctrl?.avoid} title="Avoid this exercise" style={pillStyle(!!ctrl?.avoid, "#fff0d6", "#8a5600", "rgba(214, 135, 26, 0.22)")}>👎 Avoid</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "never")} aria-pressed={!!ctrl?.never} title="Never show this exercise" style={pillStyle(!!ctrl?.never, "#ffe0e0", "#912323", "rgba(196, 55, 55, 0.22)")}>🚫 Never</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "injury")} aria-pressed={!!ctrl?.injury} title="Mark as injury-sensitive" style={pillStyle(!!ctrl?.injury, "#fff6cc", "#7c6500", "rgba(184, 153, 34, 0.22)")}>⚠️ Injury</button>
+                                      <button
+                                        onClick={() => setExerciseControl(ex.exercise_library_id, "prefer")}
+                                        aria-pressed={!!ctrl?.prefer}
+                                        title="Prefer this exercise"
+                                        style={pillStyle(!!ctrl?.prefer, "#dff7df", "#205f22", "rgba(53, 137, 55, 0.22)")}
+                                      >
+                                        👍 Prefer
+                                      </button>
+                                      <button
+                                        onClick={() => setExerciseControl(ex.exercise_library_id, "avoid")}
+                                        aria-pressed={!!ctrl?.avoid}
+                                        title="Avoid this exercise"
+                                        style={pillStyle(!!ctrl?.avoid, "#fff0d6", "#8a5600", "rgba(214, 135, 26, 0.22)")}
+                                      >
+                                        👎 Avoid
+                                      </button>
+                                      <button
+                                        onClick={() => setExerciseControl(ex.exercise_library_id, "never")}
+                                        aria-pressed={!!ctrl?.never}
+                                        title="Never show this exercise"
+                                        style={pillStyle(!!ctrl?.never, "#ffe0e0", "#912323", "rgba(196, 55, 55, 0.22)")}
+                                      >
+                                        🚫 Never
+                                      </button>
+                                      <button
+                                        onClick={() => setExerciseControl(ex.exercise_library_id, "injury")}
+                                        aria-pressed={!!ctrl?.injury}
+                                        title="Mark as injury-sensitive"
+                                        style={pillStyle(!!ctrl?.injury, "#fff6cc", "#7c6500", "rgba(184, 153, 34, 0.22)")}
+                                      >
+                                        ⚠️ Injury
+                                      </button>
                                     </>
                                   );
                                 })()}
@@ -724,6 +792,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
