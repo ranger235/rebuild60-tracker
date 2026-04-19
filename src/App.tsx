@@ -12,6 +12,7 @@ import {
   type LocalWorkoutTemplateExercise
 } from "./localdb";
 import { emptyPref } from "./lib/exercisePreferenceMemory";
+import { emptyExerciseControl, type ExerciseControlRec } from "./lib/exerciseControl";
 import { exportFullBackup, importBackup, validateBackupEnvelope, type ImportMode } from "./utils/backup";
 import DashboardView from "./components/DashboardView";
 import QuickLogView from "./components/QuickLogView";
@@ -34,7 +35,7 @@ import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
-import { setActiveEquipmentProfile, setActivePreferenceMemory } from "./lib/slotEngine";
+import { setActiveEquipmentProfile, setActiveExerciseControls, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
 
 function todayISO(): string {
@@ -1148,6 +1149,7 @@ useEffect(() => {
   const [recalibrationSandboxEnabled, setRecalibrationSandboxEnabled] = useState(false);
   const [recalibrationSandboxScenario, setRecalibrationSandboxScenario] = useState<string | null>(null);
   const [coachSessionSeed, setCoachSessionSeed] = useState<CoachSessionSeed | null>(null);
+  const [exerciseControlRows, setExerciseControlRows] = useState<ExerciseControlRec[]>([]);
   const [lastCompletedSplitDayName, setLastCompletedSplitDayName] = useState<string | null>(null);
   const dashboardRefreshSeqRef = useRef(0);
 
@@ -2144,6 +2146,46 @@ async function saveQuickLog() {
     }
     const rows = await localdb.exercisePrefMemory.where("user_id").equals(uid).toArray();
     setActivePreferenceMemory(rows);
+  }
+
+  async function refreshExerciseControlCache(targetUserId?: string | null) {
+    const uid = targetUserId ?? userIdRef.current;
+    if (!uid) {
+      setActiveExerciseControls([]);
+      return;
+    }
+    const rows = await localdb.exerciseControls.where("user_id").equals(uid).toArray();
+    setExerciseControlRows(rows);
+    setActiveExerciseControls(rows);
+  }
+
+  async function setExerciseControl(
+    exerciseLibraryId: string | null | undefined,
+    control: "prefer" | "avoid" | "never" | "injury"
+  ) {
+    const uid = userIdRef.current;
+    if (!uid || !exerciseLibraryId) return;
+    const key: [string, string] = [uid, exerciseLibraryId];
+    const current = (await localdb.exerciseControls.get(key)) ?? emptyExerciseControl(uid, exerciseLibraryId);
+
+    if (control === "injury") {
+      current.injury = !current.injury;
+    } else {
+      const nextValue = !current[control];
+      current.prefer = false;
+      current.avoid = false;
+      current.never = false;
+      current[control] = nextValue;
+    }
+
+    current.updated_at = new Date().toISOString();
+    await localdb.exerciseControls.put(current);
+    await refreshExerciseControlCache();
+  }
+
+  function getExerciseControl(exerciseLibraryId: string | null | undefined): ExerciseControlRec | null {
+    if (!exerciseLibraryId) return null;
+    return exerciseControlRows.find((row) => row.exercise_library_id === exerciseLibraryId) ?? null;
   }
 
   async function bumpExercisePreference(
@@ -4048,6 +4090,7 @@ useEffect(() => {
 
 useEffect(() => {
   void refreshPreferenceMemoryCache(userId);
+  void refreshExerciseControlCache(userId);
 }, [userId]);
 
 
@@ -4723,6 +4766,8 @@ async function syncNow() {
             startSessionFromTemplate={startSessionFromTemplate}
             displayExerciseName={displayExerciseName}
             displayStoredExerciseName={displayStoredExerciseName}
+            exerciseControlFor={getExerciseControl}
+            setExerciseControl={setExerciseControl}
             sessions={sessions}
             openSessionId={openSessionId}
             openSession={openSession}
@@ -4759,6 +4804,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
