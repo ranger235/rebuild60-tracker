@@ -354,6 +354,7 @@ export default function WorkoutLoggerView(props: Props) {
                         const preview = lastSummary?.sets?.slice?.(0, 5) ?? [];
                         const exSets = setsForExercise(ex.id) ?? [];
                         const compound = !!ex.is_compound;
+                        const ctrl = exerciseControlFor(ex.exercise_library_id);
 
                         return (
                           <div
@@ -791,6 +792,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
