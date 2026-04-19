@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import type { PrefMem } from "./lib/exercisePreferenceMemory";
+import type { ExerciseControlRec } from "./lib/exerciseControl";
 
 /**
  * Local-first DB:
@@ -171,6 +172,7 @@ export class RebuildDB extends Dexie {
   nutritionDaily!: Table<LocalNutritionDaily, [string, string]>; // [user_id, day_date]
   zone2Daily!: Table<LocalZone2Daily, [string, string]>; // [user_id, day_date]
   exercisePrefMemory!: Table<PrefMem, [string, string]>; // [user_id, exercise_library_id]
+  exerciseControls!: Table<ExerciseControlRec, [string, string]>; // [user_id, exercise_library_id]
 
   constructor() {
     super("rebuild60_local");
@@ -260,10 +262,29 @@ export class RebuildDB extends Dexie {
       exercisePrefMemory: "[user_id+exercise_library_id], user_id, exercise_library_id, updated_at"
     });
 
+    // v8: explicit exercise controls
+    this.version(8).stores({
+      pendingOps: "++id, createdAt, op, status",
+      localSettings: "[user_id+key], user_id, key, updatedAt",
+      localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
+      localMilestones: "id, user_id, milestone_type, achieved_on, createdAt",
+      localSessions: "id, user_id, day_date, started_at",
+      localExercises: "id, session_id, sort_order",
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order",
+      dailyMetrics: "[user_id+day_date], user_id, day_date, updatedAt",
+      nutritionDaily: "[user_id+day_date], user_id, day_date, updatedAt",
+      zone2Daily: "[user_id+day_date], user_id, day_date, updatedAt",
+      exercisePrefMemory: "[user_id+exercise_library_id], user_id, exercise_library_id, updated_at",
+      exerciseControls: "[user_id+exercise_library_id], user_id, exercise_library_id, updated_at"
+    });
+
 }
 }
 
 export const localdb = new RebuildDB();
+
 
 
 
