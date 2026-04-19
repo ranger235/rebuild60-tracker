@@ -2,7 +2,9 @@ export type { Slot } from "./slotTypes";
 
 import { getExerciseByKey, getExerciseKeysForSlot } from "./exerciseRegistry";
 import type { PrefMem } from "./exercisePreferenceMemory";
+import type { ExerciseControlRec } from "./exerciseControl";
 import { getPreferenceMultiplier } from "./preferenceScoring";
+import { getControlMultiplier } from "./controlScoring";
 import { DEFAULT_EQUIPMENT_PROFILE } from "./equipmentRegistry";
 import { getEligibleExerciseKeysForProfile, normalizeProfile } from "./exerciseEligibility";
 import type { EquipmentProfile } from "./equipmentTypes";
@@ -12,9 +14,14 @@ import type { Slot } from "./slotTypes";
 let activeEquipmentProfile: EquipmentProfile = DEFAULT_EQUIPMENT_PROFILE;
 let activeEligibleExerciseKeys = getEligibleExerciseKeysForProfile(activeEquipmentProfile);
 let activePreferenceMemory = new Map<string, PrefMem>();
+let activeExerciseControls = new Map<string, ExerciseControlRec>();
 
 export function setActivePreferenceMemory(records: PrefMem[]): void {
   activePreferenceMemory = new Map((records ?? []).map((rec) => [rec.exercise_library_id, rec]));
+}
+
+export function setActiveExerciseControls(records: ExerciseControlRec[]): void {
+  activeExerciseControls = new Map((records ?? []).map((rec) => [rec.exercise_library_id, rec]));
 }
 
 export function setActiveEquipmentProfile(profile: EquipmentProfile): void {
@@ -27,7 +34,13 @@ export function getActiveEquipmentProfile(): EquipmentProfile {
 }
 
 function applyEquipmentFilter(keys: string[]): string[] {
-  return keys.filter((key) => activeEligibleExerciseKeys.has(key));
+  return keys.filter((key) => {
+    if (!activeEligibleExerciseKeys.has(key)) return false;
+    const meta = getExerciseByKey(key);
+    if (!meta) return true;
+    const ctrl = activeExerciseControls.get(meta.id);
+    return !ctrl?.never;
+  });
 }
 
 function baseCandidatesForSlot(slot: Slot): string[] {
@@ -282,6 +295,12 @@ export function scoreCandidateForSlot(
   if (prefMultiplier > 1.03) tags.push("Preference memory");
   if (prefMultiplier < 0.97) tags.push("Friction memory");
 
+  const controlMultiplier = getControlMultiplier(meta ? activeExerciseControls.get(meta.id) : null);
+  score *= controlMultiplier;
+  if (controlMultiplier === 0) tags.push("Never");
+  else if (controlMultiplier > 1.05) tags.push("Preferred");
+  else if (controlMultiplier < 0.95) tags.push("Avoid / Injury");
+
   if (hist) {
     score += 18;
     tags.push("Familiar");
@@ -391,6 +410,8 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
+
 
 
 
