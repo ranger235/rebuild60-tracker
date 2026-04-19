@@ -2181,6 +2181,7 @@ async function saveQuickLog() {
     current.updated_at = new Date().toISOString();
     await localdb.exerciseControls.put(current);
     await refreshExerciseControlCache();
+    await refreshDashboard();
   }
 
   function getExerciseControl(exerciseLibraryId: string | null | undefined): ExerciseControlRec | null {
@@ -4804,6 +4805,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
