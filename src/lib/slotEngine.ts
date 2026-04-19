@@ -1,6 +1,8 @@
 export type { Slot } from "./slotTypes";
 
 import { getExerciseByKey, getExerciseKeysForSlot } from "./exerciseRegistry";
+import type { PrefMem } from "./exercisePreferenceMemory";
+import { getPreferenceMultiplier } from "./preferenceScoring";
 import { DEFAULT_EQUIPMENT_PROFILE } from "./equipmentRegistry";
 import { getEligibleExerciseKeysForProfile, normalizeProfile } from "./exerciseEligibility";
 import type { EquipmentProfile } from "./equipmentTypes";
@@ -9,6 +11,11 @@ import type { Slot } from "./slotTypes";
 
 let activeEquipmentProfile: EquipmentProfile = DEFAULT_EQUIPMENT_PROFILE;
 let activeEligibleExerciseKeys = getEligibleExerciseKeysForProfile(activeEquipmentProfile);
+let activePreferenceMemory = new Map<string, PrefMem>();
+
+export function setActivePreferenceMemory(records: PrefMem[]): void {
+  activePreferenceMemory = new Map((records ?? []).map((rec) => [rec.exercise_library_id, rec]));
+}
 
 export function setActiveEquipmentProfile(profile: EquipmentProfile): void {
   activeEquipmentProfile = normalizeProfile(profile);
@@ -270,6 +277,10 @@ export function scoreCandidateForSlot(
     score -= frictionPenalty;
     if (meta.setupFriction >= 0.55) tags.push("Setup friction");
   }
+  const prefMultiplier = getPreferenceMultiplier(meta ? activePreferenceMemory.get(meta.id) : null);
+  score *= prefMultiplier;
+  if (prefMultiplier > 1.03) tags.push("Preference memory");
+  if (prefMultiplier < 0.97) tags.push("Friction memory");
 
   if (hist) {
     score += 18;
@@ -380,6 +391,8 @@ export function pickBestCandidateForSlot(
     .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferences, blockBias))
     .sort((a, b) => b.score - a.score);
 }
+
+
 
 
 
