@@ -59,6 +59,8 @@ type Props = {
   startSessionFromTemplate: (templateId: string) => any;
   displayExerciseName: (raw: string) => string;
   displayStoredExerciseName: (exercise: { name: string; exercise_library_id?: string | null }) => string;
+  exerciseControlFor: (exerciseLibraryId: string | null | undefined) => { prefer?: boolean; avoid?: boolean; never?: boolean; injury?: boolean } | null;
+  setExerciseControl: (exerciseLibraryId: string | null | undefined, control: "prefer" | "avoid" | "never" | "injury") => any;
 
   // Sessions
   sessions: any[];
@@ -163,6 +165,8 @@ export default function WorkoutLoggerView(props: Props) {
     startSessionFromTemplate,
     displayExerciseName,
     displayStoredExerciseName,
+    exerciseControlFor,
+    setExerciseControl,
     sessions,
     openSessionId,
     openSession,
@@ -359,6 +363,25 @@ export default function WorkoutLoggerView(props: Props) {
                                 <span style={{ fontSize: 12, opacity: 0.7, fontWeight: 600 }}>({defaultLabel})</span>
                               </div>
                               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                {(() => {
+                                  const ctrl = exerciseControlFor(ex.exercise_library_id);
+                                  const pillStyle = (active: boolean, bg: string, fg = "#111") => ({
+                                    padding: "4px 8px",
+                                    borderRadius: 999,
+                                    border: "1px solid #ddd",
+                                    background: active ? bg : "#fff",
+                                    color: active ? fg : "#333",
+                                    fontWeight: active ? 800 : 600,
+                                  });
+                                  return (
+                                    <>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "prefer")} style={pillStyle(!!ctrl?.prefer, "#dff7df")}>👍 Prefer</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "avoid")} style={pillStyle(!!ctrl?.avoid, "#fff0d6")}>👎 Avoid</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "never")} style={pillStyle(!!ctrl?.never, "#ffe0e0")}>🚫 Never</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "injury")} style={pillStyle(!!ctrl?.injury, "#fff6cc")}>⚠️ Injury</button>
+                                    </>
+                                  );
+                                })()}
                                 <button onClick={() => ensureLastForExerciseName(ex.name)} style={{ padding: "6px 10px" }}>
                                   Refresh
                                 </button>
@@ -660,6 +683,8 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
+
 
 
 
