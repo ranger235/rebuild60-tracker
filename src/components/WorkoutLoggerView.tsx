@@ -59,8 +59,8 @@ type Props = {
   startSessionFromTemplate: (templateId: string) => any;
   displayExerciseName: (raw: string) => string;
   displayStoredExerciseName: (exercise: { name: string; exercise_library_id?: string | null }) => string;
-  exerciseControlFor: (exerciseLibraryId: string | null | undefined) => { prefer?: boolean; avoid?: boolean; never?: boolean; injury?: boolean } | null;
-  setExerciseControl: (exerciseLibraryId: string | null | undefined, control: "prefer" | "avoid" | "never" | "injury") => any;
+  exerciseControlFor: (exerciseLibraryId: string | null | undefined, exerciseName?: string | null | undefined) => { prefer?: boolean; avoid?: boolean; never?: boolean; injury?: boolean } | null;
+  setExerciseControl: (exerciseLibraryId: string | null | undefined, control: "prefer" | "avoid" | "never" | "injury", exerciseName?: string | null | undefined) => any;
 
   // Sessions
   sessions: any[];
@@ -354,7 +354,7 @@ export default function WorkoutLoggerView(props: Props) {
                         const preview = lastSummary?.sets?.slice?.(0, 5) ?? [];
                         const exSets = setsForExercise(ex.id) ?? [];
                         const compound = !!ex.is_compound;
-                        const ctrl = exerciseControlFor(ex.exercise_library_id);
+                        const ctrl = exerciseControlFor(ex.exercise_library_id, ex.name);
 
                         return (
                           <div
@@ -416,10 +416,10 @@ export default function WorkoutLoggerView(props: Props) {
                                   });
                                   return (
                                     <>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "prefer")} aria-pressed={!!ctrl?.prefer} title="Prefer this exercise" style={pillStyle(!!ctrl?.prefer, "#dff7df", "#205f22", "rgba(53, 137, 55, 0.22)")}>👍 Prefer</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "avoid")} aria-pressed={!!ctrl?.avoid} title="Avoid this exercise" style={pillStyle(!!ctrl?.avoid, "#fff0d6", "#8a5600", "rgba(214, 135, 26, 0.22)")}>👎 Avoid</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "never")} aria-pressed={!!ctrl?.never} title="Never show this exercise" style={pillStyle(!!ctrl?.never, "#ffe0e0", "#912323", "rgba(196, 55, 55, 0.22)")}>🚫 Never</button>
-                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "injury")} aria-pressed={!!ctrl?.injury} title="Mark as injury-sensitive" style={pillStyle(!!ctrl?.injury, "#fff6cc", "#7c6500", "rgba(184, 153, 34, 0.22)")}>⚠️ Injury</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "prefer", ex.name)} aria-pressed={!!ctrl?.prefer} title="Prefer this exercise" style={pillStyle(!!ctrl?.prefer, "#dff7df", "#205f22", "rgba(53, 137, 55, 0.22)")}>👍 Prefer</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "avoid", ex.name)} aria-pressed={!!ctrl?.avoid} title="Avoid this exercise" style={pillStyle(!!ctrl?.avoid, "#fff0d6", "#8a5600", "rgba(214, 135, 26, 0.22)")}>👎 Avoid</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "never", ex.name)} aria-pressed={!!ctrl?.never} title="Never show this exercise" style={pillStyle(!!ctrl?.never, "#ffe0e0", "#912323", "rgba(196, 55, 55, 0.22)")}>🚫 Never</button>
+                                      <button onClick={() => setExerciseControl(ex.exercise_library_id, "injury", ex.name)} aria-pressed={!!ctrl?.injury} title="Mark as injury-sensitive" style={pillStyle(!!ctrl?.injury, "#fff6cc", "#7c6500", "rgba(184, 153, 34, 0.22)")}>⚠️ Injury</button>
                                     </>
                                   );
                                 })()}
@@ -724,6 +724,7 @@ export default function WorkoutLoggerView(props: Props) {
     </>
   );
 }
+
 
 
 
