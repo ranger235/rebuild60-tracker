@@ -168,6 +168,28 @@ export async function pullSync(userId: string) {
     return validExerciseIds.has(exerciseId);
   });
 
+  const existingLocalExercises = await localdb.localExercises.bulkGet(exerciseRows.map((row) => String(row.id)));
+  const mergedExerciseRows = exerciseRows.map((row, idx) => {
+    const existing = existingLocalExercises[idx] as any;
+    if (!existing) return row;
+    return {
+      ...row,
+      exercise_library_id: row.exercise_library_id ?? existing.exercise_library_id ?? null,
+      exercise_family_id: row.exercise_family_id ?? existing.exercise_family_id ?? null,
+    };
+  });
+
+  const existingLocalTemplateExercises = await localdb.localTemplateExercises.bulkGet(templateExerciseRows.map((row) => String(row.id)));
+  const mergedTemplateExerciseRows = templateExerciseRows.map((row, idx) => {
+    const existing = existingLocalTemplateExercises[idx] as any;
+    if (!existing) return row;
+    return {
+      ...row,
+      exercise_library_id: row.exercise_library_id ?? existing.exercise_library_id ?? null,
+      exercise_family_id: row.exercise_family_id ?? existing.exercise_family_id ?? null,
+    };
+  });
+
   // Collapse zone2 to one row per day for Dexie's [user_id+day_date] key.
   const zone2ByDay = new Map<string, any>();
   for (const row of (zone2 ?? []) as any[]) {
@@ -190,7 +212,7 @@ export async function pullSync(userId: string) {
     localdb.zone2Daily,
     async () => {
       await localdb.localSessions.bulkPut(sessionRows as any);
-      await localdb.localExercises.bulkPut(exerciseRows as any);
+      await localdb.localExercises.bulkPut(mergedExerciseRows as any);
       await localdb.localSets.bulkPut(setRows as any);
 
       const remoteTemplateIdSet = new Set(templateRows.map((row) => String(row.id)));
@@ -230,13 +252,14 @@ export async function pullSync(userId: string) {
       }
 
       await localdb.localTemplates.bulkPut(templateRows as any);
-      await localdb.localTemplateExercises.bulkPut(templateExerciseRows as any);
+      await localdb.localTemplateExercises.bulkPut(mergedTemplateExerciseRows as any);
       await localdb.dailyMetrics.bulkPut(((daily ?? []) as any[]) as any);
       await localdb.nutritionDaily.bulkPut(((nutrition ?? []) as any[]) as any);
       await localdb.zone2Daily.bulkPut(Array.from(zone2ByDay.values()) as any);
     }
   );
 }
+
 
 
 
