@@ -840,6 +840,7 @@ function buildExercisesFromSlots(
     const rankedBase = candidates
       .map((key) => scoreCandidateForSlot(slot, key, history, mode, preferenceSignals));
     const ranked = rankedBase
+      .filter((candidate) => !candidate.tags.includes("Never"))
       .map((candidate) => {
         let score = candidate.score;
         const tags = [...candidate.tags];
@@ -902,14 +903,16 @@ function buildExercisesFromSlots(
       .sort((a, b) => b.score - a.score);
 
     let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
-    const primaryKey = ranked[0]?.key ?? candidates[0];
+    const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? candidates[0];
     const primaryHist = history.find((h) => h.key === primaryKey) ?? null;
 
-    if (!chosen && candidates.length > 0) {
-      chosen = { key: candidates[0], score: 0, tags: [] };
+    if (!chosen) {
+      chosen = rankedBase.find((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key))
+        ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))
+        ?? null;
     }
 
-    const key = chosen?.key ?? candidates[0];
+    const key = chosen?.key ?? primaryKey;
     used.add(key);
     selectedKeys.push(key);
 
@@ -1322,6 +1325,8 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     },
   };
 }
+
+
 
 
 
