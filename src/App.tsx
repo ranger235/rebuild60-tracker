@@ -34,6 +34,8 @@ import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
+import { getCanonicalExerciseIdentity } from "./lib/exerciseIdentity";
+import { getExerciseControlRecord, setExerciseControlRecord } from "./lib/exerciseControls";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
 import { setActiveEquipmentProfile, setActiveExerciseControls, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
@@ -263,25 +265,11 @@ function canonicalizeExerciseInput(raw: string): string {
 type StoredExerciseIdentityLike = {
   name: string;
   exercise_library_id?: string | null;
+  exercise_family_id?: string | null;
 };
 
-type ResolvedExerciseIdentity = {
-  canonicalName: string;
-  stableKey: string;
-  exerciseLibraryId: string | null;
-  exerciseFamilyId: string | null;
-};
-
-function resolveExerciseIdentity(raw: string): ResolvedExerciseIdentity {
-  const canonicalName = canonicalExerciseName(raw);
-  const stableKey = resolveExerciseKey(raw) || exerciseKey(raw);
-  const registryExercise = getExerciseByKey(stableKey);
-  return {
-    canonicalName,
-    stableKey,
-    exerciseLibraryId: registryExercise?.id ?? (stableKey || null),
-    exerciseFamilyId: registryExercise?.family ?? null,
-  };
+function resolveExerciseIdentity(raw: string) {
+  return getCanonicalExerciseIdentity(raw);
 }
 
 function storedExerciseKey(exercise: StoredExerciseIdentityLike): string {
@@ -2071,9 +2059,7 @@ async function saveQuickLog() {
         id: exerciseId,
         session_id: id,
         name: canonicalName,
-        sort_order: i,
-        exercise_library_id: identity.exerciseLibraryId,
-        exercise_family_id: identity.exerciseFamilyId,
+        sort_order: i
       });
 
       await bumpExercisePreference(identity.exerciseLibraryId, "recommended_count");
@@ -2161,51 +2147,22 @@ async function saveQuickLog() {
     setActiveExerciseControls(rows);
   }
 
-  function resolveExerciseControlLibraryId(
-    exerciseLibraryId: string | null | undefined,
-    exerciseName?: string | null | undefined
-  ): string | null {
-    const direct = String(exerciseLibraryId ?? "").trim();
-    if (direct) return direct;
-    const fallbackName = String(exerciseName ?? "").trim();
-    if (!fallbackName) return null;
-    return resolveExerciseIdentity(fallbackName).exerciseLibraryId;
-  }
-
   async function setExerciseControl(
-    exerciseLibraryId: string | null | undefined,
-    control: "prefer" | "avoid" | "never" | "injury",
-    exerciseName?: string | null | undefined
+    exercise: StoredExerciseIdentityLike | string | null | undefined,
+    control: "prefer" | "avoid" | "never" | "injury"
   ) {
-    const uid = userIdRef.current;
-    const resolvedExerciseLibraryId = resolveExerciseControlLibraryId(exerciseLibraryId, exerciseName);
-    if (!uid || !resolvedExerciseLibraryId) return;
-    const key: [string, string] = [uid, resolvedExerciseLibraryId];
-    const current = (await localdb.exerciseControls.get(key)) ?? emptyExerciseControl(uid, resolvedExerciseLibraryId);
-
-    if (control === "injury") {
-      current.injury = !current.injury;
-    } else {
-      const nextValue = !current[control];
-      current.prefer = false;
-      current.avoid = false;
-      current.never = false;
-      current[control] = nextValue;
-    }
-
-    current.updated_at = new Date().toISOString();
-    await localdb.exerciseControls.put(current);
-    await refreshExerciseControlCache();
-    await refreshDashboard();
+    await setExerciseControlRecord(exercise, control, {
+      userId: userIdRef.current,
+      exerciseControlRows,
+      getByKey: (key) => localdb.exerciseControls.get(key),
+      put: (row) => localdb.exerciseControls.put(row),
+      refresh: () => refreshExerciseControlCache(),
+      refreshDashboard: () => refreshDashboard(),
+    });
   }
 
-  function getExerciseControl(
-    exerciseLibraryId: string | null | undefined,
-    exerciseName?: string | null | undefined
-  ): ExerciseControlRec | null {
-    const resolvedExerciseLibraryId = resolveExerciseControlLibraryId(exerciseLibraryId, exerciseName);
-    if (!resolvedExerciseLibraryId) return null;
-    return exerciseControlRows.find((row) => row.exercise_library_id === resolvedExerciseLibraryId) ?? null;
+  function getExerciseControl(exercise: StoredExerciseIdentityLike | string | null | undefined): ExerciseControlRec | null {
+    return getExerciseControlRecord(exercise, exerciseControlRows);
   }
 
   async function bumpExercisePreference(
@@ -2253,9 +2210,7 @@ async function saveQuickLog() {
       id,
       session_id: openSessionId,
       name,
-      sort_order,
-      exercise_library_id: identity.exerciseLibraryId,
-      exercise_family_id: identity.exerciseFamilyId,
+      sort_order
     });
 
     setNewExerciseName("");
@@ -2832,9 +2787,7 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
       id,
       template_id: openTemplateId,
       name,
-      sort_order,
-      exercise_library_id: identity.exerciseLibraryId,
-      exercise_family_id: identity.exerciseFamilyId,
+      sort_order
     });
 
     setNewTemplateExerciseName("");
@@ -2911,9 +2864,7 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
         id: exerciseId,
         session_id: sessionId,
         name: canonicalName,
-        sort_order: i,
-        exercise_library_id: identity.exerciseLibraryId,
-        exercise_family_id: identity.exerciseFamilyId,
+        sort_order: i
       });
 
       setDraftByExerciseId((prev) => ({
@@ -3917,7 +3868,6 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
       await refreshPreferenceMemoryCache(userId);
-      await refreshExerciseControlCache(userId);
 
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfigRef.current,
@@ -4831,7 +4781,6 @@ async function syncNow() {
     </div>
   );
 }
-
 
 
 
