@@ -2071,7 +2071,9 @@ async function saveQuickLog() {
         id: exerciseId,
         session_id: id,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       });
 
       await bumpExercisePreference(identity.exerciseLibraryId, "recommended_count");
@@ -2159,14 +2161,27 @@ async function saveQuickLog() {
     setActiveExerciseControls(rows);
   }
 
+  function resolveExerciseControlLibraryId(
+    exerciseLibraryId: string | null | undefined,
+    exerciseName?: string | null | undefined
+  ): string | null {
+    const direct = String(exerciseLibraryId ?? "").trim();
+    if (direct) return direct;
+    const fallbackName = String(exerciseName ?? "").trim();
+    if (!fallbackName) return null;
+    return resolveExerciseIdentity(fallbackName).exerciseLibraryId;
+  }
+
   async function setExerciseControl(
     exerciseLibraryId: string | null | undefined,
-    control: "prefer" | "avoid" | "never" | "injury"
+    control: "prefer" | "avoid" | "never" | "injury",
+    exerciseName?: string | null | undefined
   ) {
     const uid = userIdRef.current;
-    if (!uid || !exerciseLibraryId) return;
-    const key: [string, string] = [uid, exerciseLibraryId];
-    const current = (await localdb.exerciseControls.get(key)) ?? emptyExerciseControl(uid, exerciseLibraryId);
+    const resolvedExerciseLibraryId = resolveExerciseControlLibraryId(exerciseLibraryId, exerciseName);
+    if (!uid || !resolvedExerciseLibraryId) return;
+    const key: [string, string] = [uid, resolvedExerciseLibraryId];
+    const current = (await localdb.exerciseControls.get(key)) ?? emptyExerciseControl(uid, resolvedExerciseLibraryId);
 
     if (control === "injury") {
       current.injury = !current.injury;
@@ -2184,9 +2199,13 @@ async function saveQuickLog() {
     await refreshDashboard();
   }
 
-  function getExerciseControl(exerciseLibraryId: string | null | undefined): ExerciseControlRec | null {
-    if (!exerciseLibraryId) return null;
-    return exerciseControlRows.find((row) => row.exercise_library_id === exerciseLibraryId) ?? null;
+  function getExerciseControl(
+    exerciseLibraryId: string | null | undefined,
+    exerciseName?: string | null | undefined
+  ): ExerciseControlRec | null {
+    const resolvedExerciseLibraryId = resolveExerciseControlLibraryId(exerciseLibraryId, exerciseName);
+    if (!resolvedExerciseLibraryId) return null;
+    return exerciseControlRows.find((row) => row.exercise_library_id === resolvedExerciseLibraryId) ?? null;
   }
 
   async function bumpExercisePreference(
@@ -2234,7 +2253,9 @@ async function saveQuickLog() {
       id,
       session_id: openSessionId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     });
 
     setNewExerciseName("");
@@ -2811,7 +2832,9 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
       id,
       template_id: openTemplateId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     });
 
     setNewTemplateExerciseName("");
@@ -2888,7 +2911,9 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
         id: exerciseId,
         session_id: sessionId,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       });
 
       setDraftByExerciseId((prev) => ({
@@ -3892,6 +3917,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
       await refreshPreferenceMemoryCache(userId);
+      await refreshExerciseControlCache(userId);
 
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfigRef.current,
@@ -4805,6 +4831,7 @@ async function syncNow() {
     </div>
   );
 }
+
 
 
 
