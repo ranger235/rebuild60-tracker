@@ -2371,6 +2371,87 @@ async function addSet(exerciseId: string) {
 }
 
 
+
+async function removePendingOpsByIds(ids: number[]) {
+  if (!ids.length) return;
+  await localdb.pendingOps.bulkDelete(ids);
+}
+
+function pendingOpTouchesOrderedIds(item: { payload?: any }, key: string, ids: Set<string>) {
+  const arr = item?.payload?.[key];
+  return Array.isArray(arr) && arr.some((value: unknown) => ids.has(String(value ?? "")));
+}
+
+async function compactTransientSetOps(setId: string) {
+  const pending = await localdb.pendingOps.toArray();
+  const insertIds = pending
+    .filter((item) => item.op === "insert_set" && String(item.payload?.id ?? "") === setId)
+    .map((item) => item.id)
+    .filter((id): id is number => typeof id === "number");
+
+  const renumberIds = pending
+    .filter((item) => item.op === "renumber_sets" && pendingOpTouchesOrderedIds(item, "ordered_set_ids", new Set([setId])))
+    .map((item) => item.id)
+    .filter((id): id is number => typeof id === "number");
+
+  await removePendingOpsByIds([...insertIds, ...renumberIds]);
+
+  return {
+    hadUnsyncedInsert: insertIds.length > 0
+  };
+}
+
+async function compactTransientExerciseOps(exerciseId: string, setIds: string[]) {
+  const pending = await localdb.pendingOps.toArray();
+  const setIdSet = new Set(setIds.map(String));
+  const exerciseIdSet = new Set([String(exerciseId)]);
+
+  const doomedIds = pending
+    .filter((item) => {
+      if (item.op === "insert_exercise" && String(item.payload?.id ?? "") === exerciseId) return true;
+      if (item.op === "delete_set" && setIdSet.has(String(item.payload?.set_id ?? ""))) return true;
+      if (item.op === "insert_set" && setIdSet.has(String(item.payload?.id ?? ""))) return true;
+      if (item.op === "renumber_sets" && pendingOpTouchesOrderedIds(item, "ordered_set_ids", setIdSet)) return true;
+      if (item.op === "reorder_exercises" && pendingOpTouchesOrderedIds(item, "ordered_exercise_ids", exerciseIdSet)) return true;
+      return false;
+    })
+    .map((item) => item.id)
+    .filter((id): id is number => typeof id === "number");
+
+  await removePendingOpsByIds(doomedIds);
+
+  return {
+    hadUnsyncedInsert: pending.some((item) => item.op === "insert_exercise" && String(item.payload?.id ?? "") === exerciseId)
+  };
+}
+
+async function compactTransientSessionOps(sessionId: string, exerciseIds: string[], setIds: string[]) {
+  const pending = await localdb.pendingOps.toArray();
+  const exerciseIdSet = new Set(exerciseIds.map(String));
+  const setIdSet = new Set(setIds.map(String));
+
+  const doomedIds = pending
+    .filter((item) => {
+      if (item.op === "create_workout" && String(item.payload?.id ?? "") === sessionId) return true;
+      if (item.op === "delete_session" && String(item.payload?.session_id ?? "") === sessionId) return true;
+      if (item.op === "insert_exercise" && exerciseIdSet.has(String(item.payload?.id ?? ""))) return true;
+      if (item.op === "delete_exercise" && exerciseIdSet.has(String(item.payload?.exercise_id ?? ""))) return true;
+      if (item.op === "reorder_exercises" && pendingOpTouchesOrderedIds(item, "ordered_exercise_ids", exerciseIdSet)) return true;
+      if (item.op === "insert_set" && setIdSet.has(String(item.payload?.id ?? ""))) return true;
+      if (item.op === "delete_set" && setIdSet.has(String(item.payload?.set_id ?? ""))) return true;
+      if (item.op === "renumber_sets" && pendingOpTouchesOrderedIds(item, "ordered_set_ids", setIdSet)) return true;
+      return false;
+    })
+    .map((item) => item.id)
+    .filter((id): id is number => typeof id === "number");
+
+  await removePendingOpsByIds(doomedIds);
+
+  return {
+    hadUnsyncedCreate: pending.some((item) => item.op === "create_workout" && String(item.payload?.id ?? "") === sessionId)
+  };
+}
+
 async function deleteSet(exerciseId: string, setId: string) {
   const target = sets.find((s) => s.id === setId && s.exercise_id === exerciseId) ?? null;
   if (!target) return;
@@ -2387,12 +2468,15 @@ async function deleteSet(exerciseId: string, setId: string) {
         }
       }
 
-      await localdb.pendingOps.add({
-        createdAt: Date.now(),
-        op: "delete_set",
-        payload: { set_id: setId },
-        status: "queued"
-      });
+      const compacted = await compactTransientSetOps(setId);
+      if (!compacted.hadUnsyncedInsert) {
+        await localdb.pendingOps.add({
+          createdAt: Date.now(),
+          op: "delete_set",
+          payload: { set_id: setId },
+          status: "queued"
+        });
+      }
       await localdb.pendingOps.add({
         createdAt: Date.now(),
         op: "renumber_sets",
@@ -2431,6 +2515,7 @@ This removes it locally immediately and queues a cloud delete.`
 
   try {
     const remainingExercises = await localdb.transaction("rw", localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
+      const deletedSets = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
       await localdb.localSets.where({ exercise_id: exerciseId }).delete();
       await localdb.localExercises.delete(exerciseId);
 
@@ -2445,12 +2530,15 @@ This removes it locally immediately and queues a cloud delete.`
         }
       }
 
-      await localdb.pendingOps.add({
-        createdAt: Date.now(),
-        op: "delete_exercise",
-        payload: { exercise_id: exerciseId },
-        status: "queued"
-      });
+      const compacted = await compactTransientExerciseOps(exerciseId, deletedSets.map((row) => row.id));
+      if (!compacted.hadUnsyncedInsert) {
+        await localdb.pendingOps.add({
+          createdAt: Date.now(),
+          op: "delete_exercise",
+          payload: { exercise_id: exerciseId },
+          status: "queued"
+        });
+      }
       await localdb.pendingOps.add({
         createdAt: Date.now(),
         op: "reorder_exercises",
@@ -2495,18 +2583,25 @@ This removes it locally immediately and queues a cloud delete.`
       await localdb.transaction("rw", localdb.localSessions, localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
         const ex = await localdb.localExercises.where({ session_id: sessionId }).toArray();
         const exIds = ex.map((e) => e.id);
+        const setRows = exIds.length
+          ? await localdb.localSets.where("exercise_id").anyOf(exIds).toArray()
+          : [];
 
         for (const exId of exIds) {
           await localdb.localSets.where({ exercise_id: exId }).delete();
         }
         await localdb.localExercises.where({ session_id: sessionId }).delete();
         await localdb.localSessions.delete(sessionId);
-        await localdb.pendingOps.add({
-          createdAt: Date.now(),
-          op: "delete_session",
-          payload: { session_id: sessionId },
-          status: "queued"
-        });
+
+        const compacted = await compactTransientSessionOps(sessionId, exIds, setRows.map((row) => row.id));
+        if (!compacted.hadUnsyncedCreate) {
+          await localdb.pendingOps.add({
+            createdAt: Date.now(),
+            op: "delete_session",
+            payload: { session_id: sessionId },
+            status: "queued"
+          });
+        }
       });
       await rememberDeletedSessionId(sessionId);
       await removeCoachSessionSeed(sessionId);
