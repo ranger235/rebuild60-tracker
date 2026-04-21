@@ -68,8 +68,22 @@ export async function enqueue(op: PendingOp["op"], payload: any) {
     createdAt: Date.now(),
     op,
     payload,
-    status: "queued"
+    status: "queued",
+    retryCount: 0
   });
+}
+
+const MAX_RETRY_ATTEMPTS = 3;
+
+function getLegacyRetrySeed(item: PendingOp) {
+  if (typeof item.retryCount === "number") return item.retryCount;
+  return item.status === "retry" ? MAX_RETRY_ATTEMPTS - 1 : 0;
+}
+
+function buildSyncStatus(activeFailures: number, deadLetters: number) {
+  if (activeFailures > 0) return `Sync issues (${activeFailures} retrying)`;
+  if (deadLetters > 0) return `Sync attention needed (${deadLetters} quarantined)`;
+  return "Synced";
 }
 
 async function processOp(op: PendingOp["op"], payload: any) {
@@ -233,22 +247,34 @@ export async function runSyncPass(
     setStatus("Syncing…");
 
     const items = await localdb.pendingOps.orderBy("createdAt").toArray();
+    const activeItems = items.filter((item) => item.status !== "dead");
+    const deadLettersBefore = items.filter((item) => item.status === "dead").length;
 
     if (items.length > 0) {
-      setStatus("Local changes pending");
+      setStatus(activeItems.length > 0 ? "Local changes pending" : buildSyncStatus(0, deadLettersBefore));
       let failed = 0;
+      let deadLetters = deadLettersBefore;
 
-      for (const item of items) {
+      for (const item of activeItems) {
         try {
           await processOp(item.op, item.payload);
           if (item.id != null) await localdb.pendingOps.delete(item.id);
         } catch (e: any) {
           failed++;
           if (item.id != null) {
+            const nextRetryCount = getLegacyRetrySeed(item) + 1;
+            const nextStatus = nextRetryCount >= MAX_RETRY_ATTEMPTS ? "dead" : "retry";
             await localdb.pendingOps.update(item.id, {
-              status: "retry",
+              status: nextStatus,
+              retryCount: nextRetryCount,
+              lastAttemptAt: Date.now(),
               lastError: e?.message ?? String(e)
             });
+            if (nextStatus === "dead") {
+              deadLetters++;
+              failed--;
+              console.warn(`[sync] quarantined ${item.op} after ${nextRetryCount} failed attempts`, item.payload, e);
+            }
           }
           continue;
         }
@@ -263,8 +289,8 @@ export async function runSyncPass(
         await onAfterSync();
       }
 
-      setStatus(failed === 0 ? "Synced" : `Sync issues (${failed} retrying)`);
-      return { completed: true, failed, hadQueuedOps: true };
+      setStatus(buildSyncStatus(failed, deadLetters));
+      return { completed: true, failed, hadQueuedOps: activeItems.length > 0 };
     }
 
     const auth = await supabase.auth.getUser();
@@ -275,11 +301,13 @@ export async function runSyncPass(
     if (onAfterSync) {
       await onAfterSync();
     }
-    setStatus("Synced");
+    const deadLetters = await localdb.pendingOps.where("status").equals("dead").count();
+    setStatus(buildSyncStatus(0, deadLetters));
     return { completed: true, failed: 0, hadQueuedOps: false };
   } catch (e: any) {
     console.error(e);
-    setStatus(navigator.onLine ? "Sync issues (retrying)" : "Offline (local saves only)");
+    const deadLetters = navigator.onLine ? await localdb.pendingOps.where("status").equals("dead").count().catch(() => 0) : 0;
+    setStatus(navigator.onLine ? buildSyncStatus(1, deadLetters) : "Offline (local saves only)");
     return { completed: false, failed: 1, hadQueuedOps: false };
   }
 }

@@ -34,8 +34,10 @@ export type PendingOp = {
   createdAt: number;
   op: PendingOpName;
   payload: any;
-  status: "queued" | "retry";
+  status: "queued" | "retry" | "dead";
   lastError?: string;
+  retryCount?: number;
+  lastAttemptAt?: number;
 };
 
 export type LocalSetting = {
@@ -265,6 +267,25 @@ export class RebuildDB extends Dexie {
     // v8: explicit exercise controls
     this.version(8).stores({
       pendingOps: "++id, createdAt, op, status",
+      localSettings: "[user_id+key], user_id, key, updatedAt",
+      localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
+      localMilestones: "id, user_id, milestone_type, achieved_on, createdAt",
+      localSessions: "id, user_id, day_date, started_at",
+      localExercises: "id, session_id, sort_order",
+      localSets: "id, exercise_id, set_number",
+      localTemplates: "id, user_id, created_at",
+      localTemplateExercises: "id, template_id, sort_order",
+      dailyMetrics: "[user_id+day_date], user_id, day_date, updatedAt",
+      nutritionDaily: "[user_id+day_date], user_id, day_date, updatedAt",
+      zone2Daily: "[user_id+day_date], user_id, day_date, updatedAt",
+      exercisePrefMemory: "[user_id+exercise_library_id], user_id, exercise_library_id, updated_at",
+      exerciseControls: "[user_id+exercise_library_id], user_id, exercise_library_id, updated_at"
+    });
+
+
+    // v9: pending op retry bookkeeping + dead-letter status
+    this.version(9).stores({
+      pendingOps: "++id, createdAt, op, status, retryCount, lastAttemptAt",
       localSettings: "[user_id+key], user_id, key, updatedAt",
       localExerciseAliases: "[user_id+alias_norm], user_id, alias_norm, updatedAt",
       localMilestones: "id, user_id, milestone_type, achieved_on, createdAt",
