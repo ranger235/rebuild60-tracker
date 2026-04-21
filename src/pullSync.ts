@@ -58,6 +58,23 @@ function collectSyncIntent(pending: PendingOp[]) {
   };
 }
 
+
+function preserveExerciseIdentity<T extends { id?: string | null; exercise_library_id?: string | null; exercise_family_id?: string | null }>(
+  remoteRows: T[],
+  localRows: T[]
+): T[] {
+  const localById = new Map(localRows.map((row) => [String(row.id ?? ""), row]));
+  return remoteRows.map((row) => {
+    const local = localById.get(String(row.id ?? ""));
+    if (!local) return row;
+    return {
+      ...row,
+      exercise_library_id: row.exercise_library_id ?? local.exercise_library_id ?? null,
+      exercise_family_id: row.exercise_family_id ?? local.exercise_family_id ?? null,
+    };
+  });
+}
+
 function toMillis(value: any): number {
   const n = Date.parse(String(value ?? ""));
   return Number.isFinite(n) ? n : 0;
@@ -168,28 +185,6 @@ export async function pullSync(userId: string) {
     return validExerciseIds.has(exerciseId);
   });
 
-  const existingLocalExercises = await localdb.localExercises.bulkGet(exerciseRows.map((row) => String(row.id)));
-  const mergedExerciseRows = exerciseRows.map((row, idx) => {
-    const existing = existingLocalExercises[idx] as any;
-    if (!existing) return row;
-    return {
-      ...row,
-      exercise_library_id: row.exercise_library_id ?? existing.exercise_library_id ?? null,
-      exercise_family_id: row.exercise_family_id ?? existing.exercise_family_id ?? null,
-    };
-  });
-
-  const existingLocalTemplateExercises = await localdb.localTemplateExercises.bulkGet(templateExerciseRows.map((row) => String(row.id)));
-  const mergedTemplateExerciseRows = templateExerciseRows.map((row, idx) => {
-    const existing = existingLocalTemplateExercises[idx] as any;
-    if (!existing) return row;
-    return {
-      ...row,
-      exercise_library_id: row.exercise_library_id ?? existing.exercise_library_id ?? null,
-      exercise_family_id: row.exercise_family_id ?? existing.exercise_family_id ?? null,
-    };
-  });
-
   // Collapse zone2 to one row per day for Dexie's [user_id+day_date] key.
   const zone2ByDay = new Map<string, any>();
   for (const row of (zone2 ?? []) as any[]) {
@@ -211,12 +206,28 @@ export async function pullSync(userId: string) {
     localdb.nutritionDaily,
     localdb.zone2Daily,
     async () => {
+      const existingLocalExercises = exerciseRows.length
+        ? await localdb.localExercises.bulkGet(exerciseRows.map((row) => String(row.id)))
+        : [];
+      const existingLocalTemplateExercises = templateExerciseRows.length
+        ? await localdb.localTemplateExercises.bulkGet(templateExerciseRows.map((row) => String(row.id)))
+        : [];
+
+      const mergedExerciseRows = preserveExerciseIdentity(
+        exerciseRows as any[],
+        (existingLocalExercises.filter(Boolean) as any[])
+      );
+      const mergedTemplateExerciseRows = preserveExerciseIdentity(
+        templateExerciseRows as any[],
+        (existingLocalTemplateExercises.filter(Boolean) as any[])
+      );
+
       await localdb.localSessions.bulkPut(sessionRows as any);
       await localdb.localExercises.bulkPut(mergedExerciseRows as any);
       await localdb.localSets.bulkPut(setRows as any);
 
       const remoteTemplateIdSet = new Set(templateRows.map((row) => String(row.id)));
-      const remoteTemplateExerciseIdSet = new Set(templateExerciseRows.map((row) => String(row.id)));
+      const remoteTemplateExerciseIdSet = new Set(mergedTemplateExerciseRows.map((row) => String(row.id)));
 
       const localUserTemplates = await localdb.localTemplates.where({ user_id: userId }).toArray();
       const staleTemplateIds = localUserTemplates
@@ -259,7 +270,6 @@ export async function pullSync(userId: string) {
     }
   );
 }
-
 
 
 

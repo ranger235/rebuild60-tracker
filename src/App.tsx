@@ -2059,7 +2059,9 @@ async function saveQuickLog() {
         id: exerciseId,
         session_id: id,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       });
 
       await bumpExercisePreference(identity.exerciseLibraryId, "recommended_count");
@@ -2210,7 +2212,9 @@ async function saveQuickLog() {
       id,
       session_id: openSessionId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     });
 
     setNewExerciseName("");
@@ -2787,7 +2791,9 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
       id,
       template_id: openTemplateId,
       name,
-      sort_order
+      sort_order,
+      exercise_library_id: identity.exerciseLibraryId,
+      exercise_family_id: identity.exerciseFamilyId,
     });
 
     setNewTemplateExerciseName("");
@@ -2864,7 +2870,9 @@ async function moveTemplateExercise(templateExerciseId: string, direction: -1 | 
         id: exerciseId,
         session_id: sessionId,
         name: canonicalName,
-        sort_order: i
+        sort_order: i,
+        exercise_library_id: identity.exerciseLibraryId,
+        exercise_family_id: identity.exerciseFamilyId,
       });
 
       setDraftByExerciseId((prev) => ({
