@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
-import { enqueue, runSyncPass, startAutoSync } from "./sync";
+import { clearQuarantinedOps, enqueue, getPendingOpCounts, listQuarantinedOps, runSyncPass, startAutoSync } from "./sync";
 import { pullSync } from "./pullSync";
 import {
   localdb,
@@ -1316,7 +1316,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
       const fn = refreshLocalUiFromDexieRef.current;
       if (fn) await fn();
     }, (result) => {
-      if (result.completed && result.failed === 0) {
+      if (result.completed) {
         setLastSyncedAt(new Date().toLocaleTimeString());
       }
     });
@@ -1330,7 +1330,7 @@ async function saveTrainingSplitConfig(next: TrainingSplitConfig) {
         const fn = refreshLocalUiFromDexieRef.current;
         if (fn) await fn();
       });
-      if (result.completed && result.failed === 0) {
+      if (result.completed) {
         setLastSyncedAt(new Date().toLocaleTimeString());
       }
     })();
@@ -2391,114 +2391,6 @@ async function addSet(exerciseId: string) {
 }
 
 
-function pendingPayloadId(payload: any, key: string): string | null {
-  const value = payload?.[key];
-  return typeof value === "string" && value ? value : null;
-}
-
-function pendingPayloadIds(payload: any, key: string): string[] {
-  const value = payload?.[key];
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && !!v) : [];
-}
-
-async function deletePendingOpsByIds(ids: number[]) {
-  if (!ids.length) return;
-  await localdb.pendingOps.bulkDelete(ids);
-}
-
-async function removePendingSetOps(txSetIds: string[], exerciseId: string) {
-  if (!txSetIds.length) return { hadPendingInsertForAny: false };
-  const pendingOps = await localdb.pendingOps.toArray();
-  const idSet = new Set(txSetIds);
-  const toDelete: number[] = [];
-  let hadPendingInsertForAny = false;
-
-  for (const op of pendingOps) {
-    const opId = op.id;
-    if (opId == null) continue;
-    if (op.op === "insert_set" && idSet.has(pendingPayloadId(op.payload, "id") ?? "")) {
-      hadPendingInsertForAny = true;
-      toDelete.push(opId);
-      continue;
-    }
-    if (op.op === "delete_set" && idSet.has(pendingPayloadId(op.payload, "set_id") ?? "")) {
-      toDelete.push(opId);
-      continue;
-    }
-    if (op.op === "renumber_sets") {
-      const ordered = pendingPayloadIds(op.payload, "ordered_set_ids");
-      if (ordered.some((id) => idSet.has(id))) {
-        toDelete.push(opId);
-        continue;
-      }
-      // also drop stale renumbers for the same exercise; a fresh one will be queued if needed
-      const surviving = sets.filter((s) => s.exercise_id === exerciseId).map((s) => s.id);
-      if (ordered.some((id) => surviving.includes(id))) {
-        toDelete.push(opId);
-      }
-    }
-  }
-
-  await deletePendingOpsByIds([...new Set(toDelete)]);
-  return { hadPendingInsertForAny };
-}
-
-async function removePendingExerciseOps(txExerciseIds: string[], sessionId: string | null) {
-  if (!txExerciseIds.length) return { hadPendingInsertForAny: false };
-  const pendingOps = await localdb.pendingOps.toArray();
-  const idSet = new Set(txExerciseIds);
-  const toDelete: number[] = [];
-  let hadPendingInsertForAny = false;
-
-  for (const op of pendingOps) {
-    const opId = op.id;
-    if (opId == null) continue;
-    if (op.op === "insert_exercise" && idSet.has(pendingPayloadId(op.payload, "id") ?? "")) {
-      hadPendingInsertForAny = true;
-      toDelete.push(opId);
-      continue;
-    }
-    if (op.op === "delete_exercise" && idSet.has(pendingPayloadId(op.payload, "exercise_id") ?? "")) {
-      toDelete.push(opId);
-      continue;
-    }
-    if (op.op === "reorder_exercises") {
-      const ordered = pendingPayloadIds(op.payload, "ordered_exercise_ids");
-      if (ordered.some((id) => idSet.has(id))) {
-        toDelete.push(opId);
-        continue;
-      }
-      if (sessionId) {
-        const surviving = exercises.filter((ex) => ex.session_id === sessionId).map((ex) => ex.id);
-        if (ordered.some((id) => surviving.includes(id))) {
-          toDelete.push(opId);
-        }
-      }
-    }
-  }
-
-  await deletePendingOpsByIds([...new Set(toDelete)]);
-  return { hadPendingInsertForAny };
-}
-
-async function removePendingSessionOps(sessionId: string) {
-  const pendingOps = await localdb.pendingOps.toArray();
-  const toDelete = pendingOps
-    .filter((op) => {
-      const payload = op.payload ?? {};
-      return (
-        (op.op === "create_workout" && payload?.id === sessionId) ||
-        (op.op === "delete_session" && payload?.session_id === sessionId)
-      );
-    })
-    .map((op) => op.id)
-    .filter((id): id is number => id != null);
-
-  const hadPendingCreate = pendingOps.some((op) => op.op === "create_workout" && (op.payload?.id === sessionId));
-  await deletePendingOpsByIds([...new Set(toDelete)]);
-  return { hadPendingCreate };
-}
-
 async function deleteSet(exerciseId: string, setId: string) {
   const target = sets.find((s) => s.id === setId && s.exercise_id === exerciseId) ?? null;
   if (!target) return;
@@ -2515,33 +2407,18 @@ async function deleteSet(exerciseId: string, setId: string) {
         }
       }
 
-      const pendingOps = await localdb.pendingOps.toArray();
-      const pendingInsertIds = pendingOps
-        .filter((op) => op.op === "insert_set" && pendingPayloadId(op.payload, "id") === setId)
-        .map((op) => op.id)
-        .filter((id): id is number => id != null);
-      const staleRenumbers = pendingOps
-        .filter((op) => op.op === "renumber_sets" && pendingPayloadIds(op.payload, "ordered_set_ids").includes(setId))
-        .map((op) => op.id)
-        .filter((id): id is number => id != null);
-      await deletePendingOpsByIds([...new Set([...pendingInsertIds, ...staleRenumbers])]);
-
-      if (!pendingInsertIds.length) {
-        await localdb.pendingOps.add({
-          createdAt: Date.now(),
-          op: "delete_set",
-          payload: { set_id: setId },
-          status: "queued"
-        });
-      }
-      if (remaining.length) {
-        await localdb.pendingOps.add({
-          createdAt: Date.now(),
-          op: "renumber_sets",
-          payload: { ordered_set_ids: remaining.map((s) => s.id) },
-          status: "queued"
-        });
-      }
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "delete_set",
+        payload: { set_id: setId },
+        status: "queued"
+      });
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "renumber_sets",
+        payload: { ordered_set_ids: remaining.map((s) => s.id) },
+        status: "queued"
+      });
 
       return remaining;
     });
@@ -2574,8 +2451,6 @@ This removes it locally immediately and queues a cloud delete.`
 
   try {
     const remainingExercises = await localdb.transaction("rw", localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
-      const childSets = await localdb.localSets.where({ exercise_id: exerciseId }).toArray();
-      const childSetIds = childSets.map((s) => s.id);
       await localdb.localSets.where({ exercise_id: exerciseId }).delete();
       await localdb.localExercises.delete(exerciseId);
 
@@ -2590,25 +2465,18 @@ This removes it locally immediately and queues a cloud delete.`
         }
       }
 
-      await removePendingSetOps(childSetIds, exerciseId);
-      const { hadPendingInsertForAny } = await removePendingExerciseOps([exerciseId], openSessionId);
-
-      if (!hadPendingInsertForAny) {
-        await localdb.pendingOps.add({
-          createdAt: Date.now(),
-          op: "delete_exercise",
-          payload: { exercise_id: exerciseId },
-          status: "queued"
-        });
-      }
-      if (remaining.length) {
-        await localdb.pendingOps.add({
-          createdAt: Date.now(),
-          op: "reorder_exercises",
-          payload: { ordered_exercise_ids: remaining.map((ex) => ex.id) },
-          status: "queued"
-        });
-      }
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "delete_exercise",
+        payload: { exercise_id: exerciseId },
+        status: "queued"
+      });
+      await localdb.pendingOps.add({
+        createdAt: Date.now(),
+        op: "reorder_exercises",
+        payload: { ordered_exercise_ids: remaining.map((ex) => ex.id) },
+        status: "queued"
+      });
 
       return remaining;
     });
@@ -2647,29 +2515,18 @@ This removes it locally immediately and queues a cloud delete.`
       await localdb.transaction("rw", localdb.localSessions, localdb.localExercises, localdb.localSets, localdb.pendingOps, async () => {
         const ex = await localdb.localExercises.where({ session_id: sessionId }).toArray();
         const exIds = ex.map((e) => e.id);
-        const childSets = exIds.length
-          ? await localdb.localSets.where("exercise_id").anyOf(exIds).toArray()
-          : [];
-        const childSetIds = childSets.map((s) => s.id);
 
         for (const exId of exIds) {
           await localdb.localSets.where({ exercise_id: exId }).delete();
         }
         await localdb.localExercises.where({ session_id: sessionId }).delete();
         await localdb.localSessions.delete(sessionId);
-
-        await removePendingSetOps(childSetIds, "");
-        await removePendingExerciseOps(exIds, sessionId);
-        const { hadPendingCreate } = await removePendingSessionOps(sessionId);
-
-        if (!hadPendingCreate) {
-          await localdb.pendingOps.add({
-            createdAt: Date.now(),
-            op: "delete_session",
-            payload: { session_id: sessionId },
-            status: "queued"
-          });
-        }
+        await localdb.pendingOps.add({
+          createdAt: Date.now(),
+          op: "delete_session",
+          payload: { session_id: sessionId },
+          status: "queued"
+        });
       });
       await rememberDeletedSessionId(sessionId);
       await removeCoachSessionSeed(sessionId);
@@ -4286,8 +4143,39 @@ async function syncNow() {
   const result = await runSyncPass(setStatus, async () => {
     await refreshLocalUiFromDexie();
   });
-  if (result.completed && result.failed === 0) {
+  if (result.completed) {
     setLastSyncedAt(new Date().toLocaleTimeString());
+  }
+}
+
+async function reviewQuarantinedNow() {
+  const items = await listQuarantinedOps();
+  if (items.length === 0) {
+    alert("No quarantined sync items found.");
+    return;
+  }
+  const summary = items
+    .slice(0, 20)
+    .map((item, idx) => `${idx + 1}. ${item.op} — ${item.lastError || "No error message"}`)
+    .join("\n");
+  const extra = items.length > 20 ? `\n\n…plus ${items.length - 20} more.` : "";
+  alert(`Quarantined sync items (${items.length})\n\n${summary}${extra}`);
+}
+
+async function clearQuarantinedNow() {
+  const counts = await getPendingOpCounts();
+  if (counts.quarantined === 0) {
+    alert("There are no quarantined sync items to clear.");
+    return;
+  }
+  const ok = confirm(`Delete ${counts.quarantined} quarantined sync item(s)?\n\nThis only clears isolated dead queue items. It does not touch healthy queued changes.`);
+  if (!ok) return;
+  const removed = await clearQuarantinedOps();
+  if (removed > 0) {
+    await syncNow();
+    alert(`Cleared ${removed} quarantined sync item(s).`);
+  } else {
+    await syncNow();
   }
 }
 
@@ -4736,6 +4624,16 @@ async function syncNow() {
           <button type="button" onClick={() => void syncNow()} disabled={!userId}>
             Sync Now
           </button>
+          {status.includes("quarantined") ? (
+            <>
+              <button type="button" onClick={() => void reviewQuarantinedNow()} disabled={!userId}>
+                Review Quarantined
+              </button>
+              <button type="button" onClick={() => void clearQuarantinedNow()} disabled={!userId}>
+                Clear Quarantined
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 

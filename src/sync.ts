@@ -10,6 +10,44 @@ import { pullSync } from "./pullSync";
  * - cloud pull runs after push so multiple devices converge
  */
 
+const MAX_RETRY_COUNT = 3;
+
+export async function getPendingOpCounts() {
+  const items = await localdb.pendingOps.toArray();
+  const queued = items.filter((i) => i.status === "queued").length;
+  const retrying = items.filter((i) => i.status === "retry").length;
+  const quarantined = items.filter((i) => i.status === "quarantined").length;
+  return { queued, retrying, quarantined, total: items.length };
+}
+
+export async function listQuarantinedOps() {
+  const items = await localdb.pendingOps
+    .filter((i) => i.status === "quarantined")
+    .toArray();
+  return items
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((item) => ({
+      id: item.id ?? null,
+      op: item.op,
+      createdAt: item.createdAt,
+      retryCount: item.retryCount ?? 0,
+      quarantinedAt: item.quarantinedAt ?? null,
+      lastError: item.lastError ?? "",
+      payload: item.payload
+    }));
+}
+
+export async function clearQuarantinedOps() {
+  const items = await localdb.pendingOps
+    .filter((i) => i.status === "quarantined")
+    .toArray();
+  const ids = items.map((i) => i.id).filter((id): id is number => id != null);
+  if (ids.length > 0) {
+    await localdb.pendingOps.bulkDelete(ids);
+  }
+  return ids.length;
+}
+
 async function must<T>(promise: Promise<{ data: T | null; error: any } | { data?: T; error?: any }>) {
   const result: any = await promise;
   if (result?.error) throw result.error;
@@ -68,22 +106,8 @@ export async function enqueue(op: PendingOp["op"], payload: any) {
     createdAt: Date.now(),
     op,
     payload,
-    status: "queued",
-    retryCount: 0
+    status: "queued"
   });
-}
-
-const MAX_RETRY_ATTEMPTS = 3;
-
-function getLegacyRetrySeed(item: PendingOp) {
-  if (typeof item.retryCount === "number") return item.retryCount;
-  return item.status === "retry" ? MAX_RETRY_ATTEMPTS - 1 : 0;
-}
-
-function buildSyncStatus(activeFailures: number, deadLetters: number) {
-  if (activeFailures > 0) return `Sync issues (${activeFailures} retrying)`;
-  if (deadLetters > 0) return `Sync attention needed (${deadLetters} quarantined)`;
-  return "Synced";
 }
 
 async function processOp(op: PendingOp["op"], payload: any) {
@@ -247,33 +271,33 @@ export async function runSyncPass(
     setStatus("Syncing…");
 
     const items = await localdb.pendingOps.orderBy("createdAt").toArray();
-    const activeItems = items.filter((item) => item.status !== "dead");
-    const deadLettersBefore = items.filter((item) => item.status === "dead").length;
 
     if (items.length > 0) {
-      setStatus(activeItems.length > 0 ? "Local changes pending" : buildSyncStatus(0, deadLettersBefore));
+      setStatus("Local changes pending");
       let failed = 0;
-      let deadLetters = deadLettersBefore;
 
-      for (const item of activeItems) {
+      for (const item of items) {
+        if (item.status === "quarantined") continue;
         try {
           await processOp(item.op, item.payload);
           if (item.id != null) await localdb.pendingOps.delete(item.id);
         } catch (e: any) {
           failed++;
+          const nextRetryCount = (item.retryCount ?? 0) + 1;
           if (item.id != null) {
-            const nextRetryCount = getLegacyRetrySeed(item) + 1;
-            const nextStatus = nextRetryCount >= MAX_RETRY_ATTEMPTS ? "dead" : "retry";
-            await localdb.pendingOps.update(item.id, {
-              status: nextStatus,
-              retryCount: nextRetryCount,
-              lastAttemptAt: Date.now(),
-              lastError: e?.message ?? String(e)
-            });
-            if (nextStatus === "dead") {
-              deadLetters++;
-              failed--;
-              console.warn(`[sync] quarantined ${item.op} after ${nextRetryCount} failed attempts`, item.payload, e);
+            if (nextRetryCount >= MAX_RETRY_COUNT) {
+              await localdb.pendingOps.update(item.id, {
+                status: "quarantined",
+                retryCount: nextRetryCount,
+                lastError: e?.message ?? String(e),
+                quarantinedAt: Date.now()
+              });
+            } else {
+              await localdb.pendingOps.update(item.id, {
+                status: "retry",
+                retryCount: nextRetryCount,
+                lastError: e?.message ?? String(e)
+              });
             }
           }
           continue;
@@ -289,8 +313,15 @@ export async function runSyncPass(
         await onAfterSync();
       }
 
-      setStatus(buildSyncStatus(failed, deadLetters));
-      return { completed: true, failed, hadQueuedOps: activeItems.length > 0 };
+      const counts = await getPendingOpCounts();
+      if (counts.quarantined > 0) {
+        setStatus(`Sync attention needed (${counts.quarantined} quarantined)`);
+      } else if (counts.retrying > 0 || failed > 0) {
+        setStatus(`Sync issues (${Math.max(counts.retrying, failed)} retrying)`);
+      } else {
+        setStatus("Synced");
+      }
+      return { completed: true, failed: counts.retrying + counts.quarantined, hadQueuedOps: true };
     }
 
     const auth = await supabase.auth.getUser();
@@ -301,13 +332,21 @@ export async function runSyncPass(
     if (onAfterSync) {
       await onAfterSync();
     }
-    const deadLetters = await localdb.pendingOps.where("status").equals("dead").count();
-    setStatus(buildSyncStatus(0, deadLetters));
+    const counts = await getPendingOpCounts();
+    if (counts.quarantined > 0) {
+      setStatus(`Sync attention needed (${counts.quarantined} quarantined)`);
+      return { completed: true, failed: counts.quarantined, hadQueuedOps: false };
+    }
+    setStatus("Synced");
     return { completed: true, failed: 0, hadQueuedOps: false };
   } catch (e: any) {
     console.error(e);
-    const deadLetters = navigator.onLine ? await localdb.pendingOps.where("status").equals("dead").count().catch(() => 0) : 0;
-    setStatus(navigator.onLine ? buildSyncStatus(1, deadLetters) : "Offline (local saves only)");
+    const counts = await getPendingOpCounts().catch(() => ({ queued: 0, retrying: 0, quarantined: 0, total: 0 }));
+    if (navigator.onLine && counts.quarantined > 0) {
+      setStatus(`Sync attention needed (${counts.quarantined} quarantined)`);
+    } else {
+      setStatus(navigator.onLine ? "Sync issues (retrying)" : "Offline (local saves only)");
+    }
     return { completed: false, failed: 1, hadQueuedOps: false };
   }
 }
