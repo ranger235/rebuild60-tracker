@@ -35,7 +35,7 @@ import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
 import { getCanonicalExerciseIdentity } from "./lib/exerciseIdentity";
-import { getExerciseControlRecord, setExerciseControlRecord } from "./lib/exerciseControls";
+import { getExerciseControlRecord, setExerciseControlRecord } from "./lib/exerciseControlService";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
 import { setActiveEquipmentProfile, setActiveExerciseControls, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
