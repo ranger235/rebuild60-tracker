@@ -1008,7 +1008,7 @@ function buildExercisesFromSlots(
         ? "Lower support"
         : program.label;
 
-    return [{
+    return {
       slot: displaySlot,
       name,
       sets,
@@ -1018,7 +1018,7 @@ function buildExercisesFromSlots(
       note,
       eventTag,
       swappedFrom,
-    }];
+    };
   });
 }
 
