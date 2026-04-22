@@ -34,6 +34,8 @@ import { focusFromExerciseKey } from "./lib/exerciseFocusMap";
 import { buildFrictionProfile, type FrictionProfile } from "./lib/frictionEngine";
 import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat";
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
+import { getCanonicalExerciseIdentity } from "./lib/exerciseIdentity";
+import { getExerciseControlRecord, setExerciseControlRecord } from "./lib/exerciseControlService";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
 import { setActiveEquipmentProfile, setActiveExerciseControls, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
@@ -2160,33 +2162,21 @@ async function saveQuickLog() {
   }
 
   async function setExerciseControl(
-    exerciseLibraryId: string | null | undefined,
+    exercise: StoredExerciseIdentityLike | string | null | undefined,
     control: "prefer" | "avoid" | "never" | "injury"
   ) {
-    const uid = userIdRef.current;
-    if (!uid || !exerciseLibraryId) return;
-    const key: [string, string] = [uid, exerciseLibraryId];
-    const current = (await localdb.exerciseControls.get(key)) ?? emptyExerciseControl(uid, exerciseLibraryId);
-
-    if (control === "injury") {
-      current.injury = !current.injury;
-    } else {
-      const nextValue = !current[control];
-      current.prefer = false;
-      current.avoid = false;
-      current.never = false;
-      current[control] = nextValue;
-    }
-
-    current.updated_at = new Date().toISOString();
-    await localdb.exerciseControls.put(current);
-    await refreshExerciseControlCache();
-    await refreshDashboard();
+    await setExerciseControlRecord(exercise, control, {
+      userId: userIdRef.current,
+      exerciseControlRows,
+      getByKey: (key) => localdb.exerciseControls.get(key),
+      put: (row) => localdb.exerciseControls.put(row),
+      refresh: () => refreshExerciseControlCache(),
+      refreshDashboard: () => refreshDashboard(),
+    });
   }
 
-  function getExerciseControl(exerciseLibraryId: string | null | undefined): ExerciseControlRec | null {
-    if (!exerciseLibraryId) return null;
-    return exerciseControlRows.find((row) => row.exercise_library_id === exerciseLibraryId) ?? null;
+  function getExerciseControl(exercise: StoredExerciseIdentityLike | string | null | undefined): ExerciseControlRec | null {
+    return getExerciseControlRecord(exercise, exerciseControlRows);
   }
 
   async function bumpExercisePreference(
