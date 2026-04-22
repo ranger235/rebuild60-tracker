@@ -902,18 +902,15 @@ function buildExercisesFromSlots(
       })
       .sort((a, b) => b.score - a.score);
 
-    let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
-    const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? null;
+    const legalRanked = ranked.filter((candidate) => !used.has(candidate.key));
+    const legalFallback = rankedBase.filter((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key));
+    let chosen = legalRanked[0] ?? legalFallback[0] ?? null;
+    const primaryKey = legalRanked[0]?.key ?? legalFallback[0]?.key ?? null;
     const primaryHist = primaryKey ? (history.find((h) => h.key === primaryKey) ?? null) : null;
 
-    if (!chosen) {
-      chosen = rankedBase.find((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key))
-        ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))
-        ?? null;
-    }
+    if (!chosen) return [];
 
-    const key = chosen?.key ?? primaryKey;
-    if (!key) return [];
+    const key = chosen.key;
     used.add(key);
     selectedKeys.push(key);
 
