@@ -2693,7 +2693,7 @@ async function renameTemplateExercise(templateExerciseId: string, rawName: strin
   };
   await localdb.localTemplateExercises.put(updated);
   setTemplateExercises((prev) => prev.map((x) => (x.id === templateExerciseId ? updated : x)));
-  await enqueue("update_template_exercise", updated);
+  await enqueue("update_template_exercise", { ...updated, exercise_family_id: undefined });
 }
 
 async function deleteTemplateExercise(templateExerciseId: string) {

@@ -101,6 +101,19 @@ async function verifyRowMissingSoft(table: string, idColumn: string, idValue: st
   }
 }
 
+
+function sanitizeRemoteWorkoutExercisePayload(payload: any) {
+  if (!payload || typeof payload !== "object") return payload;
+  const { exercise_family_id, ...rest } = payload as Record<string, any>;
+  return rest;
+}
+
+function sanitizeRemoteTemplateExercisePayload(payload: any) {
+  if (!payload || typeof payload !== "object") return payload;
+  const { exercise_family_id, ...rest } = payload as Record<string, any>;
+  return rest;
+}
+
 export async function enqueue(op: PendingOp["op"], payload: any) {
   await localdb.pendingOps.add({
     createdAt: Date.now(),
@@ -129,7 +142,7 @@ async function processOp(op: PendingOp["op"], payload: any) {
       return;
 
     case "insert_exercise":
-      await must(supabase.from("workout_exercises").upsert(payload, { onConflict: "id" }));
+      await must(supabase.from("workout_exercises").upsert(sanitizeRemoteWorkoutExercisePayload(payload), { onConflict: "id" }));
       return;
 
     case "insert_set":
@@ -156,11 +169,11 @@ async function processOp(op: PendingOp["op"], payload: any) {
     }
 
     case "insert_template_exercise":
-      await must(supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" }));
+      await must(supabase.from("workout_template_exercises").upsert(sanitizeRemoteTemplateExercisePayload(payload), { onConflict: "id" }));
       return;
 
     case "update_template_exercise":
-      await must(supabase.from("workout_template_exercises").upsert(payload, { onConflict: "id" }));
+      await must(supabase.from("workout_template_exercises").upsert(sanitizeRemoteTemplateExercisePayload(payload), { onConflict: "id" }));
       return;
 
     case "delete_template_exercise": {
