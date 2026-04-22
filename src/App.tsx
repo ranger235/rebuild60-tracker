@@ -3882,6 +3882,7 @@ async function refreshDashboard(splitOverride?: TrainingSplitConfig | null) {
       const adaptedPreferenceSignals = applyAdaptationToPreferenceSignals(preferenceSignals, adaptationSnapshot);
 
       await refreshPreferenceMemoryCache(userId);
+      await refreshExerciseControlCache(userId);
 
       const brain = computeBrainSnapshot({
         splitConfig: splitOverride ?? splitConfigRef.current,
