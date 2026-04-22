@@ -1314,6 +1314,7 @@ export default function DashboardView(props: Props) {
                 </button>
                 <button
                   onClick={startSessionFromRecommendation}
+                  disabled={dashBusy || !brainSnapshot.recommendedSession.exercises?.length}
                   style={{
                     border: "1px solid #111",
                     borderRadius: 10,
@@ -1321,10 +1322,11 @@ export default function DashboardView(props: Props) {
                     fontWeight: 800,
                     background: "#111",
                     color: "#fff",
-                    cursor: "pointer"
+                    cursor: dashBusy ? "wait" : "pointer",
+                    opacity: dashBusy ? 0.7 : 1
                   }}
                 >
-                  Start This Session
+                  {dashBusy ? "Refreshing…" : "Start This Session"}
                 </button>
               </div>
             </div>
