@@ -902,15 +902,18 @@ function buildExercisesFromSlots(
       })
       .sort((a, b) => b.score - a.score);
 
-    const legalRanked = ranked.filter((candidate) => !used.has(candidate.key));
-    const legalFallback = rankedBase.filter((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key));
-    let chosen = legalRanked[0] ?? legalFallback[0] ?? null;
-    const primaryKey = legalRanked[0]?.key ?? legalFallback[0]?.key ?? null;
+    let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
+    const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? null;
     const primaryHist = primaryKey ? (history.find((h) => h.key === primaryKey) ?? null) : null;
 
-    if (!chosen) return [];
+    if (!chosen) {
+      chosen = rankedBase.find((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key))
+        ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))
+        ?? null;
+    }
 
-    const key = chosen.key;
+    const key = chosen?.key ?? primaryKey;
+    if (!key) return [];
     used.add(key);
     selectedKeys.push(key);
 
@@ -959,11 +962,19 @@ function buildExercisesFromSlots(
       eventTag = "Hold load";
     } else if (mode === "Reduced volume") {
       if (frictionProfile?.recommendations.volumeCap === "reduced") note = `${note} Friction profile is trimming session demand to preserve completion.`;
-      eventTag = chosen?.tags.includes("Recovery-friendly")
+      eventTag = chosen?.tags.includes("Preferred")
+        ? "Explicit prefer"
+        : chosen?.tags.includes("Avoid / Injury")
+        ? "Constraint fill"
+        : chosen?.tags.includes("Recovery-friendly")
         ? "Recovery-friendly"
         : chosen?.tags.includes("Preference lean")
         ? "Preference lean"
         : "Reduced volume";
+    } else if (chosen?.tags.includes("Preferred")) {
+      eventTag = "Explicit prefer";
+    } else if (chosen?.tags.includes("Avoid / Injury")) {
+      eventTag = "Constraint fill";
     } else if (chosen?.tags.includes("Familiar") && !chosen.tags.includes("Fresh")) {
       eventTag = "Mainstay";
     } else if (chosen?.tags.includes("Preference lean")) {
@@ -980,6 +991,10 @@ function buildExercisesFromSlots(
           if (tag === "Recovery-friendly") return "Chosen for recovery";
           if (tag === "Progression path") return "Chosen for progression";
           if (tag === "Preference lean") return "Chosen for preference fit";
+          if (tag === "Preference memory") return "Preference memory boosted this";
+          if (tag === "Friction memory") return "Preference memory dragged this down";
+          if (tag === "Preferred") return "Explicit Prefer control boosted this";
+          if (tag === "Avoid / Injury") return "Avoid/Injury control penalized this";
           if (tag === "Stall penalty") return "Penalty applied for stalling";
           if (tag === "Priority: anchor progression") return "Priority engine pushed anchor progression";
           if (tag === "Priority: balance correction") return "Priority engine boosted balance work";
@@ -1289,6 +1304,15 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     for (const reason of input.preferenceSignals.reasons.slice(0, 2)) {
       alerts.push(`Preference learning: ${reason}`);
     }
+  }
+
+  const explicitPreferCount = recommendedExercises.filter((ex) => ex.eventTag === "Explicit prefer").length;
+  const constraintFillCount = recommendedExercises.filter((ex) => ex.eventTag === "Constraint fill").length;
+  if (explicitPreferCount > 0) {
+    alerts.push(`Explicit controls: ${explicitPreferCount} pick${explicitPreferCount === 1 ? "" : "s"} got a direct Prefer boost`);
+  }
+  if (constraintFillCount > 0) {
+    alerts.push(`Constraint fill: ${constraintFillCount} slot${constraintFillCount === 1 ? "" : "s"} landed on penalized options after cleaner choices ran out`);
   }
 
   const swappedExercises = recommendedExercises.filter((ex) => ex.swappedFrom);
