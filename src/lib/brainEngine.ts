@@ -834,7 +834,7 @@ function buildExercisesFromSlots(
   const slotIsAnchor = (slot: Slot) => ["PrimaryPress", "PrimaryRow", "VerticalPull", "PrimarySquat", "Hinge"].includes(slot);
   const slotIsSupport = (slot: Slot) => ["SecondaryPress", "SecondaryRow", "Shoulders", "Triceps", "Pump", "RearDelts", "Biceps", "SecondaryQuad", "Hamstrings", "Calves"].includes(slot);
 
-  return trimmedSlots.map((slot) => {
+  return trimmedSlots.flatMap((slot) => {
     const program = SLOT_PROGRAMS[slot];
     const candidates = broadenCandidatesForCoveredSlot(slot, candidatesForSlot(slot), selectedKeys);
     const rankedBase = candidates
@@ -903,8 +903,8 @@ function buildExercisesFromSlots(
       .sort((a, b) => b.score - a.score);
 
     let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
-    const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? candidates[0];
-    const primaryHist = history.find((h) => h.key === primaryKey) ?? null;
+    const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? null;
+    const primaryHist = primaryKey ? (history.find((h) => h.key === primaryKey) ?? null) : null;
 
     if (!chosen) {
       chosen = rankedBase.find((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key))
@@ -913,6 +913,7 @@ function buildExercisesFromSlots(
     }
 
     const key = chosen?.key ?? primaryKey;
+    if (!key) return [];
     used.add(key);
     selectedKeys.push(key);
 
@@ -1007,7 +1008,7 @@ function buildExercisesFromSlots(
         ? "Lower support"
         : program.label;
 
-    return {
+    return [{
       slot: displaySlot,
       name,
       sets,
@@ -1017,7 +1018,7 @@ function buildExercisesFromSlots(
       note,
       eventTag,
       swappedFrom,
-    };
+    }];
   });
 }
 
