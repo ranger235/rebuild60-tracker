@@ -18,7 +18,8 @@ export function focusFromExerciseKey(key: string): ExerciseFocus {
     k.includes("glute") ||
     k.includes("hip_thrust") ||
     k.includes("calf") ||
-    k.includes("good_morning")
+    k.includes("good_morning") ||
+    k.includes("rack_pull")
   ) return "Lower";
 
   if (
