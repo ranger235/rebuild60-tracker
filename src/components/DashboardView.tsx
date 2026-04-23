@@ -710,13 +710,13 @@ export default function DashboardView(props: Props) {
     setSecs
   } = props;
 
-  const [splitDraft, setSplitDraft] = useState<TrainingSplitConfig>(splitConfig ?? pplPreset());
+  const [splitDraft, setSplitDraft] = useState<TrainingSplitConfig>(splitConfig ?? initialCustomPreset());
   const [splitSaving, setSplitSaving] = useState(false);
   const [showRecommendationWhy, setShowRecommendationWhy] = useState(false);
   const [showDevHatch, setShowDevHatch] = useState(false);
 
   useEffect(() => {
-    setSplitDraft(splitConfig ?? pplPreset());
+    setSplitDraft(splitConfig ?? initialCustomPreset());
   }, [splitConfig]);
 
   const safePreferenceHistory = Array.isArray(preferenceHistory) ? preferenceHistory : [];
