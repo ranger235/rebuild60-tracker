@@ -1217,29 +1217,11 @@ useEffect(() => {
       const nextConfig =
         parsed && Array.isArray(parsed.days) && parsed.days.length > 0
           ? parsed
-          : defaultPplSplit();
-
-      if (!parsed || !Array.isArray(parsed.days) || parsed.days.length === 0) {
-        await localdb.localSettings.put({
-          user_id: userId,
-          key: "training_split_config_v1",
-          value: JSON.stringify(nextConfig),
-          updatedAt: Date.now(),
-        });
-      }
+          : null;
 
       if (!cancelled) setSplitConfig(nextConfig);
     } catch {
-      const fallback = defaultPplSplit();
-      try {
-        await localdb.localSettings.put({
-          user_id: userId,
-          key: "training_split_config_v1",
-          value: JSON.stringify(fallback),
-          updatedAt: Date.now(),
-        });
-      } catch {}
-      if (!cancelled) setSplitConfig(fallback);
+      if (!cancelled) setSplitConfig(null);
     }
   })();
   return () => {
