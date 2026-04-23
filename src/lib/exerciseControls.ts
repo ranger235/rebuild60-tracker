@@ -16,8 +16,8 @@ export type ExerciseControlsDeps = {
 
 export function resolveExerciseControlLibraryId(input: ExerciseControlLookupInput): string | null {
   if (typeof input === "string") {
-    const trimmed = input.trim();
-    return trimmed || null;
+    const identity = getCanonicalExerciseIdentity(input);
+    return identity.exerciseLibraryId ?? null;
   }
   const identity = getCanonicalExerciseIdentity(input);
   return identity.exerciseLibraryId ?? null;
