@@ -324,9 +324,8 @@ function buildDefaultSplitConfig(): TrainingSplitConfig {
   };
 }
 
-function sanitizeSplitConfig(splitConfig?: TrainingSplitConfig | null): TrainingSplitConfig {
-  const fallback = buildDefaultSplitConfig();
-  if (!splitConfig?.days?.length) return fallback;
+function sanitizeSplitConfig(splitConfig?: TrainingSplitConfig | null): TrainingSplitConfig | null {
+  if (!splitConfig?.days?.length) return null;
   const days = splitConfig.days
     .map((day, idx) => ({
       id: day.id || `day_${idx + 1}`,
@@ -334,8 +333,22 @@ function sanitizeSplitConfig(splitConfig?: TrainingSplitConfig | null): Training
       slots: (Array.isArray(day.slots) ? day.slots : []).filter(Boolean) as Slot[],
     }))
     .filter((day) => day.slots.length > 0);
-  if (!days.length) return fallback;
+  if (!days.length) return null;
   return { preset: splitConfig.preset || "custom", days };
+}
+
+function hasConfiguredSplitEvidence(input: BrainInput, split: TrainingSplitConfig): boolean {
+  const history = summarizeSplitHistory(input.recentSessionTitles, split, input.recentCompletedSplitDays);
+  const matchedCount = Object.values(history.counts).reduce((acc, n) => acc + (Number(n) || 0), 0);
+  if (matchedCount > 0 || history.lastDayName) return true;
+  if ((input.recentCompletedSplitDays?.length ?? 0) > 0) return true;
+  if ((input.trainingDays28 ?? 0) <= 1) return true;
+  return split.preset !== "ppl";
+}
+
+function shouldDriveFromConfiguredSplit(input: BrainInput, split: TrainingSplitConfig | null): split is TrainingSplitConfig {
+  if (!split) return false;
+  return hasConfiguredSplitEvidence(input, split);
 }
 
 function inferFocusFromSlots(slots: Slot[]): Exclude<BrainFocus, "Mixed"> {
@@ -484,16 +497,17 @@ function chooseDecision(
   recovery: number,
   momentum: number,
   adaptiveFocus: Exclude<BrainFocus, "Mixed">,
-  plannedFocus: Exclude<BrainFocus, "Mixed">,
+  plannedFocus: Exclude<BrainFocus, "Mixed"> | null,
   plannedDayId: string | null,
   plannedDayName: string | null
 ): Decision {
+  const resolvedPlannedFocus = plannedFocus ?? adaptiveFocus;
   const baseMode = progressionMode(readiness, recovery, momentum, input.frictionProfile);
 
   if (recovery < 45) {
     return {
-      plannedFocus,
-      focus: plannedFocus,
+      plannedFocus: resolvedPlannedFocus,
+      focus: resolvedPlannedFocus,
       plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
@@ -505,8 +519,8 @@ function chooseDecision(
 
   if (recovery < 60 && plannedFocus === "Lower") {
     return {
-      plannedFocus,
-      focus: plannedFocus,
+      plannedFocus: resolvedPlannedFocus,
+      focus: resolvedPlannedFocus,
       plannedDayId,
       plannedDayName,
       mode: "Reduced volume",
@@ -517,17 +531,17 @@ function chooseDecision(
   }
 
   return {
-    plannedFocus,
-    focus: plannedFocus,
+    plannedFocus: resolvedPlannedFocus,
+    focus: resolvedPlannedFocus,
     plannedDayId,
     plannedDayName,
     mode: baseMode,
     wasOverride: false,
     overrideReason:
-      adaptiveFocus !== plannedFocus
-        ? plannedDayName
-          ? `The adaptive engine leaned ${adaptiveFocus}, but ${plannedDayName} remains the source of truth for today.`
-          : `The adaptive engine leaned ${adaptiveFocus}, but the configured split day remains the source of truth for today.`
+      plannedDayName && adaptiveFocus !== resolvedPlannedFocus
+        ? `The adaptive engine leaned ${adaptiveFocus}, but ${plannedDayName} remains the source of truth for today.`
+        : !plannedDayName && plannedFocus
+        ? `The adaptive engine leaned ${adaptiveFocus}, but the configured split still supplied today's focus.`
         : null,
   };
 }
@@ -1121,14 +1135,17 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const debtWeightedNeeds = applyMovementDebtToNeeds(preferenceWeightedNeeds, movementDebt);
 
   const split = sanitizeSplitConfig(input.splitConfig);
-  const chosenSplitDay = enrichSplitDay(chooseSplitDay(input, split));
+  const driveFromConfiguredSplit = shouldDriveFromConfiguredSplit(input, split);
+  const chosenSplitDay = driveFromConfiguredSplit && split ? enrichSplitDay(chooseSplitDay(input, split)) : null;
 
   const composer = composeAdaptiveSession({
     needs: debtWeightedNeeds,
-    explicitDay: {
-      name: chosenSplitDay.name,
-      slots: chosenSplitDay.slots,
-    },
+    explicitDay: chosenSplitDay
+      ? {
+          name: chosenSplitDay.name,
+          slots: chosenSplitDay.slots,
+        }
+      : null,
     preferredPairings: {
       row: [...new Set(["triceps", "verticalPull", "biceps", ...((input.preferenceSignals?.preferredPairings?.row) ?? [])])],
       horizontalPress: [...new Set(["biceps", "triceps", "delts", ...((input.preferenceSignals?.preferredPairings?.horizontalPress) ?? [])])],
@@ -1150,9 +1167,9 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
     recoveryScore,
     momentumScore,
     adaptiveFocus,
-    inferFocusFromSlots(chosenSplitDay.slots),
-    chosenSplitDay.id,
-    chosenSplitDay.name
+    chosenSplitDay ? inferFocusFromSlots(chosenSplitDay.slots) : null,
+    chosenSplitDay?.id ?? null,
+    chosenSplitDay?.name ?? null
   );
 
   const nextSessionPriority = buildNextSessionPriorityProfile({
@@ -1270,7 +1287,11 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
       : "Run the planned work, keep execution clean, and let consistency do the lifting.";
 
   const alerts: string[] = [];
-  alerts.push(`Split day: ${decision.plannedDayName ?? composer.emphasis}`);
+  alerts.push(
+    decision.plannedDayName
+      ? `Split day: ${decision.plannedDayName}`
+      : `Adaptive day: ${composer.emphasis}`
+  );
   if (composer.topNeeds.length > 0) {
     alerts.push(`Top needs: ${composer.topNeeds.slice(0, 3).join(" / ")}`);
   }
