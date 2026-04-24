@@ -250,8 +250,24 @@ function exerciseKey(raw: string): string {
 
 // Display name (what the UI shows)
 function displayExerciseName(raw: string): string {
-  const k = exerciseKey(raw);
-  return CANONICAL_DISPLAY[k] ?? raw;
+  const text = String(raw || "").trim();
+  if (!text) return text;
+
+  const directRegistry = getExerciseByKey(text) || getExerciseById(text);
+  if (directRegistry?.canonicalName) return directRegistry.canonicalName;
+
+  const resolvedKey = resolveExerciseKey(text);
+  if (resolvedKey) {
+    const registryExercise = getExerciseByKey(resolvedKey);
+    if (registryExercise?.canonicalName) return registryExercise.canonicalName;
+    return CANONICAL_DISPLAY[resolvedKey] ?? text;
+  }
+
+  const k = exerciseKey(text);
+  const registryExercise = getExerciseByKey(k);
+  if (registryExercise?.canonicalName) return registryExercise.canonicalName;
+
+  return CANONICAL_DISPLAY[k] ?? text;
 }
 
 // When the user types a known alias as the full exercise name, store the canonical display name.
@@ -595,7 +611,7 @@ function buildRecommendationFingerprint(brain: BrainSnapshot | null): Recommenda
     generatedAt: new Date().toISOString(),
     exercises: (brain.recommendedSession.exercises || []).map((ex) => ({
       key: exerciseKey(ex.name),
-      name: ex.name,
+      name: displayExerciseName(ex.name),
       slot: ex.slot,
       sets: parseRecommendedSetCount(ex.sets),
       loadLbs: firstNumberFromText(ex.load),
