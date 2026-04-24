@@ -834,12 +834,20 @@ function buildExercisesFromSlots(
   const used = new Set<string>();
   const selectedKeys: string[] = [];
   const noveltyCap = frictionProfile?.recommendations.noveltyCap ?? "normal";
-  const volumeCap = frictionProfile?.recommendations.volumeCap ?? "normal";
+  const frictionVolumeCap = frictionProfile?.recommendations.volumeCap ?? "normal";
+  const preferenceVolumeTolerance = preferenceSignals?.volumeTolerance ?? "normal";
+  const effectiveVolumeCap = frictionVolumeCap === "reduced"
+    ? "reduced"
+    : preferenceVolumeTolerance === "lower"
+    ? (frictionVolumeCap === "normal" ? "soft" : frictionVolumeCap)
+    : frictionVolumeCap;
   const anchorDemand = frictionProfile?.recommendations.anchorDemand ?? "normal";
-  const trimmedSlots = volumeCap === "reduced"
+  const trimmedSlots = effectiveVolumeCap === "reduced"
     ? slots.filter((slot) => !["Pump", "Calves"].includes(slot)).slice(0, Math.max(3, slots.length - 1))
-    : volumeCap === "soft"
+    : effectiveVolumeCap === "soft"
     ? slots.filter((slot, idx) => !(slot === "Pump" && idx >= 4))
+    : preferenceVolumeTolerance === "higher" && !slots.includes("Pump")
+    ? [...slots, "Pump"]
     : slots;
 
   const topPriority = priorityProfile?.topPriorities?.[0] ?? null;
@@ -901,9 +909,15 @@ function buildExercisesFromSlots(
           tags.push(anchorDemand === "preserve" ? "Friction: preserve anchor" : "Friction: protect anchor");
         }
 
-        if (volumeCap === "reduced" && ["Shoulders", "Triceps", "Biceps", "RearDelts", "Pump", "Calves"].includes(slot)) {
+        if (effectiveVolumeCap === "reduced" && ["Shoulders", "Triceps", "Biceps", "RearDelts", "Pump", "Calves"].includes(slot)) {
           score -= 4;
           tags.push("Friction: trim fluff");
+        } else if (preferenceVolumeTolerance === "lower" && ["Pump", "Calves", "Biceps", "Triceps"].includes(slot)) {
+          score -= 2;
+          tags.push("Reality: volume trim");
+        } else if (preferenceVolumeTolerance === "higher" && ["SecondaryPress", "SecondaryRow", "Shoulders", "Biceps", "Triceps"].includes(slot)) {
+          score += 1.5;
+          tags.push("Reality: volume carry");
         }
 
         const overlapPenalty = applyMovementOverlapPenalty(slot, candidate.key, selectedKeys);
@@ -919,6 +933,20 @@ function buildExercisesFromSlots(
     let chosen = ranked.find((candidate) => !used.has(candidate.key)) ?? ranked[0] ?? null;
     const primaryKey = ranked[0]?.key ?? rankedBase.find((candidate) => !candidate.tags.includes("Never"))?.key ?? null;
     const primaryHist = primaryKey ? (history.find((h) => h.key === primaryKey) ?? null) : null;
+    const preferredSwapKey = primaryKey ? (preferenceSignals?.preferredSubstitutions?.[primaryKey] ?? null) : null;
+    let realitySwapFrom: string | null = null;
+
+    if (preferredSwapKey) {
+      const swapCandidate = ranked.find((candidate) => candidate.key === preferredSwapKey && !used.has(candidate.key));
+      if (swapCandidate && chosen) {
+        const scoreGap = (chosen.score ?? 0) - (swapCandidate.score ?? 0);
+        const explicitPreferBoosted = swapCandidate.tags.includes("Preferred") || swapCandidate.tags.includes("Preference lean") || swapCandidate.tags.includes("Preference memory");
+        if (scoreGap <= 8 || explicitPreferBoosted) {
+          chosen = swapCandidate;
+          realitySwapFrom = primaryKey;
+        }
+      }
+    }
 
     if (!chosen) {
       chosen = rankedBase.find((candidate) => !candidate.tags.includes("Never") && !used.has(candidate.key))
@@ -950,13 +978,20 @@ function buildExercisesFromSlots(
     const primaryMemory = analyzeProgressionMemory(primaryHist);
     const forcedSwap =
       !!(primaryHist && activeHist && primaryHist.key !== activeHist.key && primaryMemory.stalled);
+    const learnedSwap =
+      !!(realitySwapFrom && primaryHist && activeHist && primaryHist.key !== activeHist.key);
     const scoredRotation =
-      !!(primaryHist && activeHist && primaryHist.key !== activeHist.key && !primaryMemory.stalled);
+      !!(primaryHist && activeHist && primaryHist.key !== activeHist.key && !primaryMemory.stalled && !learnedSwap);
 
     if (forcedSwap && primaryHist && activeHist) {
       loadInfo.loadBasis = `Load path: ${primaryHist.name} looks stalled across the last few outings, so the brain is rotating to ${activeHist.name} from your own logged exercise pool.`;
       note = `Variation swap: ${primaryHist.name} looks flat while average working reps are sliding. ${activeHist.name} gets the nod for this block.`;
       eventTag = "Variation swap";
+      swappedFrom = primaryHist.name;
+    } else if (learnedSwap && primaryHist && activeHist) {
+      loadInfo.loadBasis = `Load path: closed-loop feedback kept steering this slot from ${primaryHist.name} toward ${activeHist.name}, so the engine is now respecting what you actually tend to perform.`;
+      note = `Reality override: you repeatedly turn ${primaryHist.name} into ${activeHist.name}, so the recommendation is leaning into that pattern instead of pretending it never happened.`;
+      eventTag = "Reality swap";
       swappedFrom = primaryHist.name;
     } else if (scoredRotation && primaryHist && activeHist) {
       loadInfo.loadBasis = `Load path: slot scoring gave ${activeHist.name} the edge today — enough familiarity to be useful, enough freshness to keep things moving.`;
@@ -1009,6 +1044,8 @@ function buildExercisesFromSlots(
           if (tag === "Friction memory") return "Preference memory dragged this down";
           if (tag === "Preferred") return "Explicit Prefer control boosted this";
           if (tag === "Avoid / Injury") return "Avoid/Injury control penalized this";
+          if (tag === "Reality: volume trim") return "Recent adherence says trim this lane a touch";
+          if (tag === "Reality: volume carry") return "Recent adherence says this lane can carry a bit more work";
           if (tag === "Stall penalty") return "Penalty applied for stalling";
           if (tag === "Priority: anchor progression") return "Priority engine pushed anchor progression";
           if (tag === "Priority: balance correction") return "Priority engine boosted balance work";
@@ -1280,6 +1317,10 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
   const volumeNote =
     friction?.recommendations.volumeCap === "reduced"
       ? "Friction is high, so trim accessories, keep the session short, and leave more in reserve than your ego wants."
+      : input.preferenceSignals?.volumeTolerance === "lower"
+      ? "Recent adherence says trim the fluff a little and keep the session tighter than the default build."
+      : input.preferenceSignals?.volumeTolerance === "higher"
+      ? "Recent adherence says you can probably carry a little more useful work without turning the session into a circus."
       : decision.mode === "Reduced volume"
       ? "Trim one accessory set where needed and leave one more rep in reserve than usual."
       : decision.mode === "Progression"
@@ -1329,11 +1370,15 @@ export function computeBrainSnapshot(input: BrainInput): BrainSnapshot {
 
   const explicitPreferCount = recommendedExercises.filter((ex) => ex.eventTag === "Explicit prefer").length;
   const constraintFillCount = recommendedExercises.filter((ex) => ex.eventTag === "Constraint fill").length;
+  const realitySwapCount = recommendedExercises.filter((ex) => ex.eventTag === "Reality swap").length;
   if (explicitPreferCount > 0) {
     alerts.push(`Explicit controls: ${explicitPreferCount} pick${explicitPreferCount === 1 ? "" : "s"} got a direct Prefer boost`);
   }
   if (constraintFillCount > 0) {
     alerts.push(`Constraint fill: ${constraintFillCount} slot${constraintFillCount === 1 ? "" : "s"} landed on penalized options after cleaner choices ran out`);
+  }
+  if (realitySwapCount > 0) {
+    alerts.push(`Closed-loop feedback: ${realitySwapCount} slot${realitySwapCount === 1 ? "" : "s"} leaned toward exercises you repeatedly perform in reality`);
   }
 
   const swappedExercises = recommendedExercises.filter((ex) => ex.swappedFrom);
