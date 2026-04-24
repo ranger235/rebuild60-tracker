@@ -243,21 +243,20 @@ export default function WorkoutLoggerView(props: Props) {
             </div>
           )}
           {hasPlanChanges && (
-            <div style={{ marginTop: 10, fontSize: 12, borderTop: "1px solid #eee", paddingTop: 8 }}>
-              <div style={{ fontWeight: 800, marginBottom: 4 }}>Changes from plan</div>
+            <div style={{ marginTop: 8, fontSize: 12 }}>
               {meaningfulSubstitutions.length > 0 && (
-                <div style={{ marginTop: 4 }}>
-                  <strong>Replaced:</strong> {meaningfulSubstitutions.map((s) => `${displayExerciseName(s.recommended)} → ${displayExerciseName(s.actual)}`).join(" • ")}
+                <div>
+                  <strong>Swaps this session:</strong> {meaningfulSubstitutions.map((s) => `${displayExerciseName(s.recommended)} → ${displayExerciseName(s.actual)}`).join(" • ")}
                 </div>
               )}
               {missedFromPlan.length > 0 && (
-                <div style={{ marginTop: 4 }}>
-                  <strong>Skipped:</strong> {missedFromPlan.join(" • ")}
+                <div>
+                  <strong>Not logged from plan:</strong> {missedFromPlan.join(" • ")}
                 </div>
               )}
               {addedInReality.length > 0 && (
-                <div style={{ marginTop: 4 }}>
-                  <strong>Added:</strong> {addedInReality.join(" • ")}
+                <div>
+                  <strong>Added in reality:</strong> {addedInReality.join(" • ")}
                 </div>
               )}
             </div>
