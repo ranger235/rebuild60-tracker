@@ -204,6 +204,20 @@ export default function WorkoutLoggerView(props: Props) {
     recommendationComparison,
   });
 
+  const fmtExercise = (value: string) => displayExerciseName(value || "");
+  const fmtList = (items: string[]) => items.map(fmtExercise).join(" • ");
+
+  const comparisonDetailStyle: React.CSSProperties = {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 1.45,
+  };
+
+  const detailLabelStyle: React.CSSProperties = {
+    fontWeight: 800,
+    marginRight: 4,
+  };
+
   return (
     <>
       <h3>Workout Logger</h3>
@@ -229,23 +243,23 @@ export default function WorkoutLoggerView(props: Props) {
             )}
           </div>
           {recommendationComparison.fidelityNote && (
-            <div style={{ marginTop: 8, fontSize: 12 }}>
-              <strong>Session fidelity:</strong> {recommendationComparison.fidelityNote}
+            <div style={comparisonDetailStyle}>
+              <span style={detailLabelStyle}>Session fidelity:</span> {recommendationComparison.fidelityNote}
             </div>
           )}
           {recommendationComparison.substitutions.length > 0 && (
-            <div style={{ marginTop: 8, fontSize: 12 }}>
-              <strong>Swaps this session:</strong> {recommendationComparison.substitutions.map((s) => `${s.recommended} → ${s.actual}`).join(" • ")}
+            <div style={comparisonDetailStyle}>
+              <span style={detailLabelStyle}>Swaps:</span> {recommendationComparison.substitutions.map((s) => `${fmtExercise(s.recommended)} → ${fmtExercise(s.actual)}`).join(" • ")}
             </div>
           )}
           {recommendationComparison.missed.length > 0 && (
-            <div style={{ marginTop: 8, fontSize: 12 }}>
-              <strong>Not logged from plan:</strong> {recommendationComparison.missed.join(" • ")}
+            <div style={comparisonDetailStyle}>
+              <span style={detailLabelStyle}>Not logged from plan:</span> {fmtList(recommendationComparison.missed)}
             </div>
           )}
           {recommendationComparison.extras.length > 0 && (
-            <div style={{ marginTop: 8, fontSize: 12 }}>
-              <strong>Added in reality:</strong> {recommendationComparison.extras.join(" • ")}
+            <div style={comparisonDetailStyle}>
+              <span style={detailLabelStyle}>Added in reality:</span> {fmtList(recommendationComparison.extras)}
             </div>
           )}
         </div>
