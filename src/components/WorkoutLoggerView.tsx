@@ -204,19 +204,14 @@ export default function WorkoutLoggerView(props: Props) {
     recommendationComparison,
   });
 
-  const fmtExercise = (value: string) => displayExerciseName(value || "");
-  const fmtList = (items: string[]) => items.map(fmtExercise).join(" • ");
-
-  const comparisonDetailStyle: React.CSSProperties = {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 1.45,
-  };
-
-  const detailLabelStyle: React.CSSProperties = {
-    fontWeight: 800,
-    marginRight: 4,
-  };
+  const meaningfulSubstitutions = (recommendationComparison?.substitutions || []).filter((s) => {
+    const recommended = displayExerciseName(s.recommended);
+    const actual = displayExerciseName(s.actual);
+    return recommended && actual && recommended !== actual;
+  });
+  const missedFromPlan = (recommendationComparison?.missed || []).map(displayExerciseName).filter(Boolean);
+  const addedInReality = (recommendationComparison?.extras || []).map(displayExerciseName).filter(Boolean);
+  const hasPlanChanges = meaningfulSubstitutions.length > 0 || missedFromPlan.length > 0 || addedInReality.length > 0;
 
   return (
     <>
@@ -243,23 +238,28 @@ export default function WorkoutLoggerView(props: Props) {
             )}
           </div>
           {recommendationComparison.fidelityNote && (
-            <div style={comparisonDetailStyle}>
-              <span style={detailLabelStyle}>Session fidelity:</span> {recommendationComparison.fidelityNote}
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <strong>Session fidelity:</strong> {recommendationComparison.fidelityNote}
             </div>
           )}
-          {recommendationComparison.substitutions.length > 0 && (
-            <div style={comparisonDetailStyle}>
-              <span style={detailLabelStyle}>Swaps:</span> {recommendationComparison.substitutions.map((s) => `${fmtExercise(s.recommended)} → ${fmtExercise(s.actual)}`).join(" • ")}
-            </div>
-          )}
-          {recommendationComparison.missed.length > 0 && (
-            <div style={comparisonDetailStyle}>
-              <span style={detailLabelStyle}>Not logged from plan:</span> {fmtList(recommendationComparison.missed)}
-            </div>
-          )}
-          {recommendationComparison.extras.length > 0 && (
-            <div style={comparisonDetailStyle}>
-              <span style={detailLabelStyle}>Added in reality:</span> {fmtList(recommendationComparison.extras)}
+          {hasPlanChanges && (
+            <div style={{ marginTop: 10, fontSize: 12, borderTop: "1px solid #eee", paddingTop: 8 }}>
+              <div style={{ fontWeight: 800, marginBottom: 4 }}>Changes from plan</div>
+              {meaningfulSubstitutions.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <strong>Replaced:</strong> {meaningfulSubstitutions.map((s) => `${displayExerciseName(s.recommended)} → ${displayExerciseName(s.actual)}`).join(" • ")}
+                </div>
+              )}
+              {missedFromPlan.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <strong>Skipped:</strong> {missedFromPlan.join(" • ")}
+                </div>
+              )}
+              {addedInReality.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <strong>Added:</strong> {addedInReality.join(" • ")}
+                </div>
+              )}
             </div>
           )}
         </div>
