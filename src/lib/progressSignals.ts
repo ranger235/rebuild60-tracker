@@ -96,8 +96,16 @@ function avg(vals: Array<number | null | undefined>): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
+function rowDate(value: any): string {
+  return String(value?.day_date ?? value?.taken_on ?? value?.started_at ?? "");
+}
+
+function sortByDate<T>(arr: T[]): T[] {
+  return [...arr].sort((a: any, b: any) => rowDate(a).localeCompare(rowDate(b)));
+}
+
 function firstLastDelta<T>(arr: T[], pick: (item: T) => number | null | undefined): number | null {
-  const nums = arr
+  const nums = sortByDate(arr)
     .map(pick)
     .filter((v) => Number.isFinite(Number(v)))
     .map((v) => Number(v));
@@ -185,7 +193,12 @@ export function buildProgressSignals(args: {
 
   const daysInRange = Math.max(1, Math.round((Date.parse(`${endYMD}T00:00:00Z`) - Date.parse(`${startYMD}T00:00:00Z`)) / 86400000) + 1);
   const expectedWorkouts = Math.max(8, Math.round((daysInRange * 4) / 7));
-  const sessionIds = new Set(monthSessions.map((s) => s.id));
+
+  // Progress/scorecard signals should reflect only analytics-eligible sessions.
+  // Excluded/test sessions can still exist locally and sync normally, but they must not
+  // leak into hard set counts, volume balance, progression hits, or monthly adherence.
+  const analyticSessions = sortByDate(monthSessions).filter((s) => s.exclude_from_analytics !== true);
+  const sessionIds = new Set(analyticSessions.map((s) => s.id));
   const exercises = monthExercises.filter((ex) => sessionIds.has(ex.session_id));
   const exerciseIds = new Set(exercises.map((ex) => ex.id));
   const sets = monthSets.filter((s) => exerciseIds.has(s.exercise_id));
@@ -211,7 +224,7 @@ export function buildProgressSignals(args: {
 
   const performanceByExercise = new Map<string, { first: number; last: number; touches: number }>();
   const setsByExerciseName = new Map<string, Array<{ day: string; e1: number }>>();
-  const sessionById = new Map(monthSessions.map((s) => [s.id, s]));
+  const sessionById = new Map(analyticSessions.map((s) => [s.id, s]));
   for (const set of hardSets) {
     const ex = exerciseById.get(set.exercise_id);
     if (!ex) continue;
@@ -272,18 +285,18 @@ export function buildProgressSignals(args: {
     startYMD,
     endYMD,
     daysInRange,
-    quicklogDays: monthDaily.length,
-    measurementDays: monthMeasurements.length,
+    quicklogDays: sortByDate(monthDaily).length,
+    measurementDays: sortByDate(monthMeasurements).length,
     anchorDays,
     anchorCompleteness,
     weightDelta: round1(weightDelta),
     waistDelta: round1(waistDelta),
-    avgSleep: round1(avg(monthDaily.map((r) => r.sleep_hours))),
-    avgProtein: round1(avg(monthNutrition.map((r) => r.protein_g))),
-    avgZone2Minutes: round1(avg(monthZone2.map((r) => r.minutes))),
-    workoutsCompleted: monthSessions.filter((s) => !s.exclude_from_analytics).length,
+    avgSleep: round1(avg(sortByDate(monthDaily).map((r) => r.sleep_hours))),
+    avgProtein: round1(avg(sortByDate(monthNutrition).map((r) => r.protein_g))),
+    avgZone2Minutes: round1(avg(sortByDate(monthZone2).map((r) => r.minutes))),
+    workoutsCompleted: analyticSessions.length,
     expectedWorkouts,
-    uniqueTrainingDays: new Set(monthSessions.map((s) => s.day_date)).size,
+    uniqueTrainingDays: new Set(analyticSessions.map((s) => s.day_date)).size,
     totalExercises: exercises.length,
     totalSets: sets.length,
     hardSets: hardSets.length,
@@ -301,7 +314,7 @@ export function buildProgressSignals(args: {
     hasEnoughData:
       monthDaily.length >= 4 ||
       monthMeasurements.length >= 2 ||
-      monthSessions.length >= 4 ||
+      analyticSessions.length >= 4 ||
       anchorDays >= 1,
   };
 }
