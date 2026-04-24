@@ -238,6 +238,16 @@ export default function WorkoutLoggerView(props: Props) {
               <strong>Swaps this session:</strong> {recommendationComparison.substitutions.map((s) => `${s.recommended} → ${s.actual}`).join(" • ")}
             </div>
           )}
+          {recommendationComparison.missed.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <strong>Not logged from plan:</strong> {recommendationComparison.missed.join(" • ")}
+            </div>
+          )}
+          {recommendationComparison.extras.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <strong>Added in reality:</strong> {recommendationComparison.extras.join(" • ")}
+            </div>
+          )}
         </div>
       )}
 
