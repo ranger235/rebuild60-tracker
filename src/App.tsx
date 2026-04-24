@@ -250,24 +250,8 @@ function exerciseKey(raw: string): string {
 
 // Display name (what the UI shows)
 function displayExerciseName(raw: string): string {
-  const text = String(raw || "").trim();
-  if (!text) return text;
-
-  const directRegistry = getExerciseByKey(text) || getExerciseById(text);
-  if (directRegistry?.canonicalName) return directRegistry.canonicalName;
-
-  const resolvedKey = resolveExerciseKey(text);
-  if (resolvedKey) {
-    const registryExercise = getExerciseByKey(resolvedKey);
-    if (registryExercise?.canonicalName) return registryExercise.canonicalName;
-    return CANONICAL_DISPLAY[resolvedKey] ?? text;
-  }
-
-  const k = exerciseKey(text);
-  const registryExercise = getExerciseByKey(k);
-  if (registryExercise?.canonicalName) return registryExercise.canonicalName;
-
-  return CANONICAL_DISPLAY[k] ?? text;
+  const k = exerciseKey(raw);
+  return CANONICAL_DISPLAY[k] ?? raw;
 }
 
 // When the user types a known alias as the full exercise name, store the canonical display name.
@@ -303,10 +287,21 @@ function resolveExerciseIdentity(raw: string): ResolvedExerciseIdentity {
   };
 }
 
+function feedbackExerciseKey(input: string | StoredExerciseIdentityLike | null | undefined): string {
+  const identity = getCanonicalExerciseIdentity(
+    typeof input === "string"
+      ? input
+      : {
+          name: input?.name || "",
+          exercise_library_id: input?.exercise_library_id || null,
+        }
+  );
+  const fallbackName = typeof input === "string" ? input : input?.name || "";
+  return identity.stableKey || identity.exerciseLibraryId || exerciseKey(fallbackName);
+}
+
 function storedExerciseKey(exercise: StoredExerciseIdentityLike): string {
-  const libraryId = String(exercise?.exercise_library_id || "").trim();
-  if (libraryId) return libraryId;
-  return exerciseKey(exercise?.name || "");
+  return feedbackExerciseKey(exercise);
 }
 
 function displayStoredExerciseName(exercise: StoredExerciseIdentityLike | null | undefined): string {
@@ -610,8 +605,8 @@ function buildRecommendationFingerprint(brain: BrainSnapshot | null): Recommenda
     title: brain.recommendedSession.title,
     generatedAt: new Date().toISOString(),
     exercises: (brain.recommendedSession.exercises || []).map((ex) => ({
-      key: exerciseKey(ex.name),
-      name: displayExerciseName(ex.name),
+      key: feedbackExerciseKey(ex.name),
+      name: ex.name,
       slot: ex.slot,
       sets: parseRecommendedSetCount(ex.sets),
       loadLbs: firstNumberFromText(ex.load),
@@ -683,13 +678,16 @@ function compareRecommendationToSession(params: {
     .filter(([key]) => !recExercises.some((r) => r.key === key))
     .map(([key, value]) => ({ key, ...value }));
 
-  const substitutions = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
-    recommended: miss.name,
-    actual: extras[idx].name
+  const substitutionPairs = missed.slice(0, Math.min(missed.length, extras.length))
+    .map((miss, idx) => ({ miss, extra: extras[idx] }))
+    .filter(({ miss, extra }) => miss.key !== extra.key && displayExerciseName(miss.name) !== displayExerciseName(extra.name));
+  const substitutions = substitutionPairs.map(({ miss, extra }) => ({
+    recommended: displayExerciseName(miss.name),
+    actual: displayExerciseName(extra.name)
   }));
-  const substitutionKeys = missed.slice(0, Math.min(missed.length, extras.length)).map((miss, idx) => ({
+  const substitutionKeys = substitutionPairs.map(({ miss, extra }) => ({
     recommendedKey: miss.key,
-    actualKey: extras[idx].key
+    actualKey: extra.key
   }));
 
   let totalRecommendedSets = 0;
@@ -718,7 +716,7 @@ function compareRecommendationToSession(params: {
   const loadScore = loadDeltaAvg == null ? 1 : Math.max(0, 1 - Math.min(1, Math.abs(loadDeltaAvg) / 30));
   const adherenceScore = Math.round((exerciseScore * 0.5 + (focusAligned ? 0.25 : 0) + volumeScore * 0.15 + loadScore * 0.10) * 100);
 
-  const coachByRecommendedKey = new Map((coachSessionSeed?.exercises || []).map((ex) => [exerciseKey(ex.name), ex]));
+  const coachByRecommendedKey = new Map((coachSessionSeed?.exercises || []).map((ex) => [feedbackExerciseKey(ex.name), ex]));
   const usedActualKeys = new Set<string>();
   const exerciseFidelity: ExerciseFidelityRecord[] = recExercises.map((rec) => {
     const exact = actualByKey.get(rec.key);
