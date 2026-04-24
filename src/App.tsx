@@ -36,6 +36,7 @@ import { canonicalExerciseName, resolveExerciseKey } from "./lib/exerciseCompat"
 import { getExerciseById, getExerciseByKey } from "./lib/exerciseRegistry";
 import { getCanonicalExerciseIdentity } from "./lib/exerciseIdentity";
 import { getExerciseControlRecord, setExerciseControlRecord } from "./lib/exerciseControlService";
+import { normalizeWorkoutForFeedback } from "./lib/sessionIntegrity";
 import { DEFAULT_EQUIPMENT_PROFILE, normalizeEquipmentProfile } from "./lib/equipmentRegistry";
 import { setActiveEquipmentProfile, setActiveExerciseControls, setActivePreferenceMemory } from "./lib/slotEngine";
 import type { EquipmentProfile } from "./lib/equipmentTypes";
@@ -626,8 +627,9 @@ function compareRecommendationToSession(params: {
   const { recommendation, coachSessionSeed, exercises, sets } = params;
   if (!recommendation) return null;
 
-  const sessionExercises = exercises || [];
-  const sessionSets = sets || [];
+  const cleaned = normalizeWorkoutForFeedback(exercises || [], sets || []);
+  const sessionExercises = cleaned.exercises;
+  const sessionSets = cleaned.sets;
   const actualCounts: FocusCounts = { Push: 0, Pull: 0, Lower: 0, Mixed: 0 };
   const actualByKey = new Map<string, { name: string; workSets: number; topLoad: number | null; topReps: number | null }>();
 
