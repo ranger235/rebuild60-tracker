@@ -60,6 +60,31 @@ function secondExercise(seed: CoachSessionSeedLite): CoachSessionExerciseSeedLit
   return seed.exercises[1] || null;
 }
 
+function normalizeExerciseLabel(value: string | null | undefined): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function meaningfulSubstitutions(comparison: RecommendationComparisonLite): Array<{ recommended: string; actual: string }> {
+  if (!comparison?.available) return [];
+  return (comparison.substitutions || []).filter((item) => {
+    const recommended = normalizeExerciseLabel(item.recommended);
+    const actual = normalizeExerciseLabel(item.actual);
+    return !!recommended && !!actual && recommended !== actual;
+  });
+}
+
+function isReducedVolumeSeed(seed: CoachSessionSeedLite): boolean {
+  return String(seed?.bias || "").trim().toLowerCase() === "reduced volume";
+}
+
+function volumeDeltaBeyond(comparison: RecommendationComparisonLite, thresholdPct: number): boolean {
+  return !!comparison?.available && typeof comparison.volumeDelta === "number" && Math.abs(comparison.volumeDelta) >= thresholdPct;
+}
+
 function buildWhyToday(
   seed: CoachSessionSeedLite,
   comparison: RecommendationComparisonLite
@@ -111,13 +136,25 @@ function buildProgressionOpportunity(
   comparison: RecommendationComparisonLite
 ): string {
   const first = firstExercise(seed);
+
+  if (comparison?.available && typeof comparison.volumeDelta === "number" && comparison.volumeDelta <= -25) {
+    return `The progression win today is completion: hit the planned work cleanly before chasing load or extra exercises.`;
+  }
+
+  if (isReducedVolumeSeed(seed)) {
+    if (first) {
+      return `Use ${first.name} as the anchor, but keep the win modest: clean reps, stable load, and no forced hero set.`;
+    }
+    return `Reduced-volume day: keep the win modest, finish the planned work, and do not turn recovery management into a max-effort test.`;
+  }
+
+  if (comparison?.available && comparison.loadDeltaAvg !== null && comparison.loadDeltaAvg < -5) {
+    return `A clean return toward recommended loading is the clearest progression opportunity today.`;
+  }
+
   if (first) {
     const slotLabel = niceSlot(first.slot).toLowerCase();
     return `If warm-ups feel solid, ${first.name} is the best place to look for a small win today through load, reps, or cleaner execution in the ${slotLabel}.`;
-  }
-
-  if (comparison?.available && comparison.loadDeltaAvg !== null && comparison.loadDeltaAvg < 0) {
-    return `A clean return to recommended loading is the clearest progression opportunity today.`;
   }
 
   return `Look for a small improvement in the first major movement if warm-ups feel solid.`;
@@ -128,20 +165,30 @@ function buildWatchItem(
   comparison: RecommendationComparisonLite
 ): string {
   if (comparison?.available) {
-    if ((comparison.substitutions?.length || 0) > 0) {
+    const substitutions = meaningfulSubstitutions(comparison);
+
+    if (typeof comparison.volumeDelta === "number" && comparison.volumeDelta <= -25) {
+      return `Don’t undershoot the work today; the goal is to complete the planned volume cleanly and fully.`;
+    }
+
+    if (typeof comparison.volumeDelta === "number" && comparison.volumeDelta >= 25) {
+      return `Watch session creep today; recent work ran long, so keep accessories from stealing energy from the main work.`;
+    }
+
+    if (substitutions.length > 0) {
       return `Keep exercise selection honest today; recent substitutions suggest the biggest win is staying closer to the intended structure.`;
     }
-    if ((comparison.extras?.length || 0) > 0) {
-      return `Don’t let extra work dilute the session; hit the planned work first and earn any additions after that.`;
-    }
+
     if ((comparison.missed?.length || 0) > 0) {
       return `Execution matters more than variety today; finish the planned work before thinking about anything optional.`;
     }
-    if (comparison.volumeDelta !== null && comparison.volumeDelta > 0.15) {
-      return `Watch session creep today; recent work ran long, so keep accessories from stealing energy from the main work.`;
+
+    if ((comparison.extras?.length || 0) > 0) {
+      return `Don’t let extra work dilute the session; hit the planned work first and earn any additions after that.`;
     }
-    if (comparison.volumeDelta !== null && comparison.volumeDelta < -0.15) {
-      return `Don’t undershoot the work today; the goal is to complete the planned volume cleanly and fully.`;
+
+    if (comparison.adherenceScore >= 85 && comparison.focusAligned && !volumeDeltaBeyond(comparison, 15)) {
+      return `Plan fidelity is solid; keep the same discipline and make the work boringly repeatable.`;
     }
   }
 
