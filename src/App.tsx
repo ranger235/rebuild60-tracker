@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
-import { clearQuarantinedOps, enqueue, getPendingOpCounts, listQuarantinedOps, runSyncPass, startAutoSync } from "./sync";
+import { clearQuarantinedOps, enqueue, getPendingOpCounts, getSyncHealthReport, listQuarantinedOps, runSyncPass, startAutoSync } from "./sync";
 import { pullSync } from "./pullSync";
 import {
   localdb,
@@ -4145,10 +4145,41 @@ async function reviewQuarantinedNow() {
   }
   const summary = items
     .slice(0, 20)
-    .map((item, idx) => `${idx + 1}. ${item.op} — ${item.lastError || "No error message"}`)
-    .join("\n");
+    .map((item, idx) => {
+      const when = item.quarantinedAt ? new Date(item.quarantinedAt).toLocaleString() : "unknown time";
+      const payloadKeys = item.payload && typeof item.payload === "object" ? Object.keys(item.payload).slice(0, 8).join(", ") : "no payload keys";
+      return `${idx + 1}. ${item.op} — ${item.lastError || "No error message"}
+   quarantined: ${when}
+   payload keys: ${payloadKeys}`;
+    })
+    .join("\n\n");
   const extra = items.length > 20 ? `\n\n…plus ${items.length - 20} more.` : "";
   alert(`Quarantined sync items (${items.length})\n\n${summary}${extra}`);
+}
+
+async function reviewSyncHealthNow() {
+  const report = await getSyncHealthReport();
+  const byOp = Object.entries(report.byOp)
+    .sort((a, b) => b[1] - a[1])
+    .map(([op, count]) => `${op}: ${count}`)
+    .join("\n") || "No pending ops.";
+  const retrying = report.retrying.length
+    ? report.retrying.map((item, idx) => `${idx + 1}. ${item.op} — ${item.lastError || "No error message"}`).join("\n")
+    : "None";
+  const quarantined = report.quarantined.length
+    ? report.quarantined.map((item, idx) => `${idx + 1}. ${item.op} — ${item.lastError || "No error message"}`).join("\n")
+    : "None";
+  alert(
+    `Sync Health\n\n` +
+    `Queued: ${report.counts.queued}\n` +
+    `Retrying: ${report.counts.retrying}\n` +
+    `Quarantined: ${report.counts.quarantined}\n` +
+    `Total pending: ${report.counts.total}\n` +
+    `Oldest pending: ${report.oldestOp ? `${report.oldestOp} (${report.oldestStatus}, ~${report.oldestAgeMinutes} min old)` : "none"}\n\n` +
+    `Pending by op:\n${byOp}\n\n` +
+    `Retrying sample:\n${retrying}\n\n` +
+    `Quarantined sample:\n${quarantined}`
+  );
 }
 
 async function clearQuarantinedNow() {
@@ -4612,6 +4643,9 @@ async function clearQuarantinedNow() {
           </div>
           <button type="button" onClick={() => void syncNow()} disabled={!userId}>
             Sync Now
+          </button>
+          <button type="button" onClick={() => void reviewSyncHealthNow()} disabled={!userId}>
+            Sync Health
           </button>
           {status.includes("quarantined") ? (
             <>

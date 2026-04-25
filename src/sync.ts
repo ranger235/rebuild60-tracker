@@ -37,6 +37,48 @@ export async function listQuarantinedOps() {
     }));
 }
 
+export async function listPendingOpDiagnostics() {
+  const items = await localdb.pendingOps.toArray();
+  return items
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((item) => ({
+      id: item.id ?? null,
+      op: item.op,
+      status: item.status,
+      createdAt: item.createdAt,
+      retryCount: item.retryCount ?? 0,
+      quarantinedAt: item.quarantinedAt ?? null,
+      lastError: item.lastError ?? "",
+      payloadKeys: item.payload && typeof item.payload === "object" ? Object.keys(item.payload).slice(0, 12) : [],
+    }));
+}
+
+export async function getSyncHealthReport() {
+  const diagnostics = await listPendingOpDiagnostics();
+  const counts = {
+    queued: diagnostics.filter((i) => i.status === "queued").length,
+    retrying: diagnostics.filter((i) => i.status === "retry").length,
+    quarantined: diagnostics.filter((i) => i.status === "quarantined").length,
+    total: diagnostics.length,
+  };
+  const now = Date.now();
+  const oldest = diagnostics[0] ?? null;
+  const oldestAgeMinutes = oldest ? Math.max(0, Math.round((now - oldest.createdAt) / 60000)) : 0;
+  const byOp = diagnostics.reduce<Record<string, number>>((acc, item) => {
+    acc[item.op] = (acc[item.op] ?? 0) + 1;
+    return acc;
+  }, {});
+  return {
+    counts,
+    oldestAgeMinutes,
+    oldestOp: oldest?.op ?? null,
+    oldestStatus: oldest?.status ?? null,
+    byOp,
+    retrying: diagnostics.filter((i) => i.status === "retry").slice(0, 10),
+    quarantined: diagnostics.filter((i) => i.status === "quarantined").slice(0, 10),
+  };
+}
+
 export async function clearQuarantinedOps() {
   const items = await localdb.pendingOps
     .filter((i) => i.status === "quarantined")
